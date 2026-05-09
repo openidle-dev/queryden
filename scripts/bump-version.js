@@ -7,6 +7,7 @@ const rootDir = path.resolve(__dirname, '..');
 
 const packagePath = path.join(rootDir, 'package.json');
 const cargoPath = path.join(rootDir, 'src-tauri', 'Cargo.toml');
+const tauriConfigPath = path.join(rootDir, 'src-tauri', 'tauri.conf.json');
 
 function bumpVersion() {
   // 1. Bump package.json
@@ -23,6 +24,12 @@ function bumpVersion() {
   cargo = cargo.replace(/^version = ".*"/m, `version = "${newVersion}"`);
   fs.writeFileSync(cargoPath, cargo);
   console.log(`Bumping Cargo.toml version to ${newVersion}`);
+
+  // 3. Bump tauri.conf.json
+  const tauriConfig = JSON.parse(fs.readFileSync(tauriConfigPath, 'utf8'));
+  tauriConfig.version = newVersion;
+  fs.writeFileSync(tauriConfigPath, JSON.stringify(tauriConfig, null, 2) + '\n');
+  console.log(`Bumping tauri.conf.json version to ${newVersion}`);
 
   return newVersion;
 }
