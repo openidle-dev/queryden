@@ -1,0 +1,2 @@
+# Let cargo-xwin handle the linker and libraries automatically
+# Static CRT (+crt-static) can sometimes cause linker errors during cross-compilation

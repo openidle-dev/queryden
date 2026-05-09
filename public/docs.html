@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QueryDen - Professional Guide</title>
+    <style>
+        :root {
+            --bg: #0a0a0c;
+            --surface: #121217;
+            --border: rgba(255, 255, 255, 0.08);
+            --accent: #3b82f6;
+            --accent-glow: rgba(59, 130, 246, 0.3);
+            --text: #e2e8f0;
+            --text-dim: #94a3b8;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 4rem 2rem;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 6rem;
+            animation: fadeIn 1s ease-out;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            background: var(--accent-glow);
+            color: var(--accent);
+            border-radius: 99px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 1.5rem;
+        }
+
+        h1 {
+            font-size: 4rem;
+            font-weight: 900;
+            letter-spacing: -0.04em;
+            margin-bottom: 1.5rem;
+            background: linear-gradient(135deg, #fff 0%, #6366f1 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        p.lead {
+            font-size: 1.25rem;
+            color: var(--text-dim);
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        section {
+            margin-bottom: 8rem;
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.8s ease-out;
+        }
+
+        section.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .step-num {
+            font-size: 0.75rem;
+            font-weight: 900;
+            color: var(--accent);
+            display: block;
+            margin-bottom: 0.5rem;
+            opacity: 0.6;
+        }
+
+        h2 {
+            font-size: 2.25rem;
+            font-weight: 800;
+            margin-bottom: 2rem;
+            letter-spacing: -0.02em;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-cols: 1.2fr 0.8fr;
+            gap: 4rem;
+            align-items: center;
+        }
+
+        .img-container {
+            position: relative;
+            border-radius: 24px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            box-shadow: 0 40px 100px -20px rgba(0,0,0,0.5);
+            background: #000;
+        }
+
+        .img-container img {
+            display: block;
+            width: 100%;
+            height: auto;
+            transition: transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .img-container:hover img {
+            transform: scale(1.05);
+        }
+
+        .content {
+            padding: 1rem 0;
+        }
+
+        .feature-list {
+            list-style: none;
+            margin-top: 2rem;
+        }
+
+        .feature-list li {
+            margin-bottom: 1.5rem;
+            padding-left: 2rem;
+            position: relative;
+        }
+
+        .feature-list li::before {
+            content: "→";
+            position: absolute;
+            left: 0;
+            color: var(--accent);
+            font-weight: bold;
+        }
+
+        .feature-list h4 {
+            font-size: 1rem;
+            font-weight: 700;
+            margin-bottom: 0.25rem;
+        }
+
+        .feature-list p {
+            font-size: 0.875rem;
+            color: var(--text-dim);
+        }
+
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 3rem;
+            text-align: center;
+        }
+
+        footer {
+            text-align: center;
+            padding: 4rem 0;
+            border-top: 1px solid var(--border);
+            font-size: 0.875rem;
+            color: var(--text-dim);
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @media (max-width: 768px) {
+            .grid { grid-template-cols: 1fr; gap: 2rem; }
+            h1 { font-size: 2.5rem; }
+            .container { padding: 2rem 1.5rem; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <span class="badge">Professional Database Suite</span>
+        <h1>Mastering QueryDen</h1>
+        <p class="lead">A complete step-by-step guide to high-performance database management, tuning, and security.</p>
+    </header>
+
+    <section id="connect">
+        <div class="grid">
+            <div class="img-container">
+                <img src="/img/explorer.png" alt="Database Explorer Overview">
+            </div>
+            <div class="content">
+                <span class="step-num">Step 01</span>
+                <h2>Navigate Like a Pro</h2>
+                <p>The Database Explorer is your mission control. Organize thousands of objects across multiple clusters with ease.</p>
+                <ul class="feature-list">
+                    <li>
+                        <h4>Smart Tree View</h4>
+                        <p>Instant access to Schemas, Tables, Views, and Functions with categorized grouping.</p>
+                    </li>
+                    <li>
+                        <h4>Contextual Actions</h4>
+                        <p>Right-click any object to generate DDL, Clone data, or compare structures.</p>
+                    </li>
+                    <li>
+                        <h4>Live Status</h4>
+                        <p>Real-time indicators show active connections and table sizes at a glance.</p>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <section id="optimize">
+        <div class="grid">
+            <div class="content">
+                <span class="step-num">Step 02</span>
+                <h2>Visual Query Optimization</h2>
+                <p>Don't just run queries—understand them. Our visual optimizer breaks down complex execution plans into actionable insights.</p>
+                <ul class="feature-list">
+                    <li>
+                        <h4>Hot Path Highlighting</h4>
+                        <p>Instantly identify which scan or join is consuming 80% of your query time.</p>
+                    </li>
+                    <li>
+                        <h4>Heuristic Engine</h4>
+                        <p>Automated detection of sequential scans and missing indexes without needing AI.</p>
+                    </li>
+                    <li>
+                        <h4>Performance Goals</h4>
+                        <p>Get specific targets to bring your queries down to sub-millisecond execution.</p>
+                    </li>
+                </ul>
+            </div>
+            <div class="img-container">
+                <img src="/img/optimizer.png" alt="Query Optimizer UI">
+            </div>
+        </div>
+    </section>
+
+    <section id="security">
+        <div class="grid">
+            <div class="img-container">
+                <img src="/img/settings.png" alt="Security Settings Panel">
+            </div>
+            <div class="content">
+                <span class="step-num">Step 03</span>
+                <h2>Hardened Security</h2>
+                <p>Built for production. We prioritize your data's safety with zero-trust persistence and encrypted storage.</p>
+                <ul class="feature-list">
+                    <li>
+                        <h4>Encrypted Rust Core</h4>
+                        <p>All credentials and query history are saved in a hardware-encrypted JSON vault.</p>
+                    </li>
+                    <li>
+                        <h4>Zero Browser Leakage</h4>
+                        <p>We never store secrets in cleartext or in the browser's localStorage.</p>
+                    </li>
+                    <li>
+                        <h4>Safety Rules</h4>
+                        <p>Customizable guardrails to prevent accidental TRUNCATE or DELETE operations.</p>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <section class="card">
+        <h2>Ready to Scale?</h2>
+        <p class="lead" style="margin-bottom: 2rem;">QueryDen is designed to grow with your data. Explore the full power of SQL with our professional toolset.</p>
+        <p style="font-size: 0.875rem; opacity: 0.6;">© 2026 QueryDen. All rights reserved.</p>
+    </section>
+
+    <footer>
+        Documentation v1.0.0 &bull; Built with QueryDen Production Suite
+    </footer>
+</div>
+
+<script>
+    const sections = document.querySelectorAll('section');
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                entry.target.classList.add('visible');
+            }
+        });
+    }, { threshold: 0.1 });
+
+    sections.forEach(section => observer.observe(section));
+</script>
+
+</body>Store
+</html>

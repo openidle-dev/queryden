@@ -1,0 +1,56 @@
+[package]
+name = "queryden"
+version = "1.0.1"
+description = "A modern multi-database manager built with Tauri, React, and TypeScript"
+authors = ["QueryDen Team"]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/openidle-dev/queryden"
+homepage = "https://github.com/openidle-dev/queryden"
+
+[lib]
+name = "queryden_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-sql = { version = "2", features = ["sqlite", "postgres", "mysql"] }
+tauri-plugin-fs = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+aes-gcm = "0.10"
+base64 = "0.22"
+rand = "0.8"
+sysinfo = "0.33"
+sha2 = "0.11.0"
+hex = "0.4.3"
+argon2 = "0.5"
+password-hash = "0.5"
+keyring = { version = "3" }
+ssh2 = "0.9"
+tokio = { version = "1", features = ["process", "io-util", "rt-multi-thread", "fs", "rt"] }
+reqwest = { version = "0.12", features = [] }
+zip = "2"
+flate2 = "1"
+tar = "0.4"
+which = "7"
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres"] }
+
+[patch.crates-io]
+# Patch tauri-plugin-sql to handle PostgreSQL types like INTERVAL, OID, arrays, etc.
+# that the upstream version doesn't support yet.
+tauri-plugin-sql = { path = "patches/tauri-plugin-sql" }
+
+[profile.release]
+strip = true
+lto = "thin"    # "thin" is much faster than true
+codegen-units = 16 # Parallelize compilation for speed
+incremental = true # Enable incremental release builds
+panic = "abort"

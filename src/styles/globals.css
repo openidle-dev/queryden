@@ -1,0 +1,187 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #1e3a5f;
+  --color-primary-light: #2d5a8f;
+  --color-accent: #06b6d4;
+  --color-accent-hover: #0891b2;
+  
+  --color-surface-dark: #1e293b;
+  --color-surface-light: #ffffff;
+  --color-background-dark: #0f172a;
+  --color-background-light: #f8fafc;
+  
+  --color-border-dark: #334155;
+  --color-border-light: #e2e8f0;
+  
+  --font-sans: system-ui, -apple-system, sans-serif;
+}
+
+:root {
+  font-family: var(--font-sans);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.theme-dark {
+  color-scheme: dark;
+  --background: var(--color-background-dark);
+  --surface: var(--color-surface-dark);
+  --border: var(--color-border-dark);
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --color-success: #22c55e;
+  --color-success-bg: #14532d;
+  --color-error: #ef4444;
+  --color-error-bg: #7f1d1d;
+  --color-warning: #f59e0b;
+  --color-warning-bg: #78350f;
+  --color-info: #3b82f6;
+  --color-info-bg: #1e3a8a;
+  
+  --glass-bg: rgba(30, 41, 59, 0.7);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-blur: blur(12px);
+  
+  --premium-gradient: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  --accent-gradient: linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%);
+}
+
+.theme-light {
+  color-scheme: light;
+  --background: var(--color-background-light);
+  --surface: var(--color-surface-light);
+  --border: var(--color-border-light);
+  --text-primary: #0f172a;
+  --text-secondary: #64748b;
+  --color-success: #16a34a;
+  --color-success-bg: #dcfce7;
+  --color-error: #dc2626;
+  --color-error-bg: #fee2e2;
+  --color-warning: #d97706;
+  --color-warning-bg: #fef3c7;
+  --color-info: #2563eb;
+  --color-info-bg: #dbeafe;
+}
+
+/* Premium Glassmorphism */
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+}
+
+.premium-bg {
+  background: var(--premium-gradient);
+}
+
+.accent-bg {
+  background: var(--accent-gradient);
+}
+
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+
+.animate-shimmer {
+  animation: shimmer 1.5s infinite linear;
+}
+
+/* Smooth Transitions */
+* {
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+/* Custom Scrollbar for a cleaner look */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--text-secondary);
+  opacity: 0.2;
+  border-radius: 10px;
+  border: 4px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+  opacity: 0.4;
+  background-clip: content-box;
+}
+
+/* Hide scrollbar but allow scrolling */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Monaco Editor Statement Indicators - Gutter Icons */
+.statement-glyph-running {
+  background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="%23f59e0b" opacity="0.8"/></svg>') no-repeat center center;
+  background-size: 12px;
+}
+
+.statement-glyph-success {
+  background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="%2322c55e" opacity="0.9"/><path d="M5 8l2 2 4-4" stroke="white" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>') no-repeat center center;
+  background-size: 12px;
+}
+
+.statement-glyph-error {
+  background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="%23ef4444" opacity="0.9"/><path d="M5 5l6 6M11 5l-6 6" stroke="white" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>') no-repeat center center;
+  background-size: 12px;
+}
+
+/* Line highlight for the executed statement */
+.statement-indicator-running {
+  background-color: rgba(245, 158, 11, 0.1) !important;
+  border-left: 3px solid #f59e0b !important;
+}
+
+.statement-indicator-success {
+  background-color: rgba(34, 197, 94, 0.1) !important;
+  border-left: 3px solid #22c55e !important;
+}
+
+/* Compact mode — reduces all toolbar/header heights */
+.compact-mode .app-header { height: 28px !important; }
+.compact-mode header { height: 28px !important; }
+.compact-mode .h-10 { height: 28px !important; }
+.compact-mode .h-11 { height: 32px !important; }
+
+.monaco-editor .query-var {
+  color: #a78bfa !important;
+  font-style: italic;
+  font-weight: 500;
+}
+
+.monaco-editor .query-var-highlight {
+  background-color: rgba(167, 139, 250, 0.15) !important;
+  border-radius: 2px;
+}
+
+.statement-indicator-error {
+  background-color: rgba(239, 68, 68, 0.1) !important;
+  border-left: 3px solid #ef4444 !important;
+}
