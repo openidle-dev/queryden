@@ -9,6 +9,7 @@ import { useSettings } from "../../store/settingsStore";
 import { SettingsDialog } from "../settings/SettingsDialog";
 import { Database, Files, Settings, Search, X, HelpCircle, Table, Eye, Variable, BookOpen, AlertTriangle, CheckCircle, ChevronRight } from "lucide-react";
 import { HelpDialog } from "../help/HelpDialog";
+import { UpdateNotification } from "../help/UpdateNotification";
 import { useAppInfo } from "../../hooks/useAppInfo";
 
 export function AppLayout() {
@@ -162,6 +163,8 @@ export function AppLayout() {
           >
             <Search className="w-4 h-4" />
           </button>
+
+          <UpdateNotification />
           
           <button
             onClick={() => setShowHelpDialog(true)}

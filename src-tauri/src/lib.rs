@@ -2,6 +2,7 @@ mod cli;
 mod ssh;
 mod storage;
 mod sysinfo;
+mod updater;
 
 use tauri::Manager;
 use tracing::info;
@@ -57,7 +58,10 @@ pub fn run() {
             storage::save_vault_credentials,
             storage::load_vault_credentials,
             sysinfo::get_system_info,
-            sysinfo::check_for_updates,
+            updater::check_for_updates_v2,
+            updater::download_update,
+            updater::install_update,
+            updater::get_build_info,
             cli::cli_check_tools,
             cli::cli_list_cached,
             cli::cli_check_tool,

@@ -1,6 +1,6 @@
 {
   "name": "queryden",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "type": "module",
   "description": "A modern multi-database manager built with Tauri, React, and TypeScript",
   "repository": {
@@ -12,7 +12,15 @@
   },
   "homepage": "https://github.com/openidle-dev/queryden#readme",
   "license": "MIT",
-  "keywords": ["database", "sql", "postgresql", "mysql", "sqlite", "tauri", "database-manager"],
+  "keywords": [
+    "database",
+    "sql",
+    "postgresql",
+    "mysql",
+    "sqlite",
+    "tauri",
+    "database-manager"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "vite build",

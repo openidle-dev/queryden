@@ -44,10 +44,3 @@ pub fn get_system_info() -> Result<SystemInfo, String> {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
     })
 }
-
-#[tauri::command]
-pub fn check_for_updates() -> Result<String, String> {
-    // In a real app, this would use tauri-plugin-updater
-    // or fetch from a GitHub API. For now, we simulate a check.
-    Ok("You are running the latest version of QueryDen.".to_string())
-}
