@@ -1,9 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
-use tracing::info;
-#[cfg(unix)]
-use tracing::warn;
+use tracing::{info, warn};
 
 const GITHUB_API_URL: &str =
     "https://api.github.com/repos/openidle-dev/queryden/releases/latest";
@@ -73,12 +71,15 @@ fn is_newer(current: &str, latest: &str) -> bool {
 /// Pick the correct asset for the current platform.
 fn pick_asset(assets: &[ReleaseAsset]) -> Option<&ReleaseAsset> {
     #[cfg(target_os = "linux")]
-    let candidates = &[".appimage", ".deb"];
+    let candidates: &[&str] = &[".appimage", ".deb"];
 
     #[cfg(target_os = "windows")]
-    let candidates = &[".exe", ".msi"];
+    let candidates: &[&str] = &[".exe", ".msi"];
 
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    #[cfg(target_os = "macos")]
+    let candidates: &[&str] = &[".dmg"];
+
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     let candidates: &[&str] = &[];
 
     for ext in candidates {
@@ -290,8 +291,19 @@ pub async fn download_update(
     Ok(path_str)
 }
 
-/// Open the downloaded file (installer) using the system default handler,
-/// then exit the app so the installer can replace the binary.
+/// Install the downloaded update, then exit so the installer can replace the
+/// running binary. Platform-specific flows:
+///
+/// - **Windows**: silently uninstall the previous build via the registry-stored
+///   uninstaller, then run the new NSIS installer with `/S`. This bypasses
+///   Tauri's `.onInit` upgrade-detection wizard, which fires before
+///   `NSIS_HOOK_PREINSTALL` and so can't be silenced from the `.nsh` hook.
+/// - **macOS**: mount the DMG, copy the bundled `.app` over the running one,
+///   detach, and schedule a delayed `open -n` so the new instance launches
+///   after the old PID has exited.
+/// - **Linux AppImage**: replace the running AppImage in place via `$APPIMAGE`
+///   and relaunch — avoids accumulating copies under `queryden-update-*`.
+/// - **Linux .deb**: hand off to `xdg-open` (no silent flow yet).
 #[tauri::command]
 pub async fn install_update(app: tauri::AppHandle, file_path: String) -> Result<(), String> {
     let path = PathBuf::from(&file_path);
@@ -306,20 +318,9 @@ pub async fn install_update(app: tauri::AppHandle, file_path: String) -> Result<
     {
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         match ext.to_lowercase().as_str() {
-            "appimage" => {
-                // Launch the new AppImage directly
-                std::process::Command::new(&file_path)
-                    .spawn()
-                    .map_err(|e| format!("Failed to launch AppImage: {e}"))?;
-            }
-            "deb" => {
-                // Open with the default package installer
-                std::process::Command::new("xdg-open")
-                    .arg(&file_path)
-                    .spawn()
-                    .map_err(|e| format!("Failed to open .deb installer: {e}"))?;
-            }
+            "appimage" => install_appimage_linux(&path)?,
             _ => {
+                // .deb (and unknown formats) — let the desktop pick a handler.
                 std::process::Command::new("xdg-open")
                     .arg(&file_path)
                     .spawn()
@@ -330,17 +331,301 @@ pub async fn install_update(app: tauri::AppHandle, file_path: String) -> Result<
 
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", &file_path])
-            .spawn()
-            .map_err(|e| format!("Failed to launch installer: {e}"))?;
+        install_nsis_windows(&path)?;
     }
 
-    // Give the installer a moment to start, then exit
+    #[cfg(target_os = "macos")]
+    {
+        install_dmg_macos(&path)?;
+    }
+
+    // Give the installer (or delayed relauncher) a moment to start, then exit.
     tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
     app.exit(0);
 
     Ok(())
+}
+
+// -------------------------------------------------------------------
+// Platform install helpers
+// -------------------------------------------------------------------
+
+#[cfg(target_os = "linux")]
+fn install_appimage_linux(new_path: &std::path::Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Replace the running AppImage in place when $APPIMAGE is set so the user
+    // ends up with one canonical copy. AppRun sets $APPIMAGE to the absolute
+    // path of the AppImage that mounted it.
+    if let Some(target) = std::env::var_os("APPIMAGE") {
+        let target_path = std::path::PathBuf::from(&target);
+        info!("Replacing existing AppImage at {}", target_path.display());
+
+        // Try a rename first; fall back to copy + remove on EXDEV.
+        if let Err(rename_err) = std::fs::rename(new_path, &target_path) {
+            warn!(
+                "rename({} -> {}) failed: {rename_err}; falling back to copy",
+                new_path.display(),
+                target_path.display()
+            );
+            std::fs::copy(new_path, &target_path).map_err(|e| {
+                format!(
+                    "Failed to copy new AppImage over {}: {e}",
+                    target_path.display()
+                )
+            })?;
+            let _ = std::fs::remove_file(new_path);
+        }
+
+        std::fs::set_permissions(&target_path, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("Failed to chmod {}: {e}", target_path.display()))?;
+
+        std::process::Command::new(&target_path)
+            .spawn()
+            .map_err(|e| format!("Failed to relaunch AppImage: {e}"))?;
+    } else {
+        // Not running from a real AppImage — likely a dev build. Just launch
+        // the freshly downloaded one and let the user clean up.
+        warn!("$APPIMAGE not set; launching new AppImage from temp dir without in-place replacement");
+        std::process::Command::new(new_path)
+            .spawn()
+            .map_err(|e| format!("Failed to launch AppImage: {e}"))?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn install_nsis_windows(new_installer: &std::path::Path) -> Result<(), String> {
+    // Silently uninstall the previous build first. Without this, the new
+    // installer's `.onInit` triggers Tauri's "previous version detected"
+    // wizard, which `NSIS_HOOK_PREINSTALL` is too late to silence.
+    silently_uninstall_previous_windows();
+
+    // /S = NSIS silent mode. spawn() returns immediately; the installer
+    // continues after our app exits. queryden.exe stays locked until our
+    // process exits, which is why install_update sleeps 1.5s afterwards —
+    // NSIS gets to the file-copy stage just after the lock is released.
+    std::process::Command::new(new_installer)
+        .arg("/S")
+        .spawn()
+        .map_err(|e| format!("Failed to launch installer: {e}"))?;
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn silently_uninstall_previous_windows() {
+    use winreg::enums::*;
+    use winreg::RegKey;
+
+    // Tauri's NSIS template writes the uninstall entry at:
+    //   Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCTNAME}
+    // We check both hives — HKCU is the default since v1.0.7 (per-user
+    // install), HKLM catches users still on v1.0.5/v1.0.6 machine-wide builds.
+    const SUBKEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\QueryDen";
+
+    for &hive in &[HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
+        let Ok(key) = RegKey::predef(hive).open_subkey(SUBKEY) else {
+            continue;
+        };
+
+        // Tauri only writes UninstallString, not QuietUninstallString — we
+        // still check the quiet variant first in case a future Tauri release
+        // starts populating it.
+        let (program, args) =
+            if let Ok(quiet) = key.get_value::<String, _>("QuietUninstallString") {
+                parse_command_line(&quiet)
+            } else if let Ok(plain) = key.get_value::<String, _>("UninstallString") {
+                let (prog, mut a) = parse_command_line(&plain);
+                a.push("/S".to_string());
+                (prog, a)
+            } else {
+                continue;
+            };
+
+        let scope = if hive == HKEY_CURRENT_USER {
+            "user"
+        } else {
+            "machine"
+        };
+        info!("Uninstalling previous QueryDen ({scope}): {program} {args:?}");
+
+        // Block until the uninstaller exits. NSIS uninstallers self-copy to
+        // %TEMP% before deleting their install dir, so they always exit
+        // cleanly. Any files still locked (our own queryden.exe) survive —
+        // the new installer overwrites them once we exit a moment later.
+        match std::process::Command::new(&program).args(&args).status() {
+            Ok(s) if s.success() => info!("Previous {scope} install removed"),
+            Ok(s) => warn!("Uninstaller ({scope}) exited with status {s}"),
+            Err(e) => warn!("Failed to run uninstaller ({scope}) {program}: {e}"),
+        }
+    }
+}
+
+/// Parse a Windows command line of the form `"path with spaces" arg1 arg2`
+/// into (program, args). This is the bare minimum needed for the strings NSIS
+/// writes to the registry — not full CommandLineToArgvW semantics.
+#[cfg(target_os = "windows")]
+fn parse_command_line(s: &str) -> (String, Vec<String>) {
+    let s = s.trim();
+    if let Some(rest) = s.strip_prefix('"') {
+        if let Some(end) = rest.find('"') {
+            let program = rest[..end].to_string();
+            let args = rest[end + 1..]
+                .split_whitespace()
+                .map(|t| t.to_string())
+                .collect();
+            return (program, args);
+        }
+    }
+    let mut parts = s.split_whitespace();
+    let program = parts.next().unwrap_or("").to_string();
+    let args = parts.map(|t| t.to_string()).collect();
+    (program, args)
+}
+
+#[cfg(target_os = "macos")]
+fn install_dmg_macos(dmg: &std::path::Path) -> Result<(), String> {
+    let dmg_str = dmg.to_str().ok_or("DMG path is not valid UTF-8")?;
+
+    // 1. Mount.
+    let attach = std::process::Command::new("hdiutil")
+        .args(["attach", "-nobrowse", "-quiet", dmg_str])
+        .output()
+        .map_err(|e| format!("hdiutil attach failed: {e}"))?;
+    if !attach.status.success() {
+        return Err(format!(
+            "hdiutil attach exited with {}: {}",
+            attach.status,
+            String::from_utf8_lossy(&attach.stderr)
+        ));
+    }
+
+    // 2. Parse the mountpoint — last whitespace-separated token on lines
+    //    whose value starts with /Volumes/.
+    let stdout = String::from_utf8_lossy(&attach.stdout);
+    let mountpoint = stdout
+        .lines()
+        .filter_map(|line| {
+            line.split_whitespace()
+                .last()
+                .filter(|tok| tok.starts_with("/Volumes/"))
+                .map(|s| s.to_string())
+        })
+        .last()
+        .ok_or_else(|| format!("Could not locate DMG mountpoint in hdiutil output:\n{stdout}"))?;
+    info!("Mounted DMG at {mountpoint}");
+
+    // Auto-detach on every exit path from here on.
+    let _detach_guard = MountGuard {
+        mountpoint: mountpoint.clone(),
+    };
+
+    // 3. Find the .app bundle inside the mount.
+    let app_bundle = std::fs::read_dir(&mountpoint)
+        .map_err(|e| format!("Failed to read mountpoint {mountpoint}: {e}"))?
+        .filter_map(|e| e.ok())
+        .find(|e| {
+            e.path()
+                .extension()
+                .and_then(|x| x.to_str())
+                .map(|x| x.eq_ignore_ascii_case("app"))
+                .unwrap_or(false)
+        })
+        .ok_or_else(|| format!("No .app bundle found in {mountpoint}"))?;
+
+    let src = app_bundle.path();
+    let app_name = src
+        .file_name()
+        .ok_or("App bundle has no filename")?
+        .to_owned();
+
+    // 4. Pick destination: replace the running bundle if we can locate it,
+    //    else fall back to ~/Applications/. This keeps users on /Applications
+    //    on /Applications, and users on ~/Applications on ~/Applications.
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .ok_or("HOME is not set")?;
+    let dest_dir = running_app_bundle_dir()
+        .and_then(|p| p.parent().map(|x| x.to_path_buf()))
+        .unwrap_or_else(|| home.join("Applications"));
+    std::fs::create_dir_all(&dest_dir)
+        .map_err(|e| format!("Could not create {}: {e}", dest_dir.display()))?;
+    let dest = dest_dir.join(&app_name);
+
+    // 5. Remove any existing bundle. POSIX allows unlinking a directory whose
+    //    binary is currently executing — the running process keeps its open
+    //    fds to the (now unreachable) inodes until exit.
+    if dest.exists() {
+        std::fs::remove_dir_all(&dest)
+            .map_err(|e| format!("Could not remove existing {}: {e}", dest.display()))?;
+    }
+
+    // 6. Copy in the new bundle. `cp -R` preserves extended attributes
+    //    including the code-signing seal; walking with std::fs::copy would not.
+    let copy_status = std::process::Command::new("cp")
+        .arg("-R")
+        .arg(&src)
+        .arg(&dest)
+        .status()
+        .map_err(|e| format!("cp -R failed: {e}"))?;
+    if !copy_status.success() {
+        return Err(format!("cp -R exited with status {copy_status}"));
+    }
+
+    // 7. Schedule the new app to launch a few seconds AFTER our PID exits.
+    //    Calling `open` synchronously here would just bring our own (about-to-
+    //    exit) instance forward, since macOS dedupes by Bundle ID.
+    let dest_str = dest
+        .to_str()
+        .ok_or("Destination path is not valid UTF-8")?;
+    let shell_cmd = format!("sleep 3 && /usr/bin/open -n {}", shell_quote(dest_str));
+    std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(&shell_cmd)
+        .spawn()
+        .map_err(|e| format!("Failed to spawn delayed relauncher: {e}"))?;
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn running_app_bundle_dir() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let mut current = exe.as_path();
+    while let Some(parent) = current.parent() {
+        if parent
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("app"))
+            .unwrap_or(false)
+        {
+            return Some(parent.to_path_buf());
+        }
+        current = parent;
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn shell_quote(s: &str) -> String {
+    // Wrap in single quotes; embedded single quotes become '\''.
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+#[cfg(target_os = "macos")]
+struct MountGuard {
+    mountpoint: String,
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for MountGuard {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("hdiutil")
+            .arg("detach")
+            .arg("-quiet")
+            .arg(&self.mountpoint)
+            .status();
+    }
 }
 
 /// Get the build timestamp (injected at compile time).
@@ -394,5 +679,32 @@ mod tests {
             sha256_hex(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn parse_command_line_handles_quoted_path_with_spaces() {
+        // The exact format NSIS writes to UninstallString — a single quoted
+        // path with no following args.
+        let (p, a) = parse_command_line(r#""C:\Users\Nicol\AppData\Local\QueryDen\uninstall.exe""#);
+        assert_eq!(p, r"C:\Users\Nicol\AppData\Local\QueryDen\uninstall.exe");
+        assert!(a.is_empty());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn parse_command_line_preserves_trailing_args() {
+        let (p, a) =
+            parse_command_line(r#""C:\Program Files\App\uninst.exe" /S /KEEP-USER-DATA"#);
+        assert_eq!(p, r"C:\Program Files\App\uninst.exe");
+        assert_eq!(a, vec!["/S".to_string(), "/KEEP-USER-DATA".to_string()]);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn parse_command_line_handles_unquoted() {
+        let (p, a) = parse_command_line(r"C:\Tools\uninst.exe /S");
+        assert_eq!(p, r"C:\Tools\uninst.exe");
+        assert_eq!(a, vec!["/S".to_string()]);
     }
 }
