@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/openidle-dev/queryden/discussions
+    about: Open-ended questions, ideas, and "is this a bug or am I holding it wrong?" — please use Discussions.
+  - name: Security report
+    url: https://github.com/openidle-dev/queryden/security/advisories/new
+    about: Found a vulnerability? Please file a private advisory instead of a public issue. See SECURITY.md for details.

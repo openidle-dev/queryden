@@ -274,7 +274,7 @@ function IssueReporter({ appVersion, buildDate, sysInfo, activeConnection }: Iss
   const submitIssue = async () => {
     if (!title.trim()) return;
     if (useEmail) {
-      const mailtoUrl = `mailto:support@queryden.app?subject=[${severity.toUpperCase()}] ${title}&body=${encodeURIComponent(buildIssueBody(true))}`;
+      const mailtoUrl = `mailto:hello@openidle.com?subject=[${severity.toUpperCase()}] ${title}&body=${encodeURIComponent(buildIssueBody(true))}`;
       try { (await import("@tauri-apps/plugin-opener")).openUrl(mailtoUrl); } catch { window.open(mailtoUrl, "_blank"); }
     } else {
       const p = new URLSearchParams({ title, body: buildIssueBody(), labels: severity });
@@ -300,7 +300,7 @@ function IssueReporter({ appVersion, buildDate, sysInfo, activeConnection }: Iss
       <div className={`p-3 border rounded-lg flex items-start gap-3 ${useEmail ? 'bg-purple-500/5 border-purple-500/15' : 'bg-blue-500/5 border-blue-500/15'}`}>
         {useEmail ? <Send className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" /> : <Bug className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />}
         <p className="text-[11px] text-[var(--text-secondary)] leading-tight">
-          {useEmail ? "Report via email to support@queryden.app." : "Open an issue on our GitHub repository."}
+          {useEmail ? "Report via email to hello@openidle.com." : "Open an issue on our GitHub repository."}
         </p>
       </div>
 

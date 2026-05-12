@@ -1,0 +1,91 @@
+name: Bug report
+description: Something is broken or behaving unexpectedly.
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. The more specific you can be, the faster we can fix it.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear, concise description of what went wrong and what you expected instead.
+      placeholder: When I click "Run Query" on a PostgreSQL connection, nothing happens for 10 seconds and then I see "AbortError" in the results panel.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Numbered list of steps. Include the type of database, the query if relevant (please redact credentials), and anything special about your environment.
+      placeholder: |
+        1. Open QueryDen
+        2. Create a new PostgreSQL 16 connection to a local server
+        3. Run `SELECT 1;`
+        4. ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: QueryDen version
+      description: Check `Help → About` inside the app.
+      placeholder: 1.0.4
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux — Ubuntu/Debian
+        - Linux — Fedora/RHEL
+        - Linux — Arch
+        - Linux — other
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: db
+    attributes:
+      label: Database type involved
+      multiple: true
+      options:
+        - PostgreSQL
+        - MySQL / MariaDB
+        - SQLite
+        - CockroachDB
+        - Supabase
+        - Not applicable
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / screenshots
+      description: |
+        If you can reproduce while running from source with `RUST_LOG=queryden=debug npm run tauri dev`, paste relevant log lines below. Screenshots and short screen recordings are very welcome. Please redact any credentials.
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Confirmations
+      options:
+        - label: I searched existing issues and didn't find a duplicate.
+          required: true
+        - label: I'm running the latest released version (or noted my older version above).
+          required: true
