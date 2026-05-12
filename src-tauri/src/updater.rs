@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use tracing::info;
+#[cfg(unix)]
+use tracing::warn;
 
 const GITHUB_API_URL: &str =
     "https://api.github.com/repos/openidle-dev/queryden/releases/latest";
@@ -154,19 +157,94 @@ pub async fn check_for_updates_v2() -> Result<UpdateCheckResult, String> {
     })
 }
 
-/// Download the update asset to a temp directory and return the path.
+/// Fetch the expected SHA256 of `url` from a sibling `<url>.sha256` asset
+/// (the convention enforced by the release workflow). Returns the 64-character
+/// lowercase hex digest with any filename suffix trimmed.
+async fn fetch_expected_sha256(client: &reqwest::Client, url: &str) -> Result<String, String> {
+    let checksum_url = format!("{url}.sha256");
+    info!("Fetching checksum from: {checksum_url}");
+
+    let resp = client
+        .get(&checksum_url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch checksum: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!(
+            "Update aborted: no checksum found at {checksum_url} (HTTP {}). \
+             Refusing to install unverified binary.",
+            resp.status()
+        ));
+    }
+
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read checksum body: {e}"))?;
+
+    // Accept both raw `<hex>` and the GNU `<hex>  filename` format.
+    let digest = body
+        .split_whitespace()
+        .next()
+        .ok_or_else(|| "Checksum file is empty".to_string())?
+        .to_ascii_lowercase();
+
+    if digest.len() != 64 || !digest.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!("Checksum file does not contain a valid SHA256: {digest:?}"));
+    }
+    Ok(digest)
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
+}
+
+/// Create a fresh download directory under the system temp dir with a random
+/// suffix, defeating predictable-path symlink attacks on shared machines.
+async fn make_download_dir() -> Result<PathBuf, String> {
+    let suffix: u64 = rand::random();
+    let dir = std::env::temp_dir().join(format!("queryden-update-{suffix:016x}"));
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| format!("Failed to create download directory: {e}"))?;
+
+    // Best-effort: restrict to owner-only on Unix.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)) {
+            warn!("Failed to tighten permissions on update dir {dir:?}: {e}");
+        }
+    }
+    Ok(dir)
+}
+
+/// Download the update asset, verify its SHA256 against the sibling
+/// `<asset>.sha256` published in the GitHub release, and return the local path.
+/// Aborts with an error if no checksum is published or the hashes don't match —
+/// the user is never asked to install an unverified binary.
 #[tauri::command]
 pub async fn download_update(
     _app: tauri::AppHandle,
     url: String,
     asset_name: String,
 ) -> Result<String, String> {
+    if !url.starts_with("https://") {
+        return Err(format!("Refusing to download update over non-HTTPS URL: {url}"));
+    }
+
     info!("Downloading update from: {url}");
 
     let client = reqwest::Client::builder()
         .user_agent("QueryDen-Updater")
         .build()
         .map_err(|e| format!("HTTP client error: {e}"))?;
+
+    // Fetch checksum BEFORE the binary so a missing/invalid checksum fails fast.
+    let expected_sha = fetch_expected_sha256(&client, &url).await?;
 
     let resp = client
         .get(&url)
@@ -183,18 +261,20 @@ pub async fn download_update(
         .await
         .map_err(|e| format!("Failed to read response body: {e}"))?;
 
-    // Write to a temp directory
-    let download_dir = std::env::temp_dir().join("queryden-updates");
-    tokio::fs::create_dir_all(&download_dir)
-        .await
-        .map_err(|e| format!("Failed to create download directory: {e}"))?;
+    let actual_sha = sha256_hex(&bytes);
+    if actual_sha != expected_sha {
+        return Err(format!(
+            "Update aborted: SHA256 mismatch. expected={expected_sha} actual={actual_sha}"
+        ));
+    }
+    info!("Checksum verified: {actual_sha}");
 
+    let download_dir = make_download_dir().await?;
     let file_path = download_dir.join(&asset_name);
     tokio::fs::write(&file_path, &bytes)
         .await
         .map_err(|e| format!("Failed to write update file: {e}"))?;
 
-    // On Linux, make AppImage executable
     #[cfg(target_os = "linux")]
     {
         if asset_name.to_lowercase().ends_with(".appimage") {

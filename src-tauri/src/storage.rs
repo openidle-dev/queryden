@@ -18,13 +18,19 @@ use argon2::{
 use keyring::Entry;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::warn;
 
 static FAILED_ATTEMPTS: AtomicU32 = AtomicU32::new(0);
 static LOCKOUT_UNTIL: AtomicU64 = AtomicU64::new(0);
 
-// Production Note: In a professional environment, this key should be derived from 
-// a user's Master Password or a machine-specific secret stored in a secure keyring.
-// For now, we use a more robust derivation than a hardcoded string.
+// Sentinel returned when platform-specific machine-ID detection fails entirely.
+// Kept as a literal because legacy decrypt paths (pre-1.0) used this value as
+// part of the key seed — removing it would brick those users' data.
+const FALLBACK_MACHINE_ID: &str = "default-machine-id";
+
+// Returns the platform machine ID, or `FALLBACK_MACHINE_ID` if detection fails.
+// Use `try_get_machine_id()` for new encryption — it errors instead of weakening
+// the key with a globally-known sentinel.
 fn get_machine_id() -> String {
     #[cfg(target_os = "linux")]
     {
@@ -63,7 +69,19 @@ fn get_machine_id() -> String {
         }
     }
 
-    "default-machine-id".to_string()
+    FALLBACK_MACHINE_ID.to_string()
+}
+
+// Strict variant — errors if no platform path produced a real machine ID.
+// New encryption must use this so a key derived from a known constant is never
+// silently produced.
+fn try_get_machine_id() -> Result<String, String> {
+    let id = get_machine_id();
+    if id == FALLBACK_MACHINE_ID || id.is_empty() {
+        Err("Failed to detect machine ID; encryption requires a real hardware identifier".into())
+    } else {
+        Ok(id)
+    }
 }
 
 fn get_machine_fingerprint() -> String {
@@ -80,8 +98,7 @@ fn get_master_app_key(app_dir: &PathBuf) -> Result<String, String> {
             return Ok(key);
         }
     }
-    
-    // Fallback to file-based master key
+
     let mk_path = app_dir.join(".master_key");
     if mk_path.exists() {
         if let Ok(key) = fs::read_to_string(&mk_path) {
@@ -89,54 +106,61 @@ fn get_master_app_key(app_dir: &PathBuf) -> Result<String, String> {
         }
     }
 
-    // Generate a new random master key if it doesn't exist
     let mut key_bytes = [0u8; 32];
     rand::thread_rng().fill(&mut key_bytes);
     let new_key = hex::encode(key_bytes);
-    
+
+    // At least one persistence path MUST succeed, otherwise the next run will
+    // generate a different key and the user's data becomes unrecoverable.
+    let mut persisted = false;
     if let Ok(entry) = Entry::new("queryden", "master_app_key") {
-        let _ = entry.set_password(&new_key);
+        if entry.set_password(&new_key).is_ok() {
+            persisted = true;
+        } else {
+            warn!("Failed to persist master key to OS keyring");
+        }
     }
-    let _ = fs::write(&mk_path, &new_key);
-    
+    if let Err(e) = fs::write(&mk_path, &new_key) {
+        warn!("Failed to persist master key to {mk_path:?}: {e}");
+    } else {
+        persisted = true;
+    }
+
+    if !persisted {
+        return Err("Cannot persist master encryption key: OS keyring and app data directory are both unavailable".into());
+    }
     Ok(new_key)
 }
 
-fn get_encryption_key(vault_password: Option<&str>, use_machine_id: bool, app_dir: &PathBuf) -> [u8; 32] {
+fn get_encryption_key(vault_password: Option<&str>, use_machine_id: bool, app_dir: &PathBuf) -> Result<[u8; 32], String> {
     let mut key = [0u8; 32];
-    
-    // 1. Get Base Secret (Machine ID or Legacy ID)
-    let machine_id = if use_machine_id { get_machine_id() } else { "universal-legacy-id".to_string() };
-    
-    // 2. Get Master App Key (Device Persistence)
-    let master_key = get_master_app_key(app_dir).unwrap_or_else(|_| "emergency-fallback-key".to_string());
-    
-    // 3. Compose Seed
+
+    let machine_id = if use_machine_id {
+        try_get_machine_id()?
+    } else {
+        "universal-legacy-id".to_string()
+    };
+
+    let master_key = get_master_app_key(app_dir)?;
+
     let salt_text = "queryden-production-salt-2024-v2";
     let seed = if let Some(pwd) = vault_password {
         format!("{}:{}:{}:{}", pwd, machine_id, master_key, salt_text)
     } else {
         format!("{}:{}:{}", machine_id, master_key, salt_text)
     };
-    
-    // 4. Robust Derivation using Argon2id
+
     let argon2 = Argon2::default();
-    let salt = SaltString::from_b64("cXVlcnlkZW5fc2FsdF8wMQ").unwrap(); // 16 bytes encoded
-    
-    if let Ok(hash) = argon2.hash_password(seed.as_bytes(), &salt) {
-        let output = hash.hash.unwrap();
-        let hash_bytes = output.as_bytes();
-        // Use the first 32 bytes of the hash as our AES key
-        key.copy_from_slice(&hash_bytes[..32]);
-    } else {
-        // Absolute fallback (XOR-based as emergency)
-        let seed_bytes = seed.as_bytes();
-        for i in 0..32 {
-            key[i] = seed_bytes[i % seed_bytes.len()] ^ (i as u8);
-        }
-    }
-    
-    key
+    let salt = SaltString::from_b64("cXVlcnlkZW5fc2FsdF8wMQ")
+        .expect("static salt string is valid base64");
+
+    let hash = argon2
+        .hash_password(seed.as_bytes(), &salt)
+        .map_err(|e| format!("Argon2 key derivation failed: {e}"))?;
+    let output = hash.hash.ok_or("Argon2 produced no hash output")?;
+    key.copy_from_slice(&output.as_bytes()[..32]);
+
+    Ok(key)
 }
 
 fn get_app_data_dir(app: &tauri::AppHandle) -> PathBuf {
@@ -153,18 +177,18 @@ fn ensure_app_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn encrypt(data: &str, vault_password: Option<&str>, app_dir: &PathBuf) -> String {
-    // New data always uses machine-locked encryption
-    let key = get_encryption_key(vault_password, true, app_dir);
+fn encrypt(data: &str, vault_password: Option<&str>, app_dir: &PathBuf) -> Result<String, String> {
+    // New data always uses machine-locked encryption.
+    let key = get_encryption_key(vault_password, true, app_dir)?;
     let cipher = Aes256Gcm::new(&key.into());
     let nonce_bytes: [u8; 12] = rand::thread_rng().gen();
     let nonce = Nonce::from_slice(&nonce_bytes);
     let ciphertext = cipher
         .encrypt(nonce, data.as_bytes())
-        .unwrap_or_else(|_| data.as_bytes().to_vec());
+        .map_err(|e| format!("AES-256-GCM encryption failed: {e}"))?;
     let mut combined = nonce_bytes.to_vec();
     combined.extend(ciphertext);
-    BASE64.encode(combined)
+    Ok(BASE64.encode(combined))
 }
 
 fn decrypt(encoded: &str, vault_password: Option<&str>, app_dir: &PathBuf) -> String {
@@ -179,12 +203,14 @@ fn decrypt(encoded: &str, vault_password: Option<&str>, app_dir: &PathBuf) -> St
     let nonce = Nonce::from_slice(nonce_bytes);
 
     // ===== PRIMARY: Try the SAME key as encrypt() uses (Argon2id + master_key + salt-v2) =====
-    // This is the key that all new data is encrypted with.
-    let modern_key = get_encryption_key(vault_password, true, app_dir);
-    let cipher = Aes256Gcm::new(&modern_key.into());
-    if let Ok(plain) = cipher.decrypt(nonce, ciphertext) {
-        if let Ok(s) = String::from_utf8(plain) {
-            return s;
+    // If modern key derivation fails (e.g. machine ID unavailable) we still try
+    // legacy paths below — they may succeed on older data.
+    if let Ok(modern_key) = get_encryption_key(vault_password, true, app_dir) {
+        let cipher = Aes256Gcm::new(&modern_key.into());
+        if let Ok(plain) = cipher.decrypt(nonce, ciphertext) {
+            if let Ok(s) = String::from_utf8(plain) {
+                return s;
+            }
         }
     }
 
@@ -224,7 +250,7 @@ fn decrypt(encoded: &str, vault_password: Option<&str>, app_dir: &PathBuf) -> St
     encoded.to_string()
 }
 
-fn cipher_decrypt_no_id(encoded: &str, vault_password: Option<&str>, salt: &str, nonce_bytes: &[u8], ciphertext: &[u8]) -> Result<String, ()> {
+fn cipher_decrypt_no_id(_encoded: &str, vault_password: Option<&str>, salt: &str, nonce_bytes: &[u8], ciphertext: &[u8]) -> Result<String, ()> {
     let mut key = [0u8; 32];
     let seed = if let Some(pwd) = vault_password {
         format!("{}:{}", pwd, salt)
@@ -238,12 +264,12 @@ fn cipher_decrypt_no_id(encoded: &str, vault_password: Option<&str>, salt: &str,
     let cipher = Aes256Gcm::new(&key.into());
     let nonce = Nonce::from_slice(nonce_bytes);
     match cipher.decrypt(nonce, ciphertext) {
-        Ok(plain) => Ok(String::from_utf8(plain).unwrap_or_else(|_| encoded.to_string())),
+        Ok(plain) => String::from_utf8(plain).map_err(|_| ()),
         Err(_) => Err(()),
     }
 }
 
-fn cipher_decrypt(encoded: &str, vault_password: Option<&str>, machine_id: &str, salt: &str, nonce_bytes: &[u8], ciphertext: &[u8]) -> Result<String, ()> {
+fn cipher_decrypt(_encoded: &str, vault_password: Option<&str>, machine_id: &str, salt: &str, nonce_bytes: &[u8], ciphertext: &[u8]) -> Result<String, ()> {
     let mut key = [0u8; 32];
     
     let seed = if let Some(pwd) = vault_password {
@@ -260,7 +286,7 @@ fn cipher_decrypt(encoded: &str, vault_password: Option<&str>, machine_id: &str,
     let cipher = Aes256Gcm::new(&key.into());
     let nonce = Nonce::from_slice(nonce_bytes);
     match cipher.decrypt(nonce, ciphertext) {
-        Ok(plain) => Ok(String::from_utf8(plain).unwrap_or_else(|_| encoded.to_string())),
+        Ok(plain) => String::from_utf8(plain).map_err(|_| ()),
         Err(_) => Err(()),
     }
 }
@@ -350,17 +376,17 @@ pub fn save_connections(app: tauri::AppHandle, connections: Vec<StoredConnection
         .map(|c| {
             let use_vault = c.is_vault.unwrap_or(false);
             let pwd = if use_vault { vault_password.as_deref() } else { None };
-            let password = c.password.map(|p| encrypt(&p, pwd, &dir));
-            let ssh_password = c.ssh_password.map(|p| encrypt(&p, pwd, &dir));
-            let ssh_key_passphrase = c.ssh_key_passphrase.map(|p| encrypt(&p, pwd, &dir));
-            StoredConnection {
+            let password = c.password.map(|p| encrypt(&p, pwd, &dir)).transpose()?;
+            let ssh_password = c.ssh_password.map(|p| encrypt(&p, pwd, &dir)).transpose()?;
+            let ssh_key_passphrase = c.ssh_key_passphrase.map(|p| encrypt(&p, pwd, &dir)).transpose()?;
+            Ok(StoredConnection {
                 password,
                 ssh_password,
                 ssh_key_passphrase,
                 ..c
-            }
+            })
         })
-        .collect();
+        .collect::<Result<_, String>>()?;
     let data = ConnectionData {
         connections: encrypted,
         version: 1,
@@ -564,7 +590,7 @@ pub fn save_query_history(app: tauri::AppHandle, history: Vec<QueryHistoryItem>)
         machine_fingerprint: get_machine_fingerprint(),
     };
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
-    let encrypted = encrypt(&json, None, &dir);
+    let encrypted = encrypt(&json, None, &dir)?;
     let path = dir.join("query-history.json");
     fs::write(&path, encrypted).map_err(|e| e.to_string())?;
     Ok(())
@@ -658,16 +684,16 @@ pub fn save_vault_credentials(app: tauri::AppHandle, credentials: Vec<VaultCrede
     let encrypted: Vec<VaultCredential> = credentials
         .into_iter()
         .map(|c| {
-            let username = c.username.map(|u| encrypt(&u, vault_password.as_deref(), &dir));
-            let password = c.password.map(|p| encrypt(&p, vault_password.as_deref(), &dir));
-            VaultCredential {
+            let username = c.username.map(|u| encrypt(&u, vault_password.as_deref(), &dir)).transpose()?;
+            let password = c.password.map(|p| encrypt(&p, vault_password.as_deref(), &dir)).transpose()?;
+            Ok(VaultCredential {
                 id: c.id,
                 name: c.name,
                 username,
                 password,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<_, String>>()?;
     let data = VaultData {
         credentials: encrypted,
         version: 1,
@@ -761,7 +787,7 @@ pub fn save_saved_queries(app: tauri::AppHandle, queries: Vec<SavedQueryItem>) -
         machine_fingerprint: get_machine_fingerprint(),
     };
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
-    let encrypted = encrypt(&json, None, &dir);
+    let encrypted = encrypt(&json, None, &dir)?;
     let path = dir.join("saved-queries.json");
     fs::write(&path, encrypted).map_err(|e| e.to_string())?;
     Ok(())
@@ -813,7 +839,7 @@ pub fn save_local_history(app: tauri::AppHandle, entries: Vec<LocalHistoryEntry>
         machine_fingerprint: get_machine_fingerprint(),
     };
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
-    let encrypted = encrypt(&json, None, &dir);
+    let encrypted = encrypt(&json, None, &dir)?;
     let path = dir.join("local-history.json");
     fs::write(&path, encrypted).map_err(|e| e.to_string())?;
     Ok(())
