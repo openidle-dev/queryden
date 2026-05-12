@@ -4,6 +4,10 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-05-13
+
+This is the first OSS launch release. It rolls up a pre-launch audit pass covering security, runtime correctness, documentation, and the basic OSS-baseline files needed for outside contributors.
+
 ### Added
 - Local Monaco editor bundle (no runtime CDN dependency); editor works offline.
 - macOS `app` and `dmg` bundle targets.
@@ -44,7 +48,8 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 
 Initial public release of QueryDen — multi-database desktop manager with PostgreSQL, MySQL/MariaDB, SQLite, CockroachDB, and Supabase support, SSH tunneling, an encrypted credential vault, query history, saved queries, and an integrated `psql` console.
 
-[Unreleased]: https://github.com/openidle-dev/queryden/compare/v1.0.4...HEAD
+[Unreleased]: https://github.com/openidle-dev/queryden/compare/v1.0.5...HEAD
+[1.0.5]: https://github.com/openidle-dev/queryden/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/openidle-dev/queryden/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/openidle-dev/queryden/compare/v1.0.0...v1.0.3
 [1.0.0]: https://github.com/openidle-dev/queryden/releases/tag/v1.0.0

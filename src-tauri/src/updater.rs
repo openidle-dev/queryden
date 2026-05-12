@@ -349,3 +349,50 @@ pub fn get_build_info() -> Result<String, String> {
     // This is set in build.rs
     Ok(env!("QUERYDEN_BUILD_DATE").to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalise_version_strips_v_prefix_and_whitespace() {
+        assert_eq!(normalise_version("v1.2.3"), "1.2.3");
+        assert_eq!(normalise_version("V1.2.3"), "1.2.3");
+        assert_eq!(normalise_version("  v1.2.3 \n"), "1.2.3");
+        assert_eq!(normalise_version("1.2.3"), "1.2.3");
+    }
+
+    #[test]
+    fn is_newer_detects_strictly_newer_versions() {
+        assert!(is_newer("1.0.4", "1.0.5"));
+        assert!(is_newer("1.0.4", "1.1.0"));
+        assert!(is_newer("1.0.4", "2.0.0"));
+        assert!(is_newer("v1.0.4", "v1.0.5"));
+    }
+
+    #[test]
+    fn is_newer_rejects_equal_or_older_versions() {
+        assert!(!is_newer("1.0.5", "1.0.5"));
+        assert!(!is_newer("1.0.5", "1.0.4"));
+        assert!(!is_newer("2.0.0", "1.99.99"));
+    }
+
+    #[test]
+    fn is_newer_treats_malformed_segments_as_zero() {
+        // We don't want a malformed remote version to look "newer" than a clean local one.
+        assert!(!is_newer("1.0.5", "garbage"));
+    }
+
+    #[test]
+    fn sha256_hex_matches_known_vector() {
+        // Empty string SHA256 — standard test vector.
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+}

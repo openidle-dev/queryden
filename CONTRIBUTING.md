@@ -70,7 +70,22 @@ Indentation is 2 spaces (JS/TS/JSON) and 4 spaces (Rust, per `rustfmt` defaults)
 
 ## Tests
 
-There is no automated test suite yet. CI runs `tsc --noEmit`, `cargo check`, and `cargo clippy -- -D warnings`. If you're adding a Rust function with non-trivial logic, please include a `#[cfg(test)]` block.
+CI runs three test layers on every PR:
+
+- **Frontend unit** (`npm test` — Vitest): tests live next to source as `*.test.ts` / `*.test.tsx`. Start with `src/utils/*.test.ts` as a pattern reference.
+- **Rust unit** (`cargo test`): tests live in `#[cfg(test)] mod tests { ... }` blocks inside each `.rs` file. See `src-tauri/src/updater.rs` for a pattern reference.
+- **Static checks**: `tsc --noEmit`, `cargo check --locked`, `cargo clippy --locked -- -D warnings`.
+
+We're not chasing coverage targets — write tests for the bits where a regression would cost a user something. Pure utility functions, parsing, encryption round-trips, version math, and security-sensitive paths are all worth covering. UI snapshot tests usually aren't.
+
+Run locally:
+```bash
+npm test                 # one-shot Vitest run
+npm run test:watch       # watch mode
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+E2E testing isn't wired up. The official Tauri E2E story is `webdriverio` + `tauri-driver` — open a PR if you want to bring it in.
 
 ## Tauri command surface
 
