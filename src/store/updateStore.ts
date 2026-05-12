@@ -1,20 +1,9 @@
 import { create } from 'zustand';
-import { invoke } from '@tauri-apps/api/core';
+import { invokeCmd, UpdateCheckResultDto } from '../lib/ipc';
 
 // ── Types ──────────────────────────────────────────────────────────
 
-export interface UpdateCheckResult {
-  update_available: boolean;
-  current_version: string;
-  latest_version: string;
-  release_name: string | null;
-  changelog: string | null;
-  release_url: string;
-  published_at: string | null;
-  download_url: string | null;
-  download_size: number | null;
-  asset_name: string | null;
-}
+export type UpdateCheckResult = UpdateCheckResultDto;
 
 export type UpdatePhase =
   | 'idle'
@@ -57,15 +46,15 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
   checkForUpdates: async () => {
     set({ phase: 'checking', error: null, dismissed: false });
     try {
-      const result = await invoke<UpdateCheckResult>('check_for_updates_v2');
+      const result = await invokeCmd('check_for_updates_v2');
       set({
         result,
         phase: result.update_available ? 'available' : 'up-to-date',
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       set({
         phase: 'error',
-        error: err?.toString() ?? 'Failed to check for updates',
+        error: String(err ?? 'Failed to check for updates'),
       });
     }
   },
@@ -80,15 +69,15 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
     set({ phase: 'downloading', downloadProgress: 0, error: null });
 
     try {
-      const path = await invoke<string>('download_update', {
+      const path = await invokeCmd('download_update', {
         url: result.download_url,
         assetName: result.asset_name,
       });
       set({ phase: 'ready', downloadPath: path, downloadProgress: 100 });
-    } catch (err: any) {
+    } catch (err: unknown) {
       set({
         phase: 'error',
-        error: err?.toString() ?? 'Download failed',
+        error: String(err ?? 'Download failed'),
       });
     }
   },
@@ -102,13 +91,13 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
     set({ phase: 'installing', error: null });
 
     try {
-      await invoke('install_update', { filePath: downloadPath });
+      await invokeCmd('install_update', { filePath: downloadPath });
       // The app will exit after this, but just in case:
       set({ phase: 'idle' });
-    } catch (err: any) {
+    } catch (err: unknown) {
       set({
         phase: 'error',
-        error: err?.toString() ?? 'Installation failed',
+        error: String(err ?? 'Installation failed'),
       });
     }
   },
@@ -127,7 +116,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
 
   fetchBuildDate: async () => {
     try {
-      const date = await invoke<string>('get_build_info');
+      const date = await invokeCmd('get_build_info');
       set({ buildDate: date });
     } catch {
       set({ buildDate: 'dev' });

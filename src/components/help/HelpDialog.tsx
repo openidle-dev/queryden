@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
 import { X, Info, BookOpen, Terminal, Cpu, HardDrive, Github, Bug, Send, Camera, CheckCircle, Loader2, Image, Trash2 } from "lucide-react";
 import { useConnections } from "../../contexts/useConnections";
-import { invoke } from "@tauri-apps/api/core";
+import { invokeCmd, SystemInfoDto } from "../../lib/ipc";
+import { logger } from "../../utils/logger";
 import { useAppInfo } from "../../hooks/useAppInfo";
 import { useUpdateStore } from "../../store/updateStore";
 
@@ -12,19 +13,7 @@ interface HelpDialogProps {
 
 type HelpTab = "about" | "report";
 
-interface SystemInfo {
-  os_name: String;
-  os_version: String;
-  kernel_version: String;
-  hostname: String;
-  cpu_model: String;
-  cpu_count: number;
-  memory_total_kb: number;
-  memory_used_kb: number;
-  memory_free_kb: number;
-  uptime_seconds: number;
-  app_version: string;
-}
+type SystemInfo = SystemInfoDto;
 
 
 export function HelpDialog({ isOpen, onClose }: HelpDialogProps) {
@@ -43,10 +32,10 @@ export function HelpDialog({ isOpen, onClose }: HelpDialogProps) {
 
   const fetchSystemInfo = async () => {
     try {
-      const info = await invoke<SystemInfo>("get_system_info");
+      const info = await invokeCmd("get_system_info");
       setSysInfo(info);
     } catch (err) {
-      console.error("Failed to fetch system info:", err);
+      logger.error("Failed to fetch system info:", err);
     }
   };
 

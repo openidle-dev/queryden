@@ -1,12 +1,8 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
+import { invokeCmd, LocalHistoryEntryDto } from "../lib/ipc";
+import { logger } from "../utils/logger";
 
-export interface LocalHistoryEntry {
-  timestamp: number;
-  filePath: string;
-  content: string;
-  label?: string;
-}
+export type LocalHistoryEntry = LocalHistoryEntryDto;
 
 interface LocalHistoryState {
   entries: LocalHistoryEntry[];
@@ -21,10 +17,9 @@ interface LocalHistoryState {
 }
 
 function isTauri(): boolean {
-  return typeof window !== 'undefined' && (
-    !!(window as any).__TAURI_INTERNALS__ || 
-    !!(window as any).__TAURI__
-  );
+  if (typeof window === "undefined") return false;
+  const w = window as Window & { __TAURI_INTERNALS__?: unknown; __TAURI__?: unknown };
+  return !!w.__TAURI_INTERNALS__ || !!w.__TAURI__;
 }
 
 export const useLocalHistory = create<LocalHistoryState>()((set, get) => ({
@@ -36,17 +31,17 @@ export const useLocalHistory = create<LocalHistoryState>()((set, get) => ({
       timestamp: Date.now(),
       filePath,
       content,
-      label
+      label: label ?? null,
     };
-    
+
     const newEntries = [entry, ...get().entries].slice(0, 100);
     set({ entries: newEntries });
-    
+
     if (isTauri()) {
       try {
-        await invoke("save_local_history", { entries: newEntries });
+        await invokeCmd("save_local_history", { entries: newEntries });
       } catch (e) {
-        console.error("Failed to save local history:", e);
+        logger.error("Failed to save local history:", e);
       }
     }
   },
@@ -88,9 +83,9 @@ export const useLocalHistory = create<LocalHistoryState>()((set, get) => ({
     set({ entries: [] });
     if (isTauri()) {
       try {
-        await invoke("clear_local_history");
+        await invokeCmd("clear_local_history");
       } catch (e) {
-        console.error("Failed to clear local history:", e);
+        logger.error("Failed to clear local history:", e);
       }
     }
   },
@@ -100,13 +95,13 @@ export const useLocalHistory = create<LocalHistoryState>()((set, get) => ({
       set({ isLoading: false });
       return;
     }
-    
+
     set({ isLoading: true });
     try {
-      const entries = await invoke<LocalHistoryEntry[]>("load_local_history");
+      const entries = await invokeCmd("load_local_history");
       set({ entries, isLoading: false });
     } catch (e) {
-      console.error("Failed to load local history:", e);
+      logger.error("Failed to load local history:", e);
       set({ isLoading: false });
     }
   }

@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
+import { invokeCmd } from "../lib/ipc";
+import { logger } from "../utils/logger";
 
 export interface KeymapAction {
   id: string;
@@ -59,18 +60,22 @@ const defaultKeymaps: KeymapPreset[] = [
 ];
 
 function isTauri(): boolean {
-  return typeof window !== 'undefined' && (
-    !!(window as any).__TAURI_INTERNALS__ || 
-    !!(window as any).__TAURI__
-  );
+  if (typeof window === "undefined") return false;
+  const w = window as Window & { __TAURI_INTERNALS__?: unknown; __TAURI__?: unknown };
+  return !!w.__TAURI_INTERNALS__ || !!w.__TAURI__;
 }
 
-const saveKeymapsToFile = async (state: { activePreset: string, customActions: Record<string, string> }) => {
+interface PersistedKeymaps {
+  activePreset: string;
+  customActions: Record<string, string>;
+}
+
+const saveKeymapsToFile = async (state: PersistedKeymaps) => {
   if (!isTauri()) return;
   try {
-    await invoke("save_keymaps", { keymaps: state });
+    await invokeCmd("save_keymaps", { keymaps: state });
   } catch (e) {
-    console.error("Failed to save keymaps:", e);
+    logger.error("Failed to save keymaps:", e);
   }
 };
 
@@ -128,9 +133,9 @@ const defaultTemplates: LiveTemplate[] = [
 const saveTemplatesToFile = async (templates: LiveTemplate[]) => {
   if (!isTauri()) return;
   try {
-    await invoke("save_templates", { templates });
+    await invokeCmd("save_templates", { templates });
   } catch (e) {
-    console.error("Failed to save templates:", e);
+    logger.error("Failed to save templates:", e);
   }
 };
 
@@ -163,17 +168,29 @@ export const useLiveTemplates = create<LiveTemplatesSettings>()((set, get) => ({
 if (typeof window !== "undefined") {
   (async () => {
     try {
-      const keymapData = await invoke<any>("load_keymaps");
-      if (keymapData && keymapData.activePreset) {
-        useKeymap.setState(keymapData);
+      const keymapData = await invokeCmd("load_keymaps");
+      if (
+        keymapData &&
+        typeof keymapData === "object" &&
+        "activePreset" in keymapData &&
+        typeof (keymapData as PersistedKeymaps).activePreset === "string"
+      ) {
+        useKeymap.setState(keymapData as PersistedKeymaps);
       }
-      
-      const templateData = await invoke<any>("load_templates");
-      if (templateData && templateData.templates) {
-        useLiveTemplates.setState({ templates: templateData.templates });
+
+      const templateData = await invokeCmd("load_templates");
+      if (
+        templateData &&
+        typeof templateData === "object" &&
+        "templates" in templateData &&
+        Array.isArray((templateData as { templates: unknown }).templates)
+      ) {
+        useLiveTemplates.setState({
+          templates: (templateData as { templates: LiveTemplate[] }).templates,
+        });
       }
     } catch (e) {
-      console.error("Failed to initialize stores from Rust:", e);
+      logger.error("Failed to initialize stores from Rust:", e);
     }
   })();
 }

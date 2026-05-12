@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
+import { invokeCmd } from "../lib/ipc";
+import { logger } from "../utils/logger";
 
 export interface SavedQuery {
   id: string;
@@ -23,17 +24,16 @@ interface SavedQueryState {
 const generateId = () => crypto.randomUUID();
 
 function isTauri(): boolean {
-  return typeof window !== 'undefined' && (
-    !!(window as any).__TAURI_INTERNALS__ || 
-    !!(window as any).__TAURI__
-  );
+  if (typeof window === "undefined") return false;
+  const w = window as Window & { __TAURI_INTERNALS__?: unknown; __TAURI__?: unknown };
+  return !!w.__TAURI_INTERNALS__ || !!w.__TAURI__;
 }
 
 const loadFromFile = async (): Promise<SavedQuery[]> => {
   if (!isTauri()) return [];
   try {
-    const queries = await invoke<any[]>("load_saved_queries");
-    return queries.map((q: any) => ({
+    const queries = await invokeCmd("load_saved_queries");
+    return queries.map((q) => ({
       id: q.id,
       name: q.name,
       query: q.query,
@@ -49,7 +49,7 @@ const loadFromFile = async (): Promise<SavedQuery[]> => {
 const saveToFile = async (queries: SavedQuery[]) => {
   if (!isTauri()) return;
   try {
-    await invoke("save_saved_queries", {
+    await invokeCmd("save_saved_queries", {
       queries: queries.map((q) => ({
         id: q.id,
         name: q.name,
@@ -60,7 +60,7 @@ const saveToFile = async (queries: SavedQuery[]) => {
       })),
     });
   } catch (e) {
-    console.error("Failed to save saved queries:", e);
+    logger.error("Failed to save saved queries:", e);
   }
 };
 

@@ -1,5 +1,12 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
+import {
+  invokeCmd,
+  CachedToolDto,
+  CheckSystemToolResult,
+  CheckToolResult,
+  CliQueryResult,
+  CliToolInfoDto,
+} from "../lib/ipc";
 
 export interface CliToolInfo {
   kind: string;
@@ -16,16 +23,8 @@ export interface CachedTool {
   path: string;
 }
 
-/** Result returned by the psql CLI query execution */
-export interface CliQueryResult {
-  columns: string[];
-  rows: string[][];
-  /** Raw stdout lines exactly as psql printed them */
-  stdout: string[];
-  rowsAffected: number;
-  executionTimeMs: number;
-  error: string | null;
-}
+// Re-export for back-compat with components that import the type from this module.
+export type { CliQueryResult } from "../lib/ipc";
 
 interface CliStore {
   tools: CliToolInfo[];
@@ -34,20 +33,19 @@ interface CliStore {
   error: string | null;
   fetchTools: () => Promise<void>;
   listCached: () => Promise<CachedTool[]>;
-  checkTool: (kind: string, majorVersion: number) => Promise<{
-    available: boolean;
-    path: string | null;
-    needsDownload: boolean;
-    downloadUrl: string | null;
-    downloadFilename: string | null;
-    cachedVersion: number | null;
-  }>;
-  checkSystemTool: (kind: string) => Promise<{ available: boolean; path: string | null }>;
+  checkTool: (kind: string, majorVersion: number) => Promise<CheckToolResult>;
+  checkSystemTool: (kind: string) => Promise<CheckSystemToolResult>;
   ensureTool: (kind: string, majorVersion?: number) => Promise<string>;
   getVersion: (kind: string, majorVersion?: number) => Promise<string>;
   downloadVersion: (kind: string, majorVersion: number) => Promise<string>;
-  detectPgVersion: (host: string, port: number, database: string, username: string, password: string) => Promise<number>;
-  getPgVersions: () => Promise<[number, string][]>;
+  detectPgVersion: (
+    host: string,
+    port: number,
+    database: string,
+    username: string,
+    password: string
+  ) => Promise<number>;
+  getPgVersions: () => Promise<Array<[number, string]>>;
   executeQuery: (
     kind: string,
     query: string,
@@ -78,6 +76,25 @@ interface CliStore {
   ) => Promise<string[]>;
 }
 
+function toCliToolInfo(t: CliToolInfoDto): CliToolInfo {
+  return {
+    kind: t.kind,
+    majorVersion: t.major_version,
+    available: t.available,
+    path: t.path,
+    systemInstallHint: t.system_install_hint,
+  };
+}
+
+function toCachedTool(t: CachedToolDto): CachedTool {
+  return {
+    kind: t.kind,
+    majorVersion: t.major_version,
+    binaries: t.binaries,
+    path: t.path,
+  };
+}
+
 export const useCliStore = create<CliStore>((set, get) => ({
   tools: [],
   cachedTools: [],
@@ -87,68 +104,51 @@ export const useCliStore = create<CliStore>((set, get) => ({
   fetchTools: async () => {
     set({ isLoading: true, error: null });
     try {
-      const tools = await invoke<any[]>("cli_check_tools");
-      set({
-        tools: tools.map(t => ({
-          kind: t.kind,
-          majorVersion: t.major_version,
-          available: t.available,
-          path: t.path,
-          systemInstallHint: t.system_install_hint,
-        })),
-        isLoading: false,
-      });
-    } catch (e: any) {
+      const tools = await invokeCmd("cli_check_tools");
+      set({ tools: tools.map(toCliToolInfo), isLoading: false });
+    } catch (e: unknown) {
       set({ error: String(e), isLoading: false });
     }
   },
 
   listCached: async () => {
-    const cached = await invoke<any[]>("cli_list_cached");
-    const tools = cached.map(t => ({
-      kind: t.kind,
-      majorVersion: t.major_version,
-      binaries: t.binaries,
-      path: t.path,
-    }));
+    const cached = await invokeCmd("cli_list_cached");
+    const tools = cached.map(toCachedTool);
     set({ cachedTools: tools });
     return tools;
   },
 
-  checkTool: async (kind: string, majorVersion: number) => {
-    return invoke<any>("cli_check_tool", { toolKind: kind, majorVersion });
-  },
+  checkTool: (kind, majorVersion) =>
+    invokeCmd("cli_check_tool", { toolKind: kind, majorVersion }),
 
-  checkSystemTool: async (kind: string) => {
-    return invoke<any>("cli_check_system_tool", { toolKind: kind });
-  },
+  checkSystemTool: (kind) =>
+    invokeCmd("cli_check_system_tool", { toolKind: kind }),
 
-  ensureTool: async (kind: string, majorVersion?: number) => {
-    const path = await invoke<string>("cli_ensure", { toolKind: kind, majorVersion: majorVersion ?? null });
+  ensureTool: async (kind, majorVersion) => {
+    const path = await invokeCmd("cli_ensure", {
+      toolKind: kind,
+      majorVersion: majorVersion ?? null,
+    });
     await get().fetchTools();
     return path;
   },
 
-  getVersion: async (kind: string, majorVersion?: number) => {
-    return invoke<string>("cli_get_version", { toolKind: kind, majorVersion: majorVersion ?? null });
-  },
+  getVersion: (kind, majorVersion) =>
+    invokeCmd("cli_get_version", { toolKind: kind, majorVersion: majorVersion ?? null }),
 
-  downloadVersion: async (kind: string, majorVersion: number) => {
-    const path = await invoke<string>("cli_download_version", { toolKind: kind, majorVersion });
+  downloadVersion: async (kind, majorVersion) => {
+    const path = await invokeCmd("cli_download_version", { toolKind: kind, majorVersion });
     await get().fetchTools();
     return path;
   },
 
-  detectPgVersion: async (host, port, database, username, password) => {
-    return invoke<number>("cli_detect_pg_version", { host, port, database, username, password });
-  },
+  detectPgVersion: (host, port, database, username, password) =>
+    invokeCmd("cli_detect_pg_version", { host, port, database, username, password }),
 
-  getPgVersions: async () => {
-    return invoke<[number, string][]>("cli_get_pg_versions");
-  },
+  getPgVersions: () => invokeCmd("cli_get_pg_versions"),
 
-  executeQuery: async (kind, query, host, port, database, username, password, majorVersion) => {
-    return invoke<CliQueryResult>("cli_execute_query", {
+  executeQuery: (kind, query, host, port, database, username, password, majorVersion) =>
+    invokeCmd("cli_execute_query", {
       toolKind: kind,
       query,
       host,
@@ -157,11 +157,10 @@ export const useCliStore = create<CliStore>((set, get) => ({
       username,
       password,
       majorVersion,
-    });
-  },
+    }),
 
-  testConnection: async (kind, host, port, database, username, password, majorVersion) => {
-    return invoke<string>("cli_test_connection", {
+  testConnection: (kind, host, port, database, username, password, majorVersion) =>
+    invokeCmd("cli_test_connection", {
       toolKind: kind,
       host,
       port,
@@ -169,11 +168,10 @@ export const useCliStore = create<CliStore>((set, get) => ({
       username,
       password,
       majorVersion,
-    });
-  },
+    }),
 
-  listDatabases: async (kind, host, port, database, username, password, majorVersion) => {
-    return invoke<string[]>("cli_list_databases", {
+  listDatabases: (kind, host, port, database, username, password, majorVersion) =>
+    invokeCmd("cli_list_databases", {
       toolKind: kind,
       host,
       port,
@@ -181,6 +179,5 @@ export const useCliStore = create<CliStore>((set, get) => ({
       username,
       password,
       majorVersion,
-    });
-  },
+    }),
 }));

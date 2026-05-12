@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
+import { invokeCmd } from "../lib/ipc";
+import { logger } from "../utils/logger";
 
 export interface DBSettings {
   // Explorer View Options
@@ -128,28 +129,29 @@ const defaultSettings: Omit<DBSettings, "setSetting" | "resetSettings"> = {
 };
 
 function isTauri(): boolean {
-  return typeof window !== 'undefined' && (
-    !!(window as any).__TAURI_INTERNALS__ || 
-    !!(window as any).__TAURI__
-  );
+  if (typeof window === "undefined") return false;
+  const w = window as Window & { __TAURI_INTERNALS__?: unknown; __TAURI__?: unknown };
+  return !!w.__TAURI_INTERNALS__ || !!w.__TAURI__;
 }
 
 const loadFromFile = async (): Promise<Partial<DBSettings>> => {
   if (!isTauri()) return {};
   try {
-    const settings = await invoke<any>("load_settings");
-    return settings || {};
+    const settings = await invokeCmd("load_settings");
+    // Settings are user-mutable JSON; treat as unknown and narrow via the
+    // defaultSettings spread below rather than trusting the shape blindly.
+    return (settings as Partial<DBSettings>) ?? {};
   } catch {
-    return { };
+    return {};
   }
 };
 
 const saveToFile = async (settings: Partial<DBSettings>) => {
   if (!isTauri()) return;
   try {
-    await invoke("save_settings", { settings });
+    await invokeCmd("save_settings", { settings });
   } catch (e) {
-    console.error("Failed to save settings:", e);
+    logger.error("Failed to save settings:", e);
   }
 };
 

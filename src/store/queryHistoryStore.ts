@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
+import { invokeCmd, QueryHistoryItemDto } from "../lib/ipc";
+import { logger } from "../utils/logger";
 
 export interface QueryHistoryItem {
   id: string;
@@ -26,26 +27,42 @@ interface QueryHistoryState {
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
 function isTauri(): boolean {
-  return typeof window !== 'undefined' && (
-    !!(window as any).__TAURI_INTERNALS__ || 
-    !!(window as any).__TAURI__
-  );
+  if (typeof window === "undefined") return false;
+  const w = window as Window & { __TAURI_INTERNALS__?: unknown; __TAURI__?: unknown };
+  return !!w.__TAURI_INTERNALS__ || !!w.__TAURI__;
+}
+
+function fromDto(h: QueryHistoryItemDto): QueryHistoryItem {
+  return {
+    id: h.id,
+    connectionId: h.connection_id,
+    connectionName: h.connection_name,
+    query: h.query,
+    executedAt: h.executed_at,
+    duration: h.duration ?? undefined,
+    rowCount: h.row_count ?? undefined,
+    success: h.success,
+  };
+}
+
+function toDto(h: QueryHistoryItem): QueryHistoryItemDto {
+  return {
+    id: h.id,
+    connection_id: h.connectionId,
+    connection_name: h.connectionName,
+    query: h.query,
+    executed_at: h.executedAt,
+    duration: h.duration ?? null,
+    row_count: h.rowCount ?? null,
+    success: h.success,
+  };
 }
 
 const loadFromFile = async (): Promise<QueryHistoryItem[]> => {
   if (!isTauri()) return [];
   try {
-    const history = await invoke<any[]>("load_query_history");
-    return history.map((h: any) => ({
-      id: h.id,
-      connectionId: h.connection_id,
-      connectionName: h.connection_name,
-      query: h.query,
-      executedAt: h.executed_at,
-      duration: h.duration,
-      rowCount: h.row_count,
-      success: h.success,
-    }));
+    const history = await invokeCmd("load_query_history");
+    return history.map(fromDto);
   } catch {
     return [];
   }
@@ -54,20 +71,9 @@ const loadFromFile = async (): Promise<QueryHistoryItem[]> => {
 const saveToFile = async (history: QueryHistoryItem[]) => {
   if (!isTauri()) return;
   try {
-    await invoke("save_query_history", {
-      history: history.map((h) => ({
-        id: h.id,
-        connection_id: h.connectionId,
-        connection_name: h.connectionName,
-        query: h.query,
-        executed_at: h.executedAt,
-        duration: h.duration,
-        row_count: h.rowCount,
-        success: h.success,
-      })),
-    });
+    await invokeCmd("save_query_history", { history: history.map(toDto) });
   } catch (e) {
-    console.error("Failed to save query history:", e);
+    logger.error("Failed to save query history:", e);
   }
 };
 

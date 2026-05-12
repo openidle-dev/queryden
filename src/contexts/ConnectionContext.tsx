@@ -1,5 +1,5 @@
 import { createContext, useState, useEffect, ReactNode } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invokeCmd, StoredConnectionDto, VaultCredentialDto } from "../lib/ipc";
 import { useSettings } from "../store/settingsStore";
 import { getDefaultDatabaseName } from "../config/app";
 import { quoteIdentifier } from "../utils/sqlSecurity";
@@ -138,10 +138,75 @@ export const ConnectionContext = createContext<ConnectionContextType | undefined
 const COLORS = ["#06b6d4", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#ec4899", "#3b82f6"];
 
 function isTauri(): boolean {
-  return typeof window !== 'undefined' && (
-    !!(window as any).__TAURI_INTERNALS__ || 
-    !!(window as any).__TAURI__
-  );
+  if (typeof window === "undefined") return false;
+  const w = window as Window & { __TAURI_INTERNALS__?: unknown; __TAURI__?: unknown };
+  return !!w.__TAURI_INTERNALS__ || !!w.__TAURI__;
+}
+
+function dtoToConnection(c: StoredConnectionDto): DatabaseConnection {
+  return {
+    id: c.id,
+    name: c.name,
+    type: c.db_type,
+    host: c.host ?? undefined,
+    port: c.port ?? undefined,
+    database: c.database,
+    username: c.username ?? undefined,
+    password: c.password ?? undefined,
+    filepath: c.filepath ?? undefined,
+    color: c.color ?? undefined,
+    isVault: c.is_vault ?? undefined,
+    vaultCredentialId: c.vault_credential_id ?? undefined,
+    sshEnabled: c.ssh_enabled ?? undefined,
+    sshHost: c.ssh_host ?? undefined,
+    sshPort: c.ssh_port ?? undefined,
+    sshUsername: c.ssh_username ?? undefined,
+    sshPassword: c.ssh_password ?? undefined,
+    sshKeyPath: c.ssh_key_path ?? undefined,
+    sshKeyPassphrase: c.ssh_key_passphrase ?? undefined,
+  };
+}
+
+function vaultDtoToCredential(c: VaultCredentialDto): VaultCredential {
+  return {
+    id: c.id,
+    name: c.name,
+    username: c.username ?? undefined,
+    password: c.password ?? undefined,
+  };
+}
+
+function vaultCredentialToDto(c: VaultCredential): VaultCredentialDto {
+  return {
+    id: c.id,
+    name: c.name,
+    username: c.username ?? null,
+    password: c.password ?? null,
+  };
+}
+
+function connectionToDto(c: DatabaseConnection): StoredConnectionDto {
+  return {
+    id: c.id,
+    name: c.name,
+    db_type: c.type,
+    host: c.host ?? null,
+    port: c.port ?? null,
+    database: c.database,
+    username: c.username ?? null,
+    password: c.password ?? null,
+    filepath: c.filepath ?? null,
+    color: c.color ?? null,
+    is_vault: c.isVault ?? null,
+    vault_credential_id: c.vaultCredentialId ?? null,
+    ssh_enabled: c.sshEnabled ?? null,
+    ssh_host: c.sshHost ?? null,
+    ssh_port: c.sshPort ?? null,
+    ssh_username: c.sshUsername ?? null,
+    ssh_password: c.sshPassword ?? null,
+    ssh_key_path: c.sshKeyPath ?? null,
+    ssh_key_passphrase: c.sshKeyPassphrase ?? null,
+  };
 }
 
 export function ConnectionProvider({ children }: { children: ReactNode }) {
@@ -169,32 +234,12 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       }
 
       try {
-        const stored = await invoke<any[]>("load_connections");
+        const stored = await invokeCmd("load_connections", { vaultPassword: null });
         if (stored) {
-          setConnections(stored.map((c: any) => ({
-            id: c.id,
-            name: c.name,
-            type: c.db_type,
-            host: c.host,
-            port: c.port,
-            database: c.database,
-            username: c.username,
-            password: c.password,
-            filepath: c.filepath,
-            color: c.color,
-            isVault: c.is_vault,
-            vaultCredentialId: c.vault_credential_id,
-            sshEnabled: c.ssh_enabled,
-            sshHost: c.ssh_host,
-            sshPort: c.ssh_port,
-            sshUsername: c.ssh_username,
-            sshPassword: c.ssh_password,
-            sshKeyPath: c.ssh_key_path,
-            sshKeyPassphrase: c.ssh_key_passphrase,
-          })));
+          setConnections(stored.map(dtoToConnection));
         }
       } catch (e) {
-        console.error("Failed to load connections from file:", e);
+        logger.error("Failed to load connections from file:", e);
       } finally {
         setInitialLoadDone(true);
       }
@@ -212,24 +257,22 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const reloadVaultCredentials = async () => {
     if (!isTauri()) return;
     try {
-      const creds = await invoke<VaultCredential[]>("load_vault_credentials", {
-        vaultPassword: null
-      });
-      setVaultCredentials(creds);
+      const creds = await invokeCmd("load_vault_credentials", { vaultPassword: null });
+      setVaultCredentials(creds.map(vaultDtoToCredential));
     } catch (e) {
-      console.error("Failed to load vault credentials:", e);
+      logger.error("Failed to load vault credentials:", e);
     }
   };
 
   const saveVaultCredentials = async (creds: VaultCredential[]) => {
     if (!isTauri()) return;
     try {
-      await invoke("save_vault_credentials", {
-        credentials: creds,
-        vaultPassword: null
+      await invokeCmd("save_vault_credentials", {
+        credentials: creds.map(vaultCredentialToDto),
+        vaultPassword: null,
       });
     } catch (e) {
-      console.error("Failed to save vault credentials:", e);
+      logger.error("Failed to save vault credentials:", e);
     }
   };
 
@@ -240,32 +283,12 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         return;
       }
       try {
-        await invoke("save_connections", {
-          connections: connections.map((c) => ({
-            id: c.id,
-            name: c.name,
-            db_type: c.type,
-            host: c.host,
-            port: c.port,
-            database: c.database,
-            username: c.username,
-            password: c.password,
-            filepath: c.filepath,
-            color: c.color,
-            is_vault: c.isVault,
-            ...(c.vaultCredentialId ? { vault_credential_id: c.vaultCredentialId } : {}),
-            ...(c.sshEnabled ? { ssh_enabled: c.sshEnabled } : {}),
-            ...(c.sshHost ? { ssh_host: c.sshHost } : {}),
-            ...(c.sshPort ? { ssh_port: c.sshPort } : {}),
-            ...(c.sshUsername ? { ssh_username: c.sshUsername } : {}),
-            ...(c.sshPassword ? { ssh_password: c.sshPassword } : {}),
-            ...(c.sshKeyPath ? { ssh_key_path: c.sshKeyPath } : {}),
-            ...(c.sshKeyPassphrase ? { ssh_key_passphrase: c.sshKeyPassphrase } : {}),
-          })),
-          vault_password: null,
+        await invokeCmd("save_connections", {
+          connections: connections.map(connectionToDto),
+          vaultPassword: null,
         });
       } catch (e) {
-        console.error("Failed to save connections:", e);
+        logger.error("Failed to save connections:", e);
       }
     }
     
@@ -276,43 +299,23 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   }, [connections, initialLoadDone]);
 
   const exportConnections = async (path: string, includePasswords: boolean) => {
-    await invoke("export_connections", { path, includePasswords, vault_password: null });
+    await invokeCmd("export_connections", { path, includePasswords, vaultPassword: null });
   };
 
   const reloadConnections = async () => {
     if (!isTauri()) return;
     try {
-      const stored = await invoke<any[]>("load_connections", { vault_password: null });
+      const stored = await invokeCmd("load_connections", { vaultPassword: null });
       if (stored) {
-        setConnections(stored.map((c: any) => ({
-          id: c.id,
-          name: c.name,
-          type: c.db_type,
-          host: c.host,
-          port: c.port,
-          database: c.database,
-          username: c.username,
-          password: c.password,
-          filepath: c.filepath,
-          color: c.color,
-          isVault: c.is_vault,
-          vaultCredentialId: c.vault_credential_id,
-          sshEnabled: c.ssh_enabled,
-          sshHost: c.ssh_host,
-          sshPort: c.ssh_port,
-          sshUsername: c.ssh_username,
-          sshPassword: c.ssh_password,
-          sshKeyPath: c.ssh_key_path,
-          sshKeyPassphrase: c.ssh_key_passphrase,
-        })));
+        setConnections(stored.map(dtoToConnection));
       }
     } catch (e) {
-      console.error("Failed to reload connections:", e);
+      logger.error("Failed to reload connections:", e);
     }
   };
 
   const importConnections = async (path: string): Promise<number> => {
-    const count = await invoke<number>("import_connections", { path, vault_password: null });
+    const count = await invokeCmd("import_connections", { path, vaultPassword: null });
     await reloadConnections();
     return count;
   };
@@ -329,8 +332,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       await disconnectFromDatabase();
     } else {
       try {
-        await invoke("close_ssh_tunnel", { connectionId: id });
-      } catch (e) {
+        await invokeCmd("close_ssh_tunnel", { connectionId: id });
+      } catch {
         // Tunnel may not exist
       }
     }
@@ -383,7 +386,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
 
       // Create SSH tunnel if enabled
       if (conn.sshEnabled && conn.sshHost && conn.sshUsername && conn.type !== "sqlite") {
-        const tunnelResult = await invoke<any>("create_ssh_tunnel", {
+        const tunnelResult = await invokeCmd("create_ssh_tunnel", {
           connectionId: conn.id,
           sshHost: conn.sshHost,
           sshPort: conn.sshPort || 22,
@@ -446,9 +449,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const disconnectFromDatabase = async () => {
     if (activeConnection) {
       try {
-        await invoke("close_ssh_tunnel", { connectionId: activeConnection.id });
+        await invokeCmd("close_ssh_tunnel", { connectionId: activeConnection.id });
       } catch (e) {
-        console.error("Failed to close SSH tunnel:", e);
+        logger.error("Failed to close SSH tunnel:", e);
       }
     }
     if (currentDb) {
