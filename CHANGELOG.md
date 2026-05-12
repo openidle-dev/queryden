@@ -4,6 +4,12 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-05-13
+
+### Changed
+- **Windows**: cleaner in-app upgrades. The NSIS installer now silently removes the previous version before installing the new one via a preinstall hook, instead of asking the user to run the uninstaller manually. Installs are also now per-user by default (no UAC prompt) and the language selector is hidden.
+- **Note for current Windows users**: the upgrade from v1.0.6 → v1.0.7 still requires a one-time UAC prompt because v1.0.6 was installed machine-wide; the hook detects and silently uninstalls the HKLM-scoped install. From v1.0.7 onward all installs are HKCU and all subsequent upgrades are fully seamless.
+
 ## [1.0.6] - 2026-05-13
 
 No user-visible changes. Released to exercise the in-app updater end-to-end (the v1.0.5 → v1.0.6 path is the first one ever tested in production, since v1.0.5 was the very first public release).
@@ -52,6 +58,7 @@ QueryDen is a multi-database desktop manager built with Tauri 2, React, and Type
 - Dev-only `logger` utility so diagnostic output stays out of production builds.
 - Typed Tauri IPC boundary (`src/lib/ipc.ts`); no remaining `invoke<any>` call sites.
 
-[Unreleased]: https://github.com/openidle-dev/queryden/compare/v1.0.6...HEAD
+[Unreleased]: https://github.com/openidle-dev/queryden/compare/v1.0.7...HEAD
+[1.0.7]: https://github.com/openidle-dev/queryden/compare/v1.0.6...v1.0.7
 [1.0.6]: https://github.com/openidle-dev/queryden/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/openidle-dev/queryden/releases/tag/v1.0.5
