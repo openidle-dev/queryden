@@ -7,6 +7,7 @@ import {
   BarChart3, Target, Shield, Layers, ArrowRight, Sparkles, XCircle
 } from "lucide-react";
 import { useAI } from "../../store/aiStore";
+import { logger } from "../../utils/logger";
 
 interface PlanNode {
   "Node Type": string;
@@ -196,24 +197,24 @@ export function VisualOptimizer({ data, onApplyFix }: VisualOptimizerProps) {
   // Parse plan based on database type
   const plan: PlanNode | PlanNode[] | null = useMemo(() => {
     if (!rawData) {
-      console.warn('[VisualOptimizer] No raw data provided');
+      logger.warn('[VisualOptimizer] No raw data provided');
       return null;
     }
     
     if (!Array.isArray(rawData)) {
-      console.warn('[VisualOptimizer] Raw data is not an array:', typeof rawData);
+      logger.warn('[VisualOptimizer] Raw data is not an array:', typeof rawData);
       return null;
     }
     
     if (rawData.length === 0) {
-      console.warn('[VisualOptimizer] Raw data array is empty');
+      logger.warn('[VisualOptimizer] Raw data array is empty');
       return null;
     }
 
     // Handle different database types
     if (["postgres", "supabase", "cockroach"].includes(dbType)) {
       // PostgreSQL format
-      console.log('[VisualOptimizer] Parsing PostgreSQL/Supabase plan...');
+      logger.debug('[VisualOptimizer] Parsing PostgreSQL/Supabase plan...');
       
       // Check if it's an error result
       if (rawData[0]?.error || rawData[0]?.message) {
@@ -248,11 +249,11 @@ export function VisualOptimizer({ data, onApplyFix }: VisualOptimizerProps) {
         }
       }
       
-      console.warn('[VisualOptimizer] Could not find PostgreSQL plan in response:', rawData[0]);
+      logger.warn('[VisualOptimizer] Could not find PostgreSQL plan in response:', rawData[0]);
       return null;
     } else if (["mysql", "mariadb"].includes(dbType)) {
       // MySQL FORMAT=JSON format
-      console.log('[VisualOptimizer] Parsing MySQL/MariaDB plan...');
+      logger.debug('[VisualOptimizer] Parsing MySQL/MariaDB plan...');
       
       // Check for error
       if (rawData[0]?.error || rawData[0]?.message) {
@@ -263,7 +264,7 @@ export function VisualOptimizer({ data, onApplyFix }: VisualOptimizerProps) {
       return rawData[0] || rawData;
     } else if (dbType === "sqlite") {
       // SQLite EXPLAIN QUERY PLAN format - convert to plan nodes
-      console.log('[VisualOptimizer] Parsing SQLite query plan...');
+      logger.debug('[VisualOptimizer] Parsing SQLite query plan...');
       return rawData.map((row: any) => ({
         "Node Type": row.opcode || row.detail || "SQLite Query",
         "Relation Name": row.tablename || null,
@@ -273,7 +274,7 @@ export function VisualOptimizer({ data, onApplyFix }: VisualOptimizerProps) {
       }));
     }
     
-    console.log('[VisualOptimizer] Using default parse for:', dbType);
+    logger.debug('[VisualOptimizer] Using default parse for:', dbType);
     return rawData[0] || rawData;
   }, [rawData, dbType]);
 

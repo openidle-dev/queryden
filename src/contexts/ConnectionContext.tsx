@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useSettings } from "../store/settingsStore";
 import { getDefaultDatabaseName } from "../config/app";
 import { quoteIdentifier } from "../utils/sqlSecurity";
+import { logger } from "../utils/logger";
 
 export interface DatabaseConnection {
   id: string;
@@ -818,7 +819,7 @@ const getDDL = async (type: string, name: string): Promise<string> => {
               ddl += `,\n  FOREIGN KEY (${fk.column_name}) REFERENCES ${fkTable}(${fk.foreign_column_name})`;
             }
           } catch (e) {
-            console.log("FK query failed:", e);
+            logger.debug("FK query failed:", e);
           }
 
           // Unique constraints
@@ -839,7 +840,7 @@ const getDDL = async (type: string, name: string): Promise<string> => {
               }
             }
           } catch (e) {
-            console.log("Unique constraints query failed:", e);
+            logger.debug("Unique constraints query failed:", e);
           }
 
           ddl += "\n);";
@@ -1041,7 +1042,7 @@ SELECT ${colList} FROM ${schemaPart}.${tablePart};
       if (["postgres", "supabase", "cockroach"].includes(activeConnection.type)) {
         // If dropping the active database, we MUST switch to another one first (like 'postgres')
         if (selectedDatabase === dbName) {
-          console.log("Switching to maintenance DB before dropping active database...");
+          logger.debug("Switching to maintenance DB before dropping active database...");
           await connectToDatabase(activeConnection.id, "postgres");
         }
         

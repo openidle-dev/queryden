@@ -13,6 +13,7 @@ import { DefinitionModal } from "../tools/DefinitionModal";
 import { useConfirmDialog } from "../ui/ConfirmDialog";
 import { CloneDialog } from "../tools/CloneDialog";
 import { Copy, FileText, BarChart2, Activity as ActivityIcon, Monitor, Zap, Clock, HardDrive, ShieldCheck, Layers } from "lucide-react";
+import { logger } from "../../utils/logger";
 import { getDefaultDatabaseName } from "../../config/app";
 import { formatSql } from "../../utils/SqlFormatter";
 import { ActivityMonitor } from "../tools/ActivityMonitor";
@@ -581,7 +582,7 @@ const extractSelectedOrCursorStatement = (fullText: string): string => {
         if (connectMatch) {
           const newDb = connectMatch[1].replace(/"/g, '');
           cliDatabase = newDb;
-          console.log("[CLI Path] Detected \\c command, switching target to:", newDb);
+          logger.debug("[CLI Path] Detected \\c command, switching target to:", newDb);
           if (currentTabId) {
              updateTabState(currentTabId, {
                 target: { 
@@ -598,24 +599,24 @@ const extractSelectedOrCursorStatement = (fullText: string): string => {
         // 2. Pre-stored: serverMajorVersion captured on connect
         // 3. System binary as last resort
         let majorVersion: number | null = actualConnection.serverMajorVersion || null;
-        console.log("[CLI Path] Initial majorVersion:", majorVersion);
+        logger.debug("[CLI Path] Initial majorVersion:", majorVersion);
 
         if (majorVersion === null && currentDb) {
-          console.log("[CLI Path] Detecting major version via currentDb.select...");
+          logger.debug("[CLI Path] Detecting major version via currentDb.select...");
           try {
             const verRows = await currentDb.select("SELECT (regexp_matches(version(), E'^PostgreSQL (\\d+)'))[1]::int AS major") as any[];
             majorVersion = verRows[0]?.major || null;
-            console.log("[CLI Path] SQL check result:", majorVersion);
+            logger.debug("[CLI Path] SQL check result:", majorVersion);
           } catch (e) {
-            console.log("[CLI Path] SQL check failed:", e);
+            logger.debug("[CLI Path] SQL check failed:", e);
           }
         }
 
         // Still no version → check for system psql in PATH
         if (majorVersion === null) {
-          console.log("[CLI Path] Falling back to system tool detection...");
+          logger.debug("[CLI Path] Falling back to system tool detection...");
           const sysTool = await cliStore.checkSystemTool("postgresql");
-          console.log("[CLI Path] System tool available:", sysTool.available);
+          logger.debug("[CLI Path] System tool available:", sysTool.available);
           if (sysTool.available) {
             majorVersion = 0;
           }
@@ -631,9 +632,9 @@ const extractSelectedOrCursorStatement = (fullText: string): string => {
           return;
         }
 
-        console.log("[CLI Path] Final majorVersion to use:", majorVersion);
+        logger.debug("[CLI Path] Final majorVersion to use:", majorVersion);
         const toolStatus = await cliStore.checkTool("postgresql", majorVersion);
-        console.log("[CLI Path] Tool status (checkTool):", toolStatus);
+        logger.debug("[CLI Path] Tool status (checkTool):", toolStatus);
 
         if (toolStatus.needsDownload) {
           const filename = toolStatus.downloadFilename || `postgresql-${majorVersion}.tar.gz`;
@@ -675,15 +676,15 @@ Download "${filename}" (~80MB)?`,
         
         const cliHost = actualConnection.host || "localhost";
         // cliDatabase is already defined above, potentially updated by \c command
-        console.log("[CLI Path] Using database for execution:", cliDatabase);
+        logger.debug("[CLI Path] Using database for execution:", cliDatabase);
         
         // Helper: execute a single statement via CLI and return normalized rows/columns + stdout
         const cliExecStmt = async (stmt: string, wantRows: boolean) => {
-          console.log("[cliExecStmt] Executing:", stmt);
+          logger.debug("[cliExecStmt] Executing:", stmt);
           const result = await cliStore.executeQuery(
             "postgresql", stmt, cliHost, port, cliDatabase as string, username, password, majorVersion
           );
-          console.log("[cliExecStmt] Result received from cliStore:", { 
+          logger.debug("[cliExecStmt] Result received from cliStore:", { 
             hasError: !!result.error, 
             stdoutLines: result.stdout?.length || 0,
             rows: result.rows?.length || 0 
@@ -1892,8 +1893,8 @@ Download "${filename}" (~80MB)?`,
       const rows = await currentDb.select(explainQuery) as any[];
       
       // Debug: Log the raw EXPLAIN result
-      console.log(`[VisualOptimizer] DB Type: ${dbType}`);
-      console.log(`[VisualOptimizer] Raw rows:`, JSON.stringify(rows).slice(0, 500));
+      logger.debug(`[VisualOptimizer] DB Type: ${dbType}`);
+      logger.debug(`[VisualOptimizer] Raw rows:`, JSON.stringify(rows).slice(0, 500));
 
       // Validate the response has data
       if (!rows || rows.length === 0) {

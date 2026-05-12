@@ -58,6 +58,27 @@ src-tauri/patches/**/target/
 .DS_Store
 Thumbs.db
 
+# Backup / scratch files
+*.backup
+*.bak
+*.orig
+
+# Alternate package managers (npm is canonical)
+pnpm-lock.yaml
+yarn.lock
+bun.lockb
+
+# Internal / not-for-public docs
+FUTURE_FEATURES.md
+NOTES.md
+SCRATCH.md
+OSS_LAUNCH_AUDIT.md
+OSS_LAUNCH_AUDIT.pdf
+
+# Python tooling artifacts (scripts/md_to_pdf.py)
+__pycache__/
+*.pyc
+
 # Build artifacts
 *.msi
 *.exe

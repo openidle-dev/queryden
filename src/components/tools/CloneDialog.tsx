@@ -3,6 +3,7 @@ import { X, Copy, AlertCircle, Loader2, Info } from "lucide-react";
 import { useConnections } from "../../contexts/useConnections";
 import { ToolGuideWizard } from "./ToolGuideWizard";
 import { useConfirmDialog } from "../ui/ConfirmDialog";
+import { logger } from "../../utils/logger";
 
 interface CloneDialogProps {
   isOpen: boolean;
@@ -103,7 +104,7 @@ ${cloneQuery};`;
           executionDb = await Database.load(connectionString);
         }
       } catch (err) {
-        console.warn("Could not connect to 'postgres' default database. The clone might fail if connections to the source are active.");
+        logger.warn("Could not connect to 'postgres' default database. The clone might fail if connections to the source are active.");
       }
 
       // Step 1: Terminate all connections to the source database
@@ -116,7 +117,7 @@ ${cloneQuery};`;
         
         await executionDb.select(terminateQuery);
       } catch (err: any) {
-        console.warn("Failed to terminate connections:", err);
+        logger.warn("Failed to terminate connections:", err);
       }
 
       // Step 2: Execute Clone
@@ -128,7 +129,7 @@ ${cloneQuery};`;
       } catch (err: any) {
         // If FILE_COPY is unsupported, fallback to normal clone
         if (useInstantClone && (err.message?.includes("syntax error") || err.message?.includes("STRATEGY"))) {
-          console.log("Instant clone failed, falling back to normal clone...");
+          logger.debug("Instant clone failed, falling back to normal clone...");
           await executionDb.select(`CREATE DATABASE "${targetDB}" TEMPLATE "${sourceDB}"`);
           setStrategyUsed("TEMPLATE");
         } else if (!err.message?.includes("No records") && !err.message?.includes("not return any rows")) {

@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { X, Database, Check, AlertCircle, Loader2, Globe, Settings, User, ChevronDown } from "lucide-react";
 import { CreateDatabasePayload } from "../../contexts/ConnectionContext";
 import { useConnections } from "../../contexts/useConnections";
+import { logger } from "../../utils/logger";
 
 interface CreateDatabaseDialogProps {
   isOpen: boolean;
@@ -43,7 +44,7 @@ export function CreateDatabaseDialog({ isOpen, onClose, onCreate, dbType }: Crea
         else setOwner(o[0]);
       }
     } catch (e) {
-      console.log("Failed to load metadata options", e);
+      logger.debug("Failed to load metadata options", e);
     }
   };
 

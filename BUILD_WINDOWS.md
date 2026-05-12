@@ -55,9 +55,9 @@ npx tauri build --target x86_64-pc-windows-msvc --runner cargo-xwin
 ```
 
 > [!TIP]
-> If it still says "command not found", try using the absolute path to your `cargo-xwin` binary:
+> If it still says "command not found", make sure `~/.cargo/bin` is on your `PATH`, or pass the absolute path to your `cargo-xwin` binary explicitly:
 > ```bash
-> npx tauri build --target x86_64-pc-windows-msvc --runner /home/keenan/.cargo/bin/cargo-xwin
+> npx tauri build --target x86_64-pc-windows-msvc --runner "$HOME/.cargo/bin/cargo-xwin"
 > ```
 
 ---
@@ -72,15 +72,15 @@ Once the build finishes successfully, your files will be generated in:
     `src-tauri/target/x86_64-pc-windows-msvc/release/queryden.exe`  
     *(Standalone app you can run directly on Windows)*
 2.  **The Installer**: 
-    `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/QueryDen_0.1.0_x64-setup.exe`  
-    *(Setup file for users to install the app)*
+    `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/QueryDen_<version>_x64-setup.exe`  
+    *(Setup file for users to install the app — `<version>` matches `package.json`)*
 
 ---
 
 ## Troubleshooting & Notes
 
 > [!IMPORTANT]
-> **C-Linkage Issues**: Some complex dependencies might still fail due to C-linkage issues. If you encounter persistent errors, use the **GitHub Actions** workflow included in `.github/workflows/release.yml`. It uses a real Windows environment and is much more reliable.
+> **C-Linkage Issues**: Some complex dependencies may fail to cross-compile cleanly due to C-linkage issues with `cargo-xwin`. If you hit persistent errors, the most reliable path is the **GitHub Actions release workflow** at `.github/workflows/release.yml`, which builds inside a real Windows runner.
 
 > [!NOTE]
 > If you are only getting the `.exe` and not the installer, double-check that `nsis` is properly installed on your Linux machine.

@@ -11,6 +11,7 @@ import { getConnectionsFileName } from "../../config/app";
 import { SchemaSelectionDialog } from "./SchemaSelectionDialog";
 import { CreateTableDialog } from "./CreateTableDialog";
 import { CreateDatabaseDialog } from "./CreateDatabaseDialog";
+import { logger } from "../../utils/logger";
 
 interface TreeNode {
   id: string;
@@ -68,7 +69,7 @@ export function DatabaseExplorer() {
   // Listen for jump events from global search
   useEffect(() => {
     const handleJumpEvent = (e: CustomEvent<{ id: string }>) => {
-      console.log("Global jump event received:", e.detail.id);
+      logger.debug("Global jump event received:", e.detail.id);
       
       const targetId = e.detail.id;
       // Extract name from ID for search fallback
@@ -650,14 +651,14 @@ export function DatabaseExplorer() {
     const conn = activeConnection;
     const { connId: _connId, dbName } = backupTarget;
     
-    console.log("executeBackup: backupTarget:", backupTarget, "activeConnection:", conn?.id);
+    logger.debug("executeBackup: backupTarget:", backupTarget, "activeConnection:", conn?.id);
 
     if (!conn) {
       setBackupStatus("Error: No active connection");
       return;
     }
 
-    console.log("executeBackup: starting backup for", dbName, "on connection", conn.name);
+    logger.debug("executeBackup: starting backup for", dbName, "on connection", conn.name);
 
     // Helper to check cancellation with small delay
     const checkCancelled = () => {
@@ -681,13 +682,13 @@ export function DatabaseExplorer() {
       await connectToDatabase(conn.id, dbName);
       await delay(10);
       if (checkCancelled()) return;
-      console.log("executeBackup: connected to database");
+      logger.debug("executeBackup: connected to database");
       
       setBackupStatus("Loading schema...");
       await loadSchema(dbName);
       await delay(10);
       if (checkCancelled()) return;
-      console.log("executeBackup: schema loaded, tables:", schemaItems?.tables?.length, "views:", schemaItems?.views?.length);
+      logger.debug("executeBackup: schema loaded, tables:", schemaItems?.tables?.length, "views:", schemaItems?.views?.length);
       
       if (!schemaItems) {
         setBackupStatus("Failed to load schema - no schema items returned");
@@ -1438,13 +1439,13 @@ export function DatabaseExplorer() {
 {
   "connections": [
     {
-      "id": "unique-string",
-      "name": "My Database",
+      "id": "<unique-string>",
+      "name": "<connection name>",
       "db_type": "postgres",
-      "host": "localhost",
+      "host": "<hostname>",
       "port": 5432,
-      "database": "postgres",
-      "username": "user"
+      "database": "<database name>",
+      "username": "<username>"
     }
   ],
   "version": 2
