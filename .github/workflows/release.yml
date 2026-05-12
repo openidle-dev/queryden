@@ -78,20 +78,29 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          shopt -s nullglob globstar
-          # Walk every bundle dir produced by Tauri for this target.
-          for f in src-tauri/target/${{ matrix.target }}/release/bundle/**/*; do
-            case "$f" in
-              *.deb|*.AppImage|*.exe|*.msi|*.dmg)
-                if command -v sha256sum >/dev/null 2>&1; then
-                  sha256sum "$f" | awk '{print $1}' > "$f.sha256"
-                else
-                  shasum -a 256 "$f" | awk '{print $1}' > "$f.sha256"
-                fi
-                echo "Wrote $f.sha256"
-                ;;
-            esac
-          done
+          # Use `find` instead of bash globstar — macOS ships bash 3.2 which
+          # doesn't support `shopt -s globstar` and `set -e` makes the failure
+          # explode the step.
+          if command -v sha256sum >/dev/null 2>&1; then
+            HASH_CMD="sha256sum"
+          else
+            HASH_CMD="shasum -a 256"
+          fi
+
+          TARGET_DIR="src-tauri/target/${{ matrix.target }}/release/bundle"
+          if [ ! -d "$TARGET_DIR" ]; then
+            echo "::warning::Bundle dir $TARGET_DIR not found; skipping checksum step."
+            exit 0
+          fi
+
+          find "$TARGET_DIR" -type f \
+            \( -name '*.deb' -o -name '*.AppImage' \
+            -o -name '*.exe' -o -name '*.msi' \
+            -o -name '*.dmg' \) \
+            -print | while IFS= read -r f; do
+              $HASH_CMD "$f" | awk '{print $1}' > "$f.sha256"
+              echo "Wrote $f.sha256"
+            done
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
