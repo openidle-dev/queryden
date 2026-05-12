@@ -1,0 +1,39 @@
+# Normalize line endings repo-wide. Files are stored with LF in the repo and
+# checked out with LF on every platform. Without this, Windows contributors
+# (where git's core.autocrlf defaults to true) see every cross-platform file
+# as "modified" purely because of CRLF in the working tree.
+
+* text=auto eol=lf
+
+# Explicit text — keeps these as LF even if auto-detection wavers.
+*.ts        text eol=lf
+*.tsx       text eol=lf
+*.js        text eol=lf
+*.json      text eol=lf
+*.rs        text eol=lf
+*.toml      text eol=lf
+*.md        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.css       text eol=lf
+*.html      text eol=lf
+*.lock      text eol=lf
+*.sh        text eol=lf
+
+# Binary assets — never normalize, never diff as text.
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.icns      binary
+*.svg       text eol=lf
+*.pdf       binary
+*.woff      binary
+*.woff2     binary
+*.ttf       binary
+
+# Windows scripts use CRLF.
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+*.ps1       text eol=crlf
