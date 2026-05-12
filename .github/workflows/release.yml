@@ -35,10 +35,11 @@ jobs:
             target: aarch64-apple-darwin
             artifact_glob: |
               src-tauri/target/release/bundle/dmg/*.dmg
-          - platform: macos-13
-            target: x86_64-apple-darwin
-            artifact_glob: |
-              src-tauri/target/release/bundle/dmg/*.dmg
+          # NOTE: macos-13 (Intel) runners are heavily rate-limited on the free
+          # GitHub Actions plan and routinely queue for hours. Intel macOS
+          # support deliberately omitted from v1.0.5; planned for v1.0.6 as a
+          # universal-apple-darwin build that produces a single fat binary on
+          # the Apple Silicon runner.
 
     runs-on: ${{ matrix.platform }}
 

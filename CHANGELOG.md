@@ -29,7 +29,7 @@ QueryDen is a multi-database desktop manager built with Tauri 2, React, and Type
 **Build and runtime**
 
 - Local Monaco editor bundle. The SQL editor works offline; no runtime CDN dependency.
-- Bundle targets for Linux (deb, AppImage), Windows (NSIS), and macOS (Intel + Apple Silicon dmg/app).
+- Bundle targets for Linux (deb, AppImage), Windows (NSIS), and macOS Apple Silicon (dmg/app). Intel macOS is planned for v1.0.6 as a universal-binary build; for now Intel Mac users can build from source.
 - AI assistant `fetch()` calls use a 30 s abort timeout.
 
 **Optional AI assistant**
