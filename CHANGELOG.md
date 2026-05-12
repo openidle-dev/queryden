@@ -6,50 +6,44 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 
 ## [1.0.5] - 2026-05-13
 
-This is the first OSS launch release. It rolls up a pre-launch audit pass covering security, runtime correctness, documentation, and the basic OSS-baseline files needed for outside contributors.
+First public release of QueryDen. Internal builds existed at versions 1.0.0–1.0.4 before open-sourcing but were never published; this is the first release available on the [releases page](https://github.com/openidle-dev/queryden/releases) and via the in-app updater.
 
-### Added
-- Local Monaco editor bundle (no runtime CDN dependency); editor works offline.
-- macOS `app` and `dmg` bundle targets.
-- SHA256 verification for in-app updates. The updater fetches `<asset>.sha256` from the release before downloading the binary and refuses to install on digest mismatch.
-- Privacy disclosure in README covering the optional AI assistant data flow.
-- Dev-only logger utility (`src/utils/logger.ts`) so diagnostic output is silent in production builds.
-- `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, issue and PR templates, CI and release workflows, `.editorconfig`.
+QueryDen is a multi-database desktop manager built with Tauri 2, React, and TypeScript. It supports PostgreSQL, MySQL/MariaDB, SQLite, CockroachDB, and Supabase, with SSH tunneling, an encrypted credential vault, local history, saved queries, and an integrated `psql` console.
 
-### Changed
-- `storage.rs` encryption key derivation now propagates errors instead of silently falling back to a hardcoded sentinel key. Legacy decrypt paths are preserved so existing user data still loads.
-- `encrypt()` returns `Result` and no longer writes plaintext when AES encryption fails.
-- Tauri `fs:allow-write-text-file` and `fs:allow-write-file` capabilities are now scoped to app data, downloads, documents, and desktop directories (no longer unbounded).
-- Updater downloads now land in a per-invocation random temp directory (0700 on Unix) instead of a predictable path.
-- AI assistant `fetch()` calls use a 30 s timeout.
+### Highlights of the launch release
 
-### Removed
-- `pnpm-lock.yaml` (npm + `package-lock.json` is canonical).
-- Tracked backup file `CompareDialog.tsx.backup`.
-- Dead `public/loader.js.map` and `scripts/doc-gen.js`.
+**Security and storage**
 
-### Fixed
-- Developer-machine path leak in `BUILD_WINDOWS.md`.
-- Stale version reference in Windows build docs.
-- CSP / script-src mismatch — Monaco was loaded from `cdnjs.cloudflare.com` while CSP only allowed `cdn.jsdelivr.net`.
+- AES-256-GCM encryption with Argon2id key derivation for connections, vault credentials, query history, saved queries, and local history.
+- OS keyring storage for the master key (file fallback). Encryption refuses to proceed if neither persistence path is available — no silent degradation to known keys.
+- Machine-binding: encrypted files refuse to load on a different machine.
+- Brute-force protection: vault locks after 5 failed unlock attempts.
+- Tauri filesystem permissions scoped to app data, downloads, documents, and desktop directories.
 
-## [1.0.4] - 2026-05
+**In-app updater**
 
-### Fixed
-- App version display no longer shows the previous build's number after an update.
+- SHA256 verification for every download. The updater fetches `<asset>.sha256` from the GitHub release before downloading the binary and refuses to install on digest mismatch.
+- Updates download into a per-invocation random temp directory (0700 on Unix) to defeat predictable-path symlink attacks.
+- HTTPS-only — non-HTTPS update URLs are rejected.
 
-## [1.0.3] - 2026-04
+**Build and runtime**
 
-### Added
-- In-app update check and notification flow.
-- Auto-commit support on version bump.
+- Local Monaco editor bundle. The SQL editor works offline; no runtime CDN dependency.
+- Bundle targets for Linux (deb, AppImage), Windows (NSIS), and macOS (Intel + Apple Silicon dmg/app).
+- AI assistant `fetch()` calls use a 30 s abort timeout.
 
-## [1.0.0] - 2026-04
+**Optional AI assistant**
 
-Initial public release of QueryDen — multi-database desktop manager with PostgreSQL, MySQL/MariaDB, SQLite, CockroachDB, and Supabase support, SSH tunneling, an encrypted credential vault, query history, saved queries, and an integrated `psql` console.
+- OpenAI, Anthropic, Google, and Ollama supported.
+- Off by default. When enabled, prompts and the user's API key are sent directly from the desktop app to the configured provider — no QueryDen-operated server in the middle. See the README "Privacy & the AI assistant" section.
+
+**Project infrastructure**
+
+- `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, issue and PR templates.
+- CI on every push/PR: version-drift check, typecheck, Vitest unit tests, frontend build, `cargo check`, `cargo clippy -- -D warnings`, `cargo test`.
+- Release workflow on tag push: cross-platform build matrix with `<asset>.sha256` companion files for the in-app updater.
+- Dev-only `logger` utility so diagnostic output stays out of production builds.
+- Typed Tauri IPC boundary (`src/lib/ipc.ts`); no remaining `invoke<any>` call sites.
 
 [Unreleased]: https://github.com/openidle-dev/queryden/compare/v1.0.5...HEAD
-[1.0.5]: https://github.com/openidle-dev/queryden/compare/v1.0.4...v1.0.5
-[1.0.4]: https://github.com/openidle-dev/queryden/compare/v1.0.3...v1.0.4
-[1.0.3]: https://github.com/openidle-dev/queryden/compare/v1.0.0...v1.0.3
-[1.0.0]: https://github.com/openidle-dev/queryden/releases/tag/v1.0.0
+[1.0.5]: https://github.com/openidle-dev/queryden/releases/tag/v1.0.5
