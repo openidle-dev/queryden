@@ -85,9 +85,23 @@ To report a vulnerability privately, see [SECURITY.md](SECURITY.md). Please don'
 ## Cutting a release (maintainers)
 
 1. Update `CHANGELOG.md` — move `Unreleased` entries to a new version section.
-2. Run `node scripts/bump-version.js <new-version>` to keep `package.json`, `Cargo.toml`, and `tauri.conf.json` in sync.
-3. Commit: `chore: release vX.Y.Z`.
-4. Tag: `git tag vX.Y.Z && git push --tags`. The release workflow takes it from there — it builds artifacts for Linux/Windows/macOS, generates `<asset>.sha256` files (required by the in-app updater), and attaches them to the GitHub release.
+2. Run the bump script. It keeps `package.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, and `src-tauri/tauri.conf.json` in lockstep:
+   ```bash
+   node scripts/bump-version.js patch          # 1.0.4 -> 1.0.5
+   node scripts/bump-version.js minor          # 1.0.4 -> 1.1.0
+   node scripts/bump-version.js major          # 1.0.4 -> 2.0.0
+   node scripts/bump-version.js 1.2.3          # explicit target
+   ```
+3. Review the diff, then commit and tag:
+   ```bash
+   git add -A
+   git commit -m "chore: release vX.Y.Z"
+   git tag vX.Y.Z
+   git push --follow-tags
+   ```
+4. The `Release` workflow takes it from there — it builds artifacts for Linux, Windows, and macOS (Intel + Apple Silicon), generates `<asset>.sha256` companions (required by the in-app updater), and publishes the GitHub release.
+
+> CI runs a **version drift check** on every push. If any of the four files disagree, the build fails before any other job runs. If you ever see that error, re-run the bump script.
 
 ## License
 

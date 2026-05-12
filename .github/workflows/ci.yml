@@ -11,6 +11,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  version-drift:
+    name: Version drift check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare versions across package.json, Cargo.toml, Cargo.lock, tauri.conf.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg=$(node -p "require('./package.json').version")
+          toml=$(grep -m1 '^version = ' src-tauri/Cargo.toml | sed -E 's/version = "([^"]+)"/\1/')
+          conf=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          lock=$(awk '/^name = "queryden"$/{getline; print}' src-tauri/Cargo.lock | sed -E 's/version = "([^"]+)"/\1/')
+
+          echo "package.json     : $pkg"
+          echo "Cargo.toml       : $toml"
+          echo "Cargo.lock       : $lock"
+          echo "tauri.conf.json  : $conf"
+
+          if [ "$pkg" != "$toml" ] || [ "$pkg" != "$conf" ] || [ "$pkg" != "$lock" ]; then
+            echo "::error::Version drift detected. Run 'node scripts/bump-version.js <new>' to resync."
+            exit 1
+          fi
+
   frontend:
     name: Frontend (typecheck + build)
     runs-on: ubuntu-latest
