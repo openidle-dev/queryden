@@ -48,6 +48,7 @@ fn find_free_port() -> Result<u16, String> {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri command — args mirror the IPC contract
 pub fn create_ssh_tunnel(
     connection_id: String,
     ssh_host: String,
@@ -118,6 +119,7 @@ pub fn create_ssh_tunnel(
     Ok(tunnel_info)
 }
 
+#[allow(clippy::too_many_arguments)] // tightly coupled to create_ssh_tunnel's signature
 fn run_tunnel(
     ssh_host: &str,
     ssh_port: u16,

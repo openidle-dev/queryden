@@ -578,12 +578,12 @@ pub async fn cli_list_cached(
             .flatten()
             .filter_map(|e| e.ok())
             .filter(|e| e.path().is_file())
-            .filter_map(|e| {
+            .map(|e| {
                 let n = e.file_name().to_string_lossy().to_string();
                 if cfg!(target_os = "windows") {
-                    Some(n.trim_end_matches(".exe").to_string())
+                    n.trim_end_matches(".exe").to_string()
                 } else {
-                    Some(n)
+                    n
                 }
             })
             .collect();
@@ -681,7 +681,7 @@ pub async fn cli_check_tool(
         "path": serde_json::Value::Null,
         "needsDownload": true,
         "downloadUrl": spec.url,
-        "downloadFilename": spec.url.split('/').last().unwrap_or(""),
+        "downloadFilename": spec.url.rsplit('/').next().unwrap_or(""),
         "cachedVersion": serde_json::Value::Null,
     }))
 }
@@ -851,6 +851,7 @@ fn parse_pg_version(version_output: &str) -> Result<u32, String> {
 
 /// Test a connection using the versioned CLI tool.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri command — args mirror the IPC contract
 pub async fn cli_test_connection(
     tool_kind: String,
     host: String,
@@ -926,6 +927,7 @@ pub async fn cli_test_connection(
 
 /// Execute a query using the versioned CLI tool.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri command — args mirror the IPC contract
 pub async fn cli_execute_query(
     tool_kind: String,
     query: String,
@@ -1041,6 +1043,7 @@ pub async fn cli_execute_query(
 
 /// List databases via the versioned CLI tool.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri command — args mirror the IPC contract
 pub async fn cli_list_databases(
     tool_kind: String,
     host: String,

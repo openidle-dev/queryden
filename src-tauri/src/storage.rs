@@ -6,7 +6,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::Manager;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::process::Command;
@@ -48,7 +48,7 @@ fn get_machine_id() -> String {
         const CREATE_NO_WINDOW: u32 = 0x08000000;
         if let Ok(output) = Command::new("powershell")
             .creation_flags(CREATE_NO_WINDOW)
-            .args(&["-Command", "(Get-CimInstance -Class Win32_ComputerSystemProduct).UUID"])
+            .args(["-Command", "(Get-CimInstance -Class Win32_ComputerSystemProduct).UUID"])
             .output() {
             let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !s.is_empty() { return s; }
@@ -92,7 +92,7 @@ fn get_machine_fingerprint() -> String {
     hex::encode(hasher.finalize())
 }
 
-fn get_master_app_key(app_dir: &PathBuf) -> Result<String, String> {
+fn get_master_app_key(app_dir: &Path) -> Result<String, String> {
     if let Ok(entry) = Entry::new("queryden", "master_app_key") {
         if let Ok(key) = entry.get_password() {
             return Ok(key);
@@ -132,7 +132,7 @@ fn get_master_app_key(app_dir: &PathBuf) -> Result<String, String> {
     Ok(new_key)
 }
 
-fn get_encryption_key(vault_password: Option<&str>, use_machine_id: bool, app_dir: &PathBuf) -> Result<[u8; 32], String> {
+fn get_encryption_key(vault_password: Option<&str>, use_machine_id: bool, app_dir: &Path) -> Result<[u8; 32], String> {
     let mut key = [0u8; 32];
 
     let machine_id = if use_machine_id {
@@ -177,7 +177,7 @@ fn ensure_app_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn encrypt(data: &str, vault_password: Option<&str>, app_dir: &PathBuf) -> Result<String, String> {
+fn encrypt(data: &str, vault_password: Option<&str>, app_dir: &Path) -> Result<String, String> {
     // New data always uses machine-locked encryption.
     let key = get_encryption_key(vault_password, true, app_dir)?;
     let cipher = Aes256Gcm::new(&key.into());
@@ -191,7 +191,7 @@ fn encrypt(data: &str, vault_password: Option<&str>, app_dir: &PathBuf) -> Resul
     Ok(BASE64.encode(combined))
 }
 
-fn decrypt(encoded: &str, vault_password: Option<&str>, app_dir: &PathBuf) -> String {
+fn decrypt(encoded: &str, vault_password: Option<&str>, app_dir: &Path) -> String {
     let combined = match BASE64.decode(encoded) {
         Ok(c) => c,
         Err(_) => return encoded.to_string(),

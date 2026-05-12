@@ -49,7 +49,7 @@ pub struct UpdateCheckResult {
 
 /// Normalise a version string: strip leading 'v'/'V' and trim whitespace.
 fn normalise_version(v: &str) -> &str {
-    v.trim().trim_start_matches(|c| c == 'v' || c == 'V')
+    v.trim().trim_start_matches(['v', 'V'])
 }
 
 /// Very simple semver compare (major.minor.patch).  Returns true when
