@@ -628,6 +628,7 @@ export function VisualOptimizer({ data, onApplyFix }: VisualOptimizerProps) {
       method: "POST",
       headers,
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30_000),
     });
 
     if (!response.ok) {

@@ -17,7 +17,7 @@ export default defineConfig(async () => ({
     rollupOptions: {
       output: {
         manualChunks: {
-          'monaco': ['@monaco-editor/react'],
+          'monaco': ['@monaco-editor/react', 'monaco-editor'],
           'grid': ['@glideapps/glide-data-grid'],
           'vendor': ['react', 'react-dom', 'lucide-react', 'zustand'],
         }

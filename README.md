@@ -3,6 +3,9 @@
 A modern, cross-platform database manager built with Tauri, React, and TypeScript. Lightweight, fast, and secure — designed for developers who need a reliable database tool without the bloat.
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)
+
+![QueryDen Database Explorer](public/img/explorer.png)
 
 ## Features
 
@@ -89,6 +92,26 @@ Data is machine-locked using `/etc/machine-id` (Linux), BIOS UUID (Windows), or 
 - **Brute-force protection** — vault locks after 5 failed attempts
 - **No telemetry** — QueryDen collects zero usage data
 - **Parameterized queries** — all SQL execution uses prepared statements
+- **Signed updates** — every release ships SHA256 checksums; the in-app updater refuses to install an asset whose digest doesn't match
+
+To report a vulnerability, see [SECURITY.md](SECURITY.md).
+
+## Privacy & the AI assistant
+
+QueryDen itself sends no analytics, no crash reports, and no telemetry. If you enable the **optional AI assistant** in settings, the following data leaves your machine and is sent directly from the app to the provider you configure (OpenAI, Anthropic, Google, or a local Ollama instance):
+
+- Your prompt and any selected SQL / EXPLAIN output
+- A short system prompt describing the task
+- Your API key, in the `Authorization` / `x-api-key` header
+
+QueryDen has no server in the middle — requests go straight from the desktop app to the provider's API. Your provider's data-retention policy applies. The AI assistant is **off by default** and can be disabled at any time from Settings → AI.
+
+## Contributing
+
+Pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, coding conventions, and PR checklist. By participating you agree to abide by the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+- Found a bug? Open an [issue](https://github.com/openidle-dev/queryden/issues/new/choose).
+- Want to discuss something larger? Start a [discussion](https://github.com/openidle-dev/queryden/discussions).
 
 ## Project Structure
 
