@@ -4,6 +4,13 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-05-13
+
+No user-visible changes. Released to exercise the in-app updater end-to-end (the v1.0.5 → v1.0.6 path is the first one ever tested in production, since v1.0.5 was the very first public release).
+
+### Changed
+- README: clarified that the macOS download is Apple Silicon only and pointed Intel Mac users to [#7](https://github.com/openidle-dev/queryden/issues/7).
+
 ## [1.0.5] - 2026-05-13
 
 First public release of QueryDen. Internal builds existed at versions 1.0.0–1.0.4 before open-sourcing but were never published; this is the first release available on the [releases page](https://github.com/openidle-dev/queryden/releases) and via the in-app updater.
@@ -45,5 +52,6 @@ QueryDen is a multi-database desktop manager built with Tauri 2, React, and Type
 - Dev-only `logger` utility so diagnostic output stays out of production builds.
 - Typed Tauri IPC boundary (`src/lib/ipc.ts`); no remaining `invoke<any>` call sites.
 
-[Unreleased]: https://github.com/openidle-dev/queryden/compare/v1.0.5...HEAD
+[Unreleased]: https://github.com/openidle-dev/queryden/compare/v1.0.6...HEAD
+[1.0.6]: https://github.com/openidle-dev/queryden/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/openidle-dev/queryden/releases/tag/v1.0.5

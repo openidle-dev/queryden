@@ -31,8 +31,8 @@ A modern, cross-platform database manager built with Tauri, React, and TypeScrip
 
 Download the latest release from the [Releases](https://github.com/openidle-dev/queryden/releases) page:
 - **Linux**: `.deb` or `.AppImage`
-- **Windows**: `.msi` or `.exe`
-- **macOS**: `.dmg` or `.app`
+- **Windows**: `.exe` installer (NSIS)
+- **macOS (Apple Silicon)**: `.dmg` — a universal build covering Intel Macs is tracked in [#7](https://github.com/openidle-dev/queryden/issues/7); for now Intel users can build from source.
 
 ### Build from Source
 
