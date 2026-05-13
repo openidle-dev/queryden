@@ -1,0 +1,141 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { SITE, RELEASE } from '../lib/site';
+import { CHANGELOG, type Kind } from '../lib/changelog';
+
+const ENTRIES = CHANGELOG;
+
+const KIND_LABEL: Record<Kind, string> = {
+  added:    'Added',
+  changed:  'Changed',
+  fixed:    'Fixed',
+  security: 'Security',
+  note:     'Note',
+};
+---
+<Layout title="Changelog · QueryDen" active="changelog">
+
+  <header class="page-hero">
+    <div class="grid-bg"></div>
+    <div class="wrap">
+      <div class="eyebrow">Releases &amp; release notes</div>
+      <h1 style="margin-top: 22px;">What changed, version by version.</h1>
+      <p class="lede">
+        Honest notes for every shipped release — what we changed, what we fixed, and the
+        couple of decisions we want to flag. Newest first.
+      </p>
+      <p style="margin-top: 28px; font-family: var(--mono); font-size: 12px; color: var(--ink-3);">
+        Full history: <a href={`${SITE.repo}/blob/main/CHANGELOG.md`} class="cl-src">CHANGELOG.md on GitHub</a> · Latest release: <a href={`${SITE.repo}/releases/tag/${RELEASE.tag}`} class="cl-src">{RELEASE.tag}</a>
+      </p>
+    </div>
+  </header>
+
+  <section class="sec-pad" id="entries">
+    <div class="wrap">
+      <ol class="cl-list">
+        {ENTRIES.map((e) => (
+          <li class="cl-entry">
+            <div class="cl-meta">
+              <span class="cl-version">v{e.version}</span>
+              <time class="cl-date">{e.date}</time>
+              {e.version === RELEASE.tag.replace(/^v/, '') && (
+                <span class="cl-tag cl-tag-current">published</span>
+              )}
+            </div>
+            <div class="cl-content">
+              {e.title && <h2 class="cl-title">{e.title}</h2>}
+              {e.preamble && e.preamble.length > 0 && (
+                <div class="cl-preamble">
+                  {e.preamble.map((para) => (<p set:html={para} />))}
+                </div>
+              )}
+              {e.notes.length > 0 && (
+                <ul class="cl-notes">
+                  {e.notes.map((n) => (
+                    <li class="cl-note">
+                      <span class={`cl-kind cl-kind-${n.kind}`}>{n.label ?? KIND_LABEL[n.kind]}</span>
+                      <span class="cl-body" set:html={n.body} />
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  </section>
+
+</Layout>
+
+<style>
+  .cl-src { color: var(--ink-2); border-bottom: 1px solid var(--line-2); }
+  .cl-src:hover { color: var(--ink); }
+
+  .cl-list { list-style: none; padding: 0; margin: 0; }
+
+  .cl-entry {
+    padding: 36px 0;
+    border-bottom: 1px solid var(--line);
+    display: grid; grid-template-columns: 200px 1fr; gap: 40px; align-items: start;
+  }
+  @media (max-width: 800px) {
+    .cl-entry { grid-template-columns: 1fr; gap: 14px; }
+  }
+  .cl-entry:last-child { border-bottom: 0; }
+
+  .cl-meta {
+    display: flex; flex-direction: column; gap: 6px;
+    font-family: var(--mono); font-size: 12px;
+  }
+  @media (max-width: 800px) { .cl-meta { flex-direction: row; gap: 12px; align-items: baseline; } }
+  .cl-version { font-size: 18px; color: var(--ink); font-weight: 500; letter-spacing: -0.01em; }
+  .cl-date { color: var(--ink-3); font-size: 11.5px; letter-spacing: 0.04em; }
+
+  .cl-tag {
+    align-self: flex-start;
+    font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 999px; margin-top: 6px;
+  }
+  .cl-tag-current {
+    color: var(--accent);
+    background: color-mix(in oklch, var(--accent) 12%, transparent);
+    border: 1px solid color-mix(in oklch, var(--accent) 40%, transparent);
+  }
+
+  .cl-title {
+    margin: 0 0 18px;
+    font-size: 22px; font-weight: 500; letter-spacing: -0.02em; color: var(--ink);
+  }
+  .cl-preamble { margin: 0 0 22px; }
+  .cl-preamble p { color: var(--ink-2); font-size: 14.5px; line-height: 1.65; margin: 0 0 12px; }
+  .cl-preamble p:last-child { margin-bottom: 0; }
+  .cl-preamble code, .cl-body code {
+    font-family: var(--mono); font-size: 0.88em;
+    background: var(--bg-1); border: 1px solid var(--line-1);
+    border-radius: 4px; padding: 1px 5px; color: var(--ink-1);
+  }
+  .cl-preamble a, .cl-body a {
+    color: var(--ink-1); border-bottom: 1px solid var(--line-2);
+    transition: color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+  }
+  .cl-preamble a:hover, .cl-body a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .cl-notes { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 12px; }
+  .cl-note {
+    display: grid; grid-template-columns: 130px 1fr; gap: 24px; align-items: baseline;
+  }
+  @media (max-width: 560px) { .cl-note { grid-template-columns: 1fr; gap: 4px; } }
+
+  .cl-kind {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.12em;
+    text-transform: uppercase; padding: 2px 0; color: var(--ink-3);
+  }
+  .cl-kind-added    { color: var(--accent); }
+  .cl-kind-changed  { color: oklch(0.78 0.12 240); }
+  .cl-kind-fixed    { color: oklch(0.80 0.12 60); }
+  .cl-kind-security { color: var(--warn); }
+  .cl-kind-note     { color: var(--ink-4); }
+
+  .cl-body { color: var(--ink-2); font-size: 14.5px; line-height: 1.6; }
+</style>

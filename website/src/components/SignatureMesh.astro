@@ -1,0 +1,144 @@
+---
+// The site's signature visual. An animated OKLCH gradient mesh with a faint
+// fingerprint-whorl overlay — ties the background ambient into the security
+// wedge (machine-locked encryption). Lives behind the hero (and optionally
+// behind other sections). Pure CSS animation; respects prefers-reduced-motion.
+//
+// Props let callers tune intensity and where it fades out.
+
+interface Props {
+  intensity?: 'subtle' | 'normal' | 'hero';
+  maskFalloff?: 'soft' | 'hard';
+  class?: string;
+}
+
+const { intensity = 'normal', maskFalloff = 'soft', class: className } = Astro.props;
+---
+<div
+  class:list={['signature-mesh', `sm-${intensity}`, `sm-mask-${maskFalloff}`, className]}
+  aria-hidden="true"
+>
+  <div class="sm-blob sm-b1"></div>
+  <div class="sm-blob sm-b2"></div>
+  <div class="sm-blob sm-b3"></div>
+
+  <svg class="sm-whorl" viewBox="0 0 600 600" preserveAspectRatio="xMidYMid slice">
+    <defs>
+      <radialGradient id="sm-whorl-grad" cx="50%" cy="50%" r="50%">
+        <stop offset="0%"  stop-color="var(--accent)" stop-opacity="0.55" />
+        <stop offset="60%" stop-color="var(--accent)" stop-opacity="0.05" />
+        <stop offset="100%" stop-color="var(--accent)" stop-opacity="0" />
+      </radialGradient>
+    </defs>
+    {/* Concentric whorl — drawn as nested ellipses with slight asymmetric offsets, evokes a fingerprint without being literal */}
+    {Array.from({ length: 22 }).map((_, i) => {
+      const r = 18 + i * 12;
+      const cx = 300 + Math.sin(i * 0.6) * 4;
+      const cy = 300 + Math.cos(i * 0.45) * 5;
+      const rx = r;
+      const ry = r * (0.78 + (i % 5) * 0.04);
+      const rot = (i * 13) % 360;
+      const op = 0.42 - i * 0.012;
+      return (
+        <ellipse cx={cx} cy={cy} rx={rx} ry={ry}
+                 transform={`rotate(${rot} ${cx} ${cy})`}
+                 fill="none" stroke="url(#sm-whorl-grad)" stroke-width="0.9"
+                 opacity={op} />
+      );
+    })}
+  </svg>
+
+  <div class="sm-grid"></div>
+</div>
+
+<style>
+  .signature-mesh {
+    position: absolute; inset: 0; overflow: hidden; pointer-events: none;
+    z-index: 0;
+  }
+  .sm-mask-soft {
+    -webkit-mask-image: radial-gradient(ellipse 90% 80% at 50% 35%, #000 25%, transparent 85%);
+    mask-image:         radial-gradient(ellipse 90% 80% at 50% 35%, #000 25%, transparent 85%);
+  }
+  .sm-mask-hard {
+    -webkit-mask-image: linear-gradient(180deg, #000 60%, transparent 100%);
+    mask-image:         linear-gradient(180deg, #000 60%, transparent 100%);
+  }
+
+  /* Blobs — soft cyan + cool partners, all OKLCH for crisp dark-mode rendering. */
+  .sm-blob {
+    position: absolute;
+    width: 720px; height: 720px;
+    border-radius: 50%;
+    filter: blur(80px);
+    opacity: 0.55;
+    will-change: transform, opacity;
+  }
+  .sm-b1 {
+    left: 12%; top: -8%;
+    background: radial-gradient(circle, color-mix(in oklch, var(--accent) 65%, transparent) 0%, transparent 70%);
+    animation: sm-drift-1 22s var(--ease) infinite alternate;
+  }
+  .sm-b2 {
+    right: 8%; top: 14%;
+    background: radial-gradient(circle, oklch(0.55 0.18 280 / 0.42) 0%, transparent 70%);
+    animation: sm-drift-2 28s var(--ease) infinite alternate;
+  }
+  .sm-b3 {
+    left: 38%; bottom: -22%;
+    width: 880px; height: 880px;
+    background: radial-gradient(circle, oklch(0.50 0.16 230 / 0.32) 0%, transparent 75%);
+    animation: sm-drift-3 34s var(--ease) infinite alternate;
+  }
+
+  .sm-subtle .sm-blob { opacity: 0.32; }
+  .sm-hero   .sm-blob { opacity: 0.68; }
+
+  /* Fingerprint whorl — sized to roughly half the hero. Centered, slow rotation. */
+  .sm-whorl {
+    position: absolute;
+    left: 50%; top: 50%;
+    width: clamp(560px, 68vw, 1060px);
+    aspect-ratio: 1 / 1;
+    transform: translate(-50%, -50%);
+    opacity: 0.65;
+    mix-blend-mode: screen;
+    animation: sm-whorl-spin 120s linear infinite;
+    will-change: transform;
+  }
+  .sm-subtle .sm-whorl { opacity: 0.30; }
+  .sm-hero   .sm-whorl { opacity: 0.80; }
+
+  /* Subtle grid behind everything else — establishes precision, depth. */
+  .sm-grid {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(to right,  color-mix(in oklch, var(--line-1) 90%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in oklch, var(--line-1) 90%, transparent) 1px, transparent 1px);
+    background-size: 56px 56px;
+    -webkit-mask-image: radial-gradient(ellipse 70% 80% at 50% 40%, #000 20%, transparent 80%);
+    mask-image:         radial-gradient(ellipse 70% 80% at 50% 40%, #000 20%, transparent 80%);
+    opacity: 0.42;
+  }
+
+  @keyframes sm-drift-1 {
+    from { transform: translate3d(0, 0, 0) scale(1); }
+    to   { transform: translate3d(80px, 60px, 0) scale(1.08); }
+  }
+  @keyframes sm-drift-2 {
+    from { transform: translate3d(0, 0, 0) scale(1); }
+    to   { transform: translate3d(-60px, 80px, 0) scale(1.05); }
+  }
+  @keyframes sm-drift-3 {
+    from { transform: translate3d(0, 0, 0) scale(1); }
+    to   { transform: translate3d(50px, -90px, 0) scale(1.1); }
+  }
+  @keyframes sm-whorl-spin {
+    from { transform: translate(-50%, -50%) rotate(0deg); }
+    to   { transform: translate(-50%, -50%) rotate(360deg); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sm-blob, .sm-whorl { animation: none !important; }
+  }
+</style>

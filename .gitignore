@@ -89,3 +89,34 @@ __pycache__/
 # Test reports
 playwright-report/
 test-results/
+
+# Local AI tooling state (never committed)
+.lazyweb/
+.playwright-mcp/
+
+# Ad-hoc screenshots at repo root (audits, before/after comparisons,
+# session-scratch captures). These are personal workspace artifacts —
+# product screenshots that the website displays live in
+# website/public/product/ and are NOT covered by these patterns.
+/audit-*.png
+/audit-*.jpg
+/new-*.png
+/new-*.jpg
+/sec-*.png
+/sec-*.jpg
+/cl-*.png
+/cl-*.jpg
+/wordmark-*.png
+/wordmark-*.jpg
+/cta-*.png
+/cta-*.jpg
+/pill-*.png
+/pill-*.jpg
+/stars-*.png
+/stars-*.jpg
+/status-*.png
+/status-*.jpg
+/final-*.png
+/final-*.jpg
+/changelog-*.png
+/changelog-*.jpg

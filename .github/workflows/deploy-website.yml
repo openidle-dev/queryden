@@ -1,0 +1,63 @@
+# Triggers a fresh Vercel build of the marketing website whenever a new
+# GitHub release is published. The website fetches release metadata
+# (version, date, asset filenames + sizes, star count) from the GitHub
+# API at build time — without this trigger, the deployed site keeps
+# showing the version from the last Vercel build (e.g. from a docs typo
+# push to main) and goes stale with each release.
+#
+# Setup (one-time):
+#   1. Vercel: Project → Settings → Git → Deploy Hooks → Create Hook.
+#      Name it "release-tag" and target the `main` branch. Copy the URL.
+#   2. GitHub: Repo → Settings → Secrets and variables → Actions →
+#      New repository secret. Name: VERCEL_DEPLOY_HOOK_URL. Value: the
+#      URL from step 1.
+#   3. Vercel: Project → Settings → Environment Variables →
+#      Add QUERYDEN_REQUIRE_LIVE_RELEASE = 1 for the Production
+#      environment. This makes the build FAIL (rather than silently
+#      fall back to RELEASE_FALLBACK in site.ts) if the GitHub API
+#      fetch returns anything other than a clean response. Vercel
+#      will not deploy a failed build, so stale data never ships.
+#
+# This workflow also runs on every release `edited` event so that
+# fixing typos in release notes or re-uploading assets re-deploys.
+
+name: Deploy website on release
+
+on:
+  release:
+    types: [published, edited]
+  # Manual fire-the-deploy button for emergencies (e.g. Vercel build
+  # failed due to a transient GitHub API issue and you want to retry
+  # without editing the release).
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trigger-vercel:
+    name: POST to Vercel deploy hook
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate secret is configured
+        env:
+          HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$HOOK_URL" ]; then
+            echo "::error::VERCEL_DEPLOY_HOOK_URL secret is not set. See the workflow file header for setup steps." >&2
+            exit 1
+          fi
+          echo "Hook URL is configured."
+
+      - name: Trigger Vercel build
+        env:
+          HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          echo "Triggering Vercel deploy for release ${RELEASE_TAG:-manual}"
+          # Vercel deploy hooks accept POST with no body; the response is JSON
+          # with the new deployment ID. -f makes curl exit non-zero on HTTP
+          # 4xx/5xx so a misconfigured hook fails the workflow loudly.
+          response=$(curl -fsS -X POST -w "\nHTTP %{http_code}\n" "$HOOK_URL")
+          echo "$response"
+          echo "Vercel deploy queued. Track progress in the Vercel dashboard."

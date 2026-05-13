@@ -1,0 +1,149 @@
+---
+import '../styles/site.css';
+import { SITE, NAV, RELEASE, STARS, formatStars } from '../lib/site';
+
+interface Props {
+  title: string;
+  description?: string;
+  active?: 'product' | 'security' | 'compare' | 'changelog' | 'docs' | 'download';
+}
+
+const { title, description, active } = Astro.props;
+const version = `v${SITE.version}`;
+const desc = description ?? "A native, open-source SQL client for Postgres, MySQL, SQLite, CockroachDB and Supabase. 8 MB installer. Built in Rust.";
+const stars = STARS;
+---
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{title}</title>
+  <meta name="description" content={desc} />
+  <meta property="og:title"        content={title} />
+  <meta property="og:description"  content={desc} />
+  <meta property="og:type"         content="website" />
+  <meta property="og:url"          content={SITE.homepage} />
+  <meta name="twitter:card"        content="summary_large_image" />
+  <meta name="theme-color" content="#161B22" />
+  <link rel="icon" type="image/png" href="/logo.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+    rel="stylesheet"
+  />
+  <slot name="head" />
+</head>
+<body>
+  <header class="nav-outer">
+    <div class="wrap nav">
+      <a class="brand" href="/">
+        <img src="/logo.png" alt="" width="22" height="22" />
+        <span>{SITE.name}</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        {NAV.map((n) => (
+          <a href={n.href} class={active && n.label.toLowerCase().startsWith(active) ? 'active' : ''}>{n.label}</a>
+        ))}
+      </nav>
+      <div class="nav-right">
+        <a class="nav-status" href={`${SITE.repo}/releases/tag/${RELEASE.tag}`} rel="noopener" aria-label={`Latest release ${RELEASE.tag}, published ${RELEASE.publishedAt}`}>
+          <span class="nav-status-dot" aria-hidden="true"></span>
+          <span class="nav-status-tag">{RELEASE.tag}</span>
+          <span class="nav-status-date" aria-hidden="true">{RELEASE.publishedAt}</span>
+        </a>
+        <a class="btn btn-sm btn-ghost nav-github" href={SITE.repo} rel="noopener" aria-label={stars !== null ? `GitHub — ${stars} stars` : 'GitHub'}>
+          <svg class="nav-github-mark" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.5 2 2 6.6 2 12.2c0 4.5 2.9 8.3 6.8 9.6.5.1.7-.2.7-.5v-1.8c-2.8.6-3.4-1.2-3.4-1.2-.4-1-1.1-1.3-1.1-1.3-.9-.6.1-.6.1-.6 1 .1 1.6 1 1.6 1 .9 1.6 2.4 1.1 3 .9.1-.7.4-1.2.6-1.4-2.2-.3-4.6-1.1-4.6-5 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.7 1 .8-.2 1.6-.3 2.5-.3.8 0 1.7.1 2.5.3 1.9-1.3 2.7-1 2.7-1 .5 1.4.2 2.4.1 2.7.6.7 1 1.6 1 2.7 0 3.9-2.3 4.7-4.6 5 .4.3.7.9.7 1.9v2.8c0 .3.2.6.7.5 4-1.3 6.8-5.1 6.8-9.6C22 6.6 17.5 2 12 2z"/></svg>
+          <span>GitHub</span>
+          {stars !== null && (
+            <span class="nav-github-stars" aria-hidden="true">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 17.3 5.8 21l1.6-7L2 9.2l7.2-.6L12 2l2.8 6.6 7.2.6-5.4 4.8 1.6 7z"/></svg>
+              <span>{formatStars(stars)}</span>
+            </span>
+          )}
+        </a>
+        <a class="btn btn-sm btn-primary" href="/download">Download</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <slot />
+  </main>
+
+  <footer class="site">
+    <div class="footer-wordmark" aria-hidden="true">QueryDen</div>
+    <div class="wrap">
+      <div class="row">
+        <div>
+          <a class="brand" href="/"><img src="/logo.png" alt="" /> <span>{SITE.name}</span></a>
+          <p class="blurb">The database manager that isn't an Electron app. Native binaries, MIT licensed, zero telemetry.</p>
+        </div>
+        <div>
+          <h5>Product</h5>
+          <ul>
+            <li><a href="/#product">Product</a></li>
+            <li><a href="/security">Security</a></li>
+            <li><a href="/#compare">Compare</a></li>
+            <li><a href="/download">Download</a></li>
+          </ul>
+        </div>
+        <div>
+          <h5>Resources</h5>
+          <ul>
+            <li><a href="/docs">Documentation</a></li>
+            <li><a href="/changelog">Changelog</a></li>
+            <li><a href="/security">Security</a></li>
+          </ul>
+        </div>
+        <div>
+          <h5>Project</h5>
+          <ul>
+            <li><a href={SITE.repo} rel="noopener">GitHub</a></li>
+            <li><a href={`${SITE.repo}/issues`} rel="noopener">Issues</a></li>
+            <li><a href={`${SITE.repo}/discussions`} rel="noopener">Discussions</a></li>
+            <li><a href={`${SITE.repo}/blob/main/LICENSE`} rel="noopener">License (MIT)</a></li>
+          </ul>
+        </div>
+        <div>
+          <h5>Community</h5>
+          <ul>
+            <li><a href={`${SITE.repo}/discussions`} rel="noopener">Discussions</a></li>
+            <li><a href={`${SITE.repo}/security/advisories`} rel="noopener">Security</a></li>
+            <li><a href={`${SITE.repo}/blob/main/CONTRIBUTING.md`} rel="noopener">Contributing</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="legal">
+        <span>© 2025–2026 QueryDen contributors · MIT licensed</span>
+        <span>{version} · {RELEASE.tag} published {RELEASE.publishedAt} · zero telemetry</span>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // Reveal-on-scroll — single observer for the whole document.
+    const reveals = document.querySelectorAll('.reveal');
+    if ('IntersectionObserver' in window) {
+      const io = new IntersectionObserver((entries) => {
+        for (const e of entries) {
+          if (e.isIntersecting) {
+            e.target.classList.add('in');
+            io.unobserve(e.target);
+          }
+        }
+      }, { threshold: 0.12, rootMargin: '0px 0px -8% 0px' });
+      requestAnimationFrame(() => {
+        for (const el of reveals) {
+          const r = el.getBoundingClientRect();
+          if (r.top < (window.innerHeight || 0) * 0.95) el.classList.add('in');
+        }
+      });
+      reveals.forEach((el) => io.observe(el));
+    } else {
+      reveals.forEach((el) => el.classList.add('in'));
+    }
+  </script>
+</body>
+</html>

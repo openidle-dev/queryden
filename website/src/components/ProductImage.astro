@@ -1,0 +1,128 @@
+---
+// Drop-in product screenshot. At build time we check whether the real file
+// exists under /public/product/. If it does, we render an <img>. If not, we
+// render an intentional placeholder showing the target filename, dimensions,
+// and a hint of what to capture — so a colleague can swap in the PNG without
+// touching markup.
+//
+// Usage:
+//   <ProductImage src="01-hero-query-results.png"
+//                 alt="QueryDen with a query open and results below"
+//                 width={1600} height={1000}
+//                 caption="Editor + results · primary hero shot" />
+
+import fs from 'node:fs';
+import path from 'node:path';
+
+interface Props {
+  src: string;       // filename inside /public/product/
+  alt: string;
+  width: number;
+  height: number;
+  caption?: string;  // short hint shown only inside the placeholder
+  rounded?: boolean;
+  glow?: boolean;
+}
+
+const { src, alt, width, height, caption, rounded = true, glow = true } = Astro.props;
+const publicPath = path.join(process.cwd(), 'public', 'product', src);
+const exists = fs.existsSync(publicPath);
+const aspect = `${width} / ${height}`;
+---
+<figure class:list={['pi', rounded && 'pi-rounded', glow && 'pi-glow']} style={`aspect-ratio: ${aspect};`}>
+  {exists ? (
+    <img src={`/product/${src}`} alt={alt} width={width} height={height} loading="lazy" decoding="async" />
+  ) : (
+    <div class="pi-placeholder" role="img" aria-label={alt}>
+      <div class="pi-grid"></div>
+      <div class="pi-body">
+        <div class="pi-tag">screenshot pending</div>
+        <div class="pi-file mono">{src}</div>
+        <div class="pi-dims mono">{width} × {height}</div>
+        {caption && <div class="pi-caption">{caption}</div>}
+        <div class="pi-hint mono">
+          Drop the PNG into <code>website/public/product/{src}</code> — this slot will fill on rebuild.
+        </div>
+      </div>
+    </div>
+  )}
+</figure>
+
+<style>
+  .pi {
+    position: relative;
+    margin: 0; padding: 0; width: 100%;
+    background: var(--bg-1);
+    overflow: hidden;
+  }
+  .pi-rounded { border-radius: var(--r-3); border: 1px solid var(--line-1); }
+  .pi-glow {
+    box-shadow:
+      0 1px 0 color-mix(in oklch, var(--ink-0) 6%, transparent) inset,
+      0 60px 120px -40px color-mix(in oklch, var(--accent) 18%, transparent),
+      0 30px 60px -20px rgba(0,0,0,0.55);
+  }
+  .pi > img {
+    display: block;
+    width: 100%; height: 100%;
+    object-fit: cover;
+  }
+
+  /* Placeholder — looks intentional, not broken. */
+  .pi-placeholder {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(ellipse 80% 50% at 50% 30%, color-mix(in oklch, var(--accent) 8%, transparent), transparent 70%),
+      linear-gradient(180deg, var(--bg-1), var(--bg-0));
+    display: grid; place-items: center;
+  }
+  .pi-grid {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(to right,  color-mix(in oklch, var(--line-1) 80%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in oklch, var(--line-1) 80%, transparent) 1px, transparent 1px);
+    background-size: 48px 48px;
+    opacity: 0.5;
+    -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 50%, #000 20%, transparent 75%);
+    mask-image:         radial-gradient(ellipse 70% 60% at 50% 50%, #000 20%, transparent 75%);
+  }
+  .pi-body {
+    position: relative; z-index: 1;
+    text-align: center; padding: 32px;
+    max-width: 540px;
+  }
+  .pi-tag {
+    display: inline-block;
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--accent);
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in oklch, var(--accent) 35%, var(--line-2));
+    background: color-mix(in oklch, var(--accent) 8%, transparent);
+    margin-bottom: 16px;
+  }
+  .pi-file {
+    font-size: 18px; color: var(--ink-0);
+    font-weight: 500; letter-spacing: -0.01em;
+    margin-bottom: 4px;
+  }
+  .pi-dims {
+    font-size: 12px; color: var(--ink-3);
+    margin-bottom: 14px;
+  }
+  .pi-caption {
+    font-size: 14.5px; color: var(--ink-1);
+    line-height: 1.5; margin-bottom: 14px;
+    max-width: 38ch; margin-left: auto; margin-right: auto;
+  }
+  .pi-hint {
+    font-size: 11.5px; color: var(--ink-3);
+    line-height: 1.55;
+  }
+  .pi-hint code {
+    color: var(--ink-2);
+    background: var(--bg-2);
+    border: 1px solid var(--line-1);
+    padding: 1px 6px; border-radius: 4px;
+  }
+</style>

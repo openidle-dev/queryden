@@ -1,0 +1,563 @@
+---
+import Layout from '../layouts/Layout.astro';
+import SignatureMesh from '../components/SignatureMesh.astro';
+import ProductImage from '../components/ProductImage.astro';
+import { SITE, RELEASE, ANNOUNCEMENT, downloadUrl } from '../lib/site';
+
+const version = `v${SITE.version}`;
+
+// Compare table — single source of truth for the comparison section.
+const COMPETITORS = [
+  { name: 'QueryDen',         sub: 'open · MIT · Tauri',         ours: true  },
+  { name: 'DBeaver CE',       sub: 'open · Apache · Eclipse',    ours: false },
+  { name: 'TablePlus',        sub: 'commercial · native',        ours: false },
+  { name: 'DataGrip',         sub: 'commercial · JetBrains',     ours: false },
+  { name: 'Beekeeper Studio', sub: 'open · MIT · Electron',      ours: false },
+  { name: 'pgAdmin',          sub: 'open · PostgreSQL · web',    ours: false },
+];
+
+const ROWS: Array<[string, Array<string | boolean>]> = [
+  ['Engines supported',           ['6 (PG · MySQL · Maria · SQLite · Cockroach · Supabase)', '90+ (incl. NoSQL)', '20+', '15+ (relational)', '10+', 'PostgreSQL only']],
+  ['Native (no Chromium bundled)',[true, false, true, false, false, false]],
+  ['Installer size',              ['~11 MB', '~250 MB', '~50 MB', '~700 MB', '~200 MB', '~200 MB']],
+  ['Machine-locked vault',        [true, false, false, false, false, false]],
+  ['Brute-force lockout',         [true, false, false, false, false, false]],
+  ['Local history · diffs',       [true, 'Yes', 'Yes', 'Yes', 'Yes', 'Limited']],
+  ['Integrated psql · per-version', [true, false, false, false, false, 'bundled']],
+  ['AI assistant · BYO key',      ['OpenAI · Anthropic · Google · Ollama', 'Yes (paid)', false, 'Paid', 'Yes (BYO)', false]],
+  ['Visual EXPLAIN ANALYZE',      [true, 'Yes', false, 'Yes', 'Yes', 'Yes']],
+  ['SSH tunneling',               [true, true, true, true, true, true]],
+  ['Telemetry',                   ['Zero', 'Opt-out', 'Crash reports', 'Opt-out', 'Opt-out', 'None']],
+  ['Price (1 seat)',              ['Free', 'Free', '$89 one-time', '$229/yr', 'Free / $19', 'Free']],
+  ['License',                     ['MIT', 'Apache 2.0', 'Commercial', 'Commercial', 'MIT (community)', 'PostgreSQL']],
+];
+
+// Security flow — used by the animated diagram.
+const FLOW = [
+  { id: 'collect', label: 'Collect inputs',    detail: 'Master password · machine fingerprint · OS keychain entry.' },
+  { id: 'derive',  label: 'Derive key',        detail: 'Argon2id · m=64MiB · t=3 · p=4. Slow on purpose — ~1 s on a laptop.' },
+  { id: 'wrap',    label: 'Wrap each secret',  detail: 'AES-256-GCM with the derived key. Each record has its own nonce.' },
+  { id: 'seal',    label: 'Seal vault',        detail: 'Encrypted file written atomically. MAC validated on every read.' },
+];
+---
+<Layout
+  title="QueryDen — The database manager that isn't an Electron app."
+  description="A native, open-source SQL client for Postgres, MySQL, SQLite, CockroachDB and Supabase. 8 MB installer. Built in Rust. Zero telemetry."
+  active="product"
+>
+
+  <!-- ============== HERO ============== -->
+  <section class="hero">
+    <SignatureMesh intensity="hero" maskFalloff="soft" />
+    <div class="wrap hero-inner">
+      {ANNOUNCEMENT ? (
+        <a class="reveal tag hero-pill hero-pill-link" href={ANNOUNCEMENT.href}>
+          <span class="dot"></span>
+          <span class="hero-pill-label">{ANNOUNCEMENT.label}</span>
+          <span class="hero-pill-sep" aria-hidden="true">·</span>
+          <span class="hero-pill-detail">{ANNOUNCEMENT.detail}</span>
+          <span class="hero-pill-arrow" aria-hidden="true">→</span>
+        </a>
+      ) : (
+        <div class="reveal tag hero-pill"><span class="dot"></span> {version} · macOS · Windows · Linux</div>
+      )}
+
+      <h1 class="display reveal reveal-1">
+        The database manager<br/>
+        <span class="hero-em">that isn't an Electron app.</span>
+      </h1>
+
+      <p class="lede-lg reveal reveal-2 hero-lede">
+        A native, open-source SQL client for Postgres, MySQL, SQLite, CockroachDB and Supabase.
+        Built in Rust. <span style="color: var(--ink-0);">An 8&nbsp;MB installer</span> — not a
+        250&nbsp;MB Java IDE, not a 200&nbsp;MB Chromium bundle pretending to be an app.
+      </p>
+
+      <div class="reveal reveal-3 hero-cta">
+        <a class="btn btn-lg btn-accent" href="/download" data-cta="hero-download">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+          <span data-os-cta>Download QueryDen</span>
+        </a>
+        <a class="btn btn-lg btn-ghost" href={SITE.repo} rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.5 2 2 6.6 2 12.2c0 4.5 2.9 8.3 6.8 9.6.5.1.7-.2.7-.5v-1.8c-2.8.6-3.4-1.2-3.4-1.2-.4-1-1.1-1.3-1.1-1.3-.9-.6.1-.6.1-.6 1 .1 1.6 1 1.6 1 .9 1.6 2.4 1.1 3 .9.1-.7.4-1.2.6-1.4-2.2-.3-4.6-1.1-4.6-5 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.7 1 .8-.2 1.6-.3 2.5-.3.8 0 1.7.1 2.5.3 1.9-1.3 2.7-1 2.7-1 .5 1.4.2 2.4.1 2.7.6.7 1 1.6 1 2.7 0 3.9-2.3 4.7-4.6 5 .4.3.7.9.7 1.9v2.8c0 .3.2.6.7.5 4-1.3 6.8-5.1 6.8-9.6C22 6.6 17.5 2 12 2z"/></svg>
+          Star on GitHub
+        </a>
+      </div>
+
+      <p class="reveal hero-foot mono">
+        Apple Silicon · Windows x86_64 · Linux x86_64 &nbsp;·&nbsp; MIT licensed &nbsp;·&nbsp; zero telemetry
+      </p>
+    </div>
+  </section>
+
+  <!-- ============== PRODUCT SHOWCASE ============== -->
+  <section class="section-pad" id="product">
+    <div class="wrap">
+      <div class="reveal section-head">
+        <div>
+          <div class="eyebrow">The product</div>
+          <h2 style="margin-top: 14px;">Six engines. One small native window.</h2>
+        </div>
+        <p class="lede">
+          A SQL editor with schema-aware autocomplete, a visual EXPLAIN viewer, and a vault that won't follow you
+          to a different laptop. Real screenshots — no marketing illustrations.
+        </p>
+      </div>
+
+      <div class="reveal product-hero">
+        <ProductImage
+          src="01-hero-query-results.png"
+          alt="QueryDen with a query open and results below"
+          width={1600} height={1000}
+          caption="Connected database · query in the editor · results grid populated with realistic rows"
+        />
+      </div>
+
+      <div class="product-grid">
+        <div class="reveal product-tile">
+          <ProductImage
+            src="02-explain-analyze.png"
+            alt="QueryDen showing an EXPLAIN ANALYZE plan tree"
+            width={1200} height={800}
+            caption="Run a query with EXPLAIN ANALYZE so the plan tree renders. Bonus if a node is obviously hot."
+          />
+          <div class="product-tile-meta">
+            <div class="eyebrow">Performance</div>
+            <h3>Find the slow node, then fix it.</h3>
+            <p>Visual EXPLAIN ANALYZE with hot-path highlighting and one-click "suggest index" jumps.</p>
+          </div>
+        </div>
+
+        <div class="reveal product-tile">
+          <ProductImage
+            src="03-schema-browser.png"
+            alt="QueryDen schema browser with nested tables and columns"
+            width={1200} height={800}
+            caption="Left panel: one connection's schemas → tables → columns, several nodes expanded."
+          />
+          <div class="product-tile-meta">
+            <div class="eyebrow">Schema</div>
+            <h3>Your schema, always in reach.</h3>
+            <p>Live schema graph powering autocomplete, JOIN suggestions, and one-keystroke alias generation.</p>
+          </div>
+        </div>
+
+        <div class="reveal product-tile">
+          <ProductImage
+            src="04-connection-dialog.png"
+            alt="QueryDen Add Connection dialog"
+            width={1200} height={800}
+            caption="Add Connection dialog, partially filled in. Fake creds — localhost:5432, user 'analytics'."
+          />
+          <div class="product-tile-meta">
+            <div class="eyebrow">Connect</div>
+            <h3>Six engines, one config flow.</h3>
+            <p>Postgres, MySQL, MariaDB, SQLite, CockroachDB, Supabase. SSH tunnels native. No driver downloads.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============== SECURITY ============== -->
+  <section class="section-pad" id="security" style="border-top: 1px solid var(--line-1);">
+    <div class="wrap">
+      <div class="reveal section-head">
+        <div>
+          <div class="eyebrow">Security</div>
+          <h2 style="margin-top: 14px;">Credentials, locked to your hardware.</h2>
+        </div>
+        <p class="lede">
+          Every encrypted file is fingerprinted to the machine that wrote it. Copy your connections to another
+          laptop and they're noise — by design. <a href="/security" style="color: var(--accent); border-bottom: 1px solid color-mix(in oklch, var(--accent) 40%, transparent);">Read the threat model →</a>
+        </p>
+      </div>
+
+      <div class="reveal sec-flow card">
+        <div class="sf-stages">
+          {FLOW.map((s, i) => (
+            <div class="sf-stage" data-stage={i}>
+              <div class="sf-n mono">0{i + 1}</div>
+              <div class="sf-label">{s.label}</div>
+              <div class="sf-detail">{s.detail}</div>
+            </div>
+          ))}
+        </div>
+        <div class="sf-progress-wrap">
+          <div class="sf-progress"></div>
+        </div>
+      </div>
+
+      <div class="reveal sec-pillars">
+        <div class="sec-pillar">
+          <div class="eyebrow">Layer</div>
+          <h4>AES-256-GCM</h4>
+          <p>Authenticated encryption for every connection, every saved query, every vault entry. Tampering invalidates the MAC; the file refuses to decrypt.</p>
+        </div>
+        <div class="sec-pillar">
+          <div class="eyebrow">Layer</div>
+          <h4>Argon2id KDF</h4>
+          <p>Master password → key. Tuned to take ~1 s on a laptop, making brute-force orders of magnitude slower than a GPU farm.</p>
+        </div>
+        <div class="sec-pillar">
+          <div class="eyebrow">Layer</div>
+          <h4>Machine fingerprint</h4>
+          <p>Mixed into the KDF. Linux: <code class="inline">/etc/machine-id</code>. macOS: <code class="inline">IOPlatformUUID</code>. Windows: <code class="inline">CSP UUID</code>. Change machines, the vault refuses to load.</p>
+        </div>
+        <div class="sec-pillar">
+          <div class="eyebrow">Layer</div>
+          <h4>OS keychain</h4>
+          <p>Master key in macOS Keychain (Secure Enclave-bound), Windows Credential Manager (DPAPI), or libsecret on Linux.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============== COMPARE ============== -->
+  <section class="section-pad" id="compare" style="border-top: 1px solid var(--line-1);">
+    <div class="wrap">
+      <div class="reveal section-head">
+        <div>
+          <div class="eyebrow">How we compare</div>
+          <h2 style="margin-top: 14px;">Six tools, side-by-side.</h2>
+        </div>
+        <p class="lede">
+          Verified against each project's public docs and changelog. Hover a column to highlight; we've left the gaps where the gaps are.
+        </p>
+      </div>
+
+      <div class="reveal compare-wrap" id="compare-table">
+        <div class="ct-head-row">
+          <div class="ct-cap-head">Capability</div>
+          {COMPETITORS.map((c, i) => (
+            <button
+              type="button"
+              class={`ct-col-head${c.ours ? ' ours' : ''}`}
+              data-col={i}
+              aria-label={`Highlight ${c.name} column`}
+            >
+              <div class="cn">{c.name}</div>
+              <div class="cs mono">{c.sub}</div>
+            </button>
+          ))}
+        </div>
+        {ROWS.map(([label, values]) => (
+          <div class="ct-row">
+            <div class="ct-rowhead">{label}</div>
+            {values.map((v, i) => (
+              <div class={`ct-cell${COMPETITORS[i].ours ? ' ours' : ''}`} data-col={i}>
+                {v === true && (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" class="ct-yes"><path d="m5 12 4.5 4.5L19 7"/></svg>
+                )}
+                {v === false && <span class="ct-no">—</span>}
+                {typeof v === 'string' && <span class="ct-txt">{v}</span>}
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <!-- ============== CTA ============== -->
+  <section class="cta-wrap" id="cta">
+    <SignatureMesh intensity="subtle" maskFalloff="hard" />
+    <div class="wrap cta-inner">
+      <div class="reveal">
+        <div class="eyebrow" style="justify-content: center;">Ship the small one</div>
+        <h2 class="cta-title display">Stop waiting for a database client to start.</h2>
+        <p class="lede-lg cta-lede">
+          An 8&nbsp;MB installer. Native binaries on macOS, Windows, and Linux. MIT licensed. Zero telemetry.
+        </p>
+        <div class="cta-buttons">
+          <a class="btn btn-lg btn-accent" href="/download">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+            <span data-os-cta>Download QueryDen</span>
+          </a>
+          <a class="btn btn-lg btn-ghost" href={SITE.repo} rel="noopener">View on GitHub</a>
+        </div>
+        <p class="mono cta-foot">
+          {RELEASE.tag} · published {RELEASE.publishedAt} · SHA-256 verified · <a href="/download">all platforms</a>
+        </p>
+      </div>
+    </div>
+  </section>
+
+</Layout>
+
+<style is:global>
+  /* ========== Hero ========== */
+  .hero {
+    position: relative;
+    padding-top: clamp(48px, 6.5vh, 96px);
+    padding-bottom: clamp(40px, 6vh, 72px);
+    overflow: hidden;
+  }
+  .hero-inner {
+    position: relative;
+    z-index: 1;
+    display: flex; flex-direction: column; align-items: center;
+    text-align: center;
+  }
+  .hero-pill { margin-bottom: 28px; }
+  .hero-pill-link {
+    text-decoration: none;
+    transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+  }
+  .hero-pill-link:hover {
+    border-color: color-mix(in oklch, var(--accent) 55%, var(--line-2));
+    background: color-mix(in oklch, var(--accent) 6%, var(--bg-1));
+    color: var(--ink-0);
+  }
+  .hero-pill-link:hover .hero-pill-arrow { transform: translateX(2px); }
+  .hero-pill-sep { color: var(--ink-3); }
+  .hero-pill-detail { color: var(--ink-2); }
+  .hero-pill-link:hover .hero-pill-detail { color: var(--ink-1); }
+  .hero-pill-arrow {
+    color: var(--accent);
+    margin-left: 2px;
+    transition: transform var(--t-fast) var(--ease);
+    display: inline-block;
+  }
+  .hero-em { color: var(--ink-0); position: relative; display: inline-block; }
+  .hero-em::after {
+    content: ''; position: absolute; left: 0; right: 0; bottom: -4px;
+    height: 4px;
+    background:
+      linear-gradient(90deg,
+        transparent 0%,
+        color-mix(in oklch, var(--accent) 80%, transparent) 8%,
+        color-mix(in oklch, var(--accent) 80%, transparent) 92%,
+        transparent 100%);
+    transform: scaleX(0.6);
+    transform-origin: center;
+    opacity: 0;
+    animation: hero-underline 1.4s var(--ease) 0.8s forwards;
+  }
+  @keyframes hero-underline {
+    to { transform: scaleX(1); opacity: 1; }
+  }
+  .hero-lede { margin: 28px auto 0; }
+  .hero-cta { display: flex; gap: 12px; margin-top: 40px; flex-wrap: wrap; justify-content: center; }
+  .hero-foot {
+    margin-top: 28px; color: var(--ink-3); font-size: 12px;
+  }
+
+  /* ========== Product showcase ========== */
+  .product-hero { margin-top: 0; }
+  .product-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 24px; margin-top: 56px;
+  }
+  @media (max-width: 1100px) { .product-grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 700px)  { .product-grid { grid-template-columns: 1fr; } }
+  .product-tile { display: flex; flex-direction: column; gap: 20px; }
+  .product-tile-meta { padding: 0 4px; }
+  .product-tile-meta h3 { margin: 10px 0 8px; }
+  .product-tile-meta p { color: var(--ink-2); font-size: 14.5px; line-height: 1.55; }
+
+  /* ========== Security ========== */
+  .sec-flow {
+    padding: 36px 32px 30px;
+    background:
+      radial-gradient(ellipse 40% 50% at 50% 0%, color-mix(in oklch, var(--accent) 8%, transparent), transparent 70%),
+      var(--bg-1);
+  }
+  .sf-stages {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px;
+  }
+  @media (max-width: 900px) { .sf-stages { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 560px) { .sf-stages { grid-template-columns: 1fr; } }
+  .sf-stage {
+    padding: 18px 20px; border-radius: var(--r-2);
+    background: var(--bg-2);
+    border: 1px solid var(--line-1);
+    transition: border-color var(--t-med) var(--ease), background var(--t-med) var(--ease);
+  }
+  .sf-stage.active {
+    border-color: color-mix(in oklch, var(--accent) 55%, var(--line-2));
+    background: color-mix(in oklch, var(--accent) 9%, var(--bg-2));
+  }
+  .sf-n     { font-size: 11px; color: var(--ink-4); letter-spacing: 0.14em; }
+  .sf-label { color: var(--ink-0); font-size: 15px; font-weight: 500; margin-top: 6px; }
+  .sf-detail{ color: var(--ink-2); font-size: 13px; line-height: 1.55; margin-top: 8px; }
+  .sf-progress-wrap {
+    height: 2px; background: var(--bg-2); border-radius: 999px; overflow: hidden;
+    margin-top: 24px;
+  }
+  .sf-progress {
+    height: 100%; width: 0%;
+    background: linear-gradient(90deg, var(--accent-d), var(--accent), var(--accent-w));
+    transition: width 280ms var(--ease);
+  }
+
+  .sec-pillars {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;
+    margin-top: 36px;
+  }
+  @media (max-width: 1100px) { .sec-pillars { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 560px)  { .sec-pillars { grid-template-columns: 1fr; } }
+  .sec-pillar {
+    padding: 22px 24px;
+    border: 1px solid var(--line-1);
+    border-radius: var(--r-3);
+    background: var(--bg-1);
+  }
+  .sec-pillar h4 { margin: 12px 0 8px; font-size: 17px; }
+  .sec-pillar p  { font-size: 13.5px; color: var(--ink-2); line-height: 1.55; }
+
+  /* ========== Compare ========== */
+  .compare-wrap {
+    background: var(--bg-1);
+    border: 1px solid var(--line-1);
+    border-radius: var(--r-3);
+    overflow: hidden;
+    box-shadow: var(--sh-1);
+  }
+  .ct-head-row,
+  .ct-row {
+    display: grid;
+    grid-template-columns: 1.4fr repeat(6, 1fr);
+    gap: 0;
+  }
+  .ct-head-row {
+    background: var(--bg-2);
+    border-bottom: 1px solid var(--line-1);
+  }
+  .ct-cap-head {
+    padding: 18px 22px;
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--ink-4);
+    align-self: end;
+  }
+  .ct-col-head {
+    padding: 14px 16px;
+    text-align: left;
+    background: transparent;
+    border: 0; border-left: 1px solid var(--line-1);
+    cursor: pointer;
+    color: var(--ink-2);
+    font-family: var(--sans);
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+  }
+  .ct-col-head:hover { background: color-mix(in oklch, var(--accent) 5%, transparent); color: var(--ink-0); }
+  .ct-col-head.active {
+    background: color-mix(in oklch, var(--accent) 9%, transparent);
+    color: var(--ink-0);
+    box-shadow: inset 0 -2px 0 var(--accent);
+  }
+  .ct-col-head .cn { font-size: 14.5px; font-weight: 500; }
+  .ct-col-head .cs { font-size: 10.5px; color: var(--ink-4); margin-top: 4px; letter-spacing: 0.04em; }
+  .ct-col-head.ours .cn { color: var(--accent); }
+  .ct-col-head.ours .cs { color: color-mix(in oklch, var(--accent) 50%, var(--ink-3)); }
+
+  .ct-row + .ct-row, .ct-head-row + .ct-row {
+    border-top: 1px solid color-mix(in oklch, var(--line-1) 70%, transparent);
+  }
+  .ct-rowhead {
+    padding: 16px 22px;
+    font-size: 13.5px; color: var(--ink-2);
+    align-self: center;
+    border-right: 1px solid color-mix(in oklch, var(--line-1) 60%, transparent);
+  }
+  .ct-cell {
+    padding: 14px 16px;
+    border-left: 1px solid color-mix(in oklch, var(--line-1) 60%, transparent);
+    font-size: 13px; color: var(--ink-2);
+    display: flex; align-items: center;
+    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+  }
+  .ct-cell.col-active { background: color-mix(in oklch, var(--accent) 5%, transparent); color: var(--ink-0); }
+  .ct-cell.ours { color: var(--ink-1); }
+  .ct-cell.ours.col-active { background: color-mix(in oklch, var(--accent) 10%, transparent); }
+  .ct-yes  { color: var(--accent); }
+  .ct-no   { color: var(--ink-4); }
+  .ct-txt  { line-height: 1.4; }
+
+  @media (max-width: 1100px) {
+    .ct-head-row, .ct-row { grid-template-columns: 1.2fr repeat(6, minmax(110px, 1fr)); }
+    .compare-wrap { overflow-x: auto; }
+    .ct-head-row, .ct-row { min-width: 900px; }
+  }
+
+  /* ========== CTA ========== */
+  .cta-wrap {
+    position: relative; overflow: hidden;
+    border-top: 1px solid var(--line-1);
+  }
+  .cta-inner {
+    position: relative; z-index: 1;
+    text-align: center;
+    padding: 160px 0 144px;
+  }
+  .cta-title {
+    max-width: 18ch;
+    margin: 28px auto 0;
+    text-wrap: balance;
+  }
+  .cta-lede {
+    margin: 32px auto 0;
+    text-align: center;
+    font-size: 21px;
+  }
+  .cta-buttons { display: flex; gap: 14px; justify-content: center; margin-top: 56px; flex-wrap: wrap; }
+  .cta-foot { color: var(--ink-3); font-size: 11.5px; margin-top: 44px; }
+  .cta-foot a { color: var(--ink-1); border-bottom: 1px solid var(--line-2); }
+  .cta-foot a:hover { color: var(--ink-0); }
+  @media (max-width: 760px) {
+    .cta-inner { padding: 96px 0 88px; }
+    .cta-buttons { margin-top: 40px; }
+    .cta-foot { margin-top: 32px; }
+  }
+</style>
+
+<script>
+  // OS-detect for the hero + CTA download labels.
+  const labels = document.querySelectorAll('[data-os-cta]');
+  if (labels.length) {
+    const ua = navigator.userAgent;
+    const platform = (navigator as any).userAgentData?.platform || navigator.platform || '';
+    const isMac = /Mac/i.test(platform) || /Mac OS X/i.test(ua);
+    const isWin = /Win/i.test(platform) || /Windows/i.test(ua);
+    const isLinux = /Linux/i.test(platform) && !/Android/i.test(ua);
+    let label = 'Download QueryDen';
+    if (isMac) label = 'Download for macOS';
+    else if (isWin) label = 'Download for Windows';
+    else if (isLinux) label = 'Download for Linux';
+    labels.forEach((el) => (el.textContent = label));
+  }
+
+  // Security FlowStage — cycle the four phases. CSS handles all visuals.
+  const flow = document.querySelector('.sec-flow') as HTMLElement | null;
+  if (flow) {
+    const stages = flow.querySelectorAll<HTMLElement>('.sf-stage');
+    const progress = flow.querySelector<HTMLElement>('.sf-progress');
+    let start: number | null = null;
+    const period = 6400;
+    const step = (ts: number) => {
+      if (start === null) start = ts;
+      const t = ((ts - start) % period) / period;
+      const stage = Math.min(3, Math.floor(t * 4));
+      stages.forEach((el, i) => el.classList.toggle('active', i === stage));
+      if (progress) progress.style.width = `${(t * 100).toFixed(2)}%`;
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
+  // Compare table — column hover highlight.
+  const ct = document.getElementById('compare-table');
+  if (ct) {
+    const heads = ct.querySelectorAll<HTMLButtonElement>('.ct-col-head');
+    const cells = ct.querySelectorAll<HTMLDivElement>('.ct-cell');
+    const setCol = (col: number) => {
+      heads.forEach((h, i) => h.classList.toggle('active', i === col));
+      cells.forEach((c) => c.classList.toggle('col-active', Number(c.dataset.col) === col));
+    };
+    heads.forEach((h, i) => {
+      h.addEventListener('mouseenter', () => setCol(i));
+      h.addEventListener('focus', () => setCol(i));
+    });
+    setCol(0);
+  }
+</script>

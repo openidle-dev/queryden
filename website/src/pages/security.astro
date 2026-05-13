@@ -1,0 +1,211 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { SITE } from '../lib/site';
+
+const principles = [
+  {
+    title: 'Credentials never leave your machine',
+    body: 'No cloud sync. No "log in to QueryDen". The vault file is encrypted on disk, the encryption key never leaves your computer, and the file is useless if copied to another laptop.',
+  },
+  {
+    title: 'No telemetry, no analytics, no auto-update pings',
+    body: 'The app does not phone home. Not on launch, not when you connect, not when you crash. The OS network monitor will confirm: zero outbound calls except the database server you chose to connect to.',
+  },
+  {
+    title: 'You can audit every line',
+    body: 'The source is on GitHub under MIT. The encryption code is ~300 lines of Rust in `src-tauri/src/storage.rs`. The CI pipeline that builds the binaries is in the same repo. There is no closed-source layer.',
+  },
+];
+
+const threats = [
+  { actor: 'Someone copies your QueryDen vault file off your laptop',
+    defense: 'The vault is encrypted with a key derived from your master password + a machine fingerprint. Without the original machine, the file does not decrypt — even with the correct password.' },
+  { actor: 'Malware on your laptop tries to brute-force the vault',
+    defense: 'After 5 failed unlock attempts the vault locks for an exponentially increasing duration. Argon2id key derivation makes each attempt slow on purpose.' },
+  { actor: 'You lose the laptop',
+    defense: 'The vault file is encrypted at rest. The master key in your OS keychain is hardware-bound (Secure Enclave on macOS, DPAPI on Windows, libsecret on Linux). A wiped login means the vault becomes permanently unreadable.' },
+  { actor: 'A QueryDen update ships a backdoor',
+    defense: 'Every release is built by GitHub Actions from a public tag. The SHA-256 of each installer is published. Reproduce the build yourself from the same commit and compare — the hash must match.' },
+  { actor: 'You connect to a malicious database server',
+    defense: 'QueryDen is the client. The server can return malicious result rows, but the result grid renders them as text. We do not eval, we do not exec, we do not auto-run a follow-up query based on a result.' },
+];
+
+const layers = [
+  { name: 'AES-256-GCM',                detail: 'Authenticated encryption for every connection, every saved query, every vault entry. Tampering invalidates the MAC; the file refuses to decrypt.' },
+  { name: 'Argon2id (memory-hard KDF)', detail: 'Master password → encryption key. Tuned to take ~1 second on a modern laptop, making brute-force orders of magnitude slower than a GPU farm.' },
+  { name: 'Machine fingerprint',        detail: 'Linux: /etc/machine-id. macOS: IOPlatformUUID. Windows: Win32_ComputerSystemProduct.UUID. Mixed into the KDF — change machines, the vault refuses to load.' },
+  { name: 'OS keychain master key',     detail: 'macOS Keychain (Secure Enclave-bound) · Windows Credential Manager (DPAPI) · libsecret on Linux. Falls back to a file-based key only if the OS keyring is unavailable.' },
+  { name: 'Brute-force lockout',        detail: '5 failed unlocks → exponential backoff. Implemented in atomic counters in-process; the lock persists across app restarts via the encrypted state file.' },
+  { name: 'CSP locked to self',         detail: "Tauri's default-src policy disables remote script loading. The renderer cannot fetch arbitrary code from the internet, even if you find an XSS vector." },
+];
+---
+<Layout title="Security · QueryDen" active="security">
+
+  <header class="page-hero">
+    <div class="grid-bg"></div>
+    <div class="wrap">
+      <div class="eyebrow">Security &amp; encryption</div>
+      <h1 style="margin-top: 22px; max-width: 900px;">
+        A database manager you can trust with production credentials.
+      </h1>
+      <p class="lede">
+        Three rules: credentials never leave your machine, nothing phones home, and every claim
+        on this page can be verified from the source. What follows is how that's actually built.
+      </p>
+    </div>
+  </header>
+
+  <section class="sec-pad" id="principles">
+    <div class="wrap">
+      <div class="eyebrow">01 · Principles</div>
+      <h2 class="s-title" style="max-width: 760px;">What we won't do.</h2>
+      <div class="principles s-content">
+        {principles.map((p, i) => (
+          <div class="card principle">
+            <div class="p-num mono">0{i + 1}</div>
+            <h3>{p.title}</h3>
+            <p>{p.body}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section class="sec-pad-sm" id="vault" style="border-top: 1px solid var(--line);">
+    <div class="wrap">
+      <div class="eyebrow">02 · The vault</div>
+      <h2 class="s-title" style="max-width: 760px;">Six layers, all visible in the source.</h2>
+      <p class="s-lede" style="max-width: 660px;">
+        The encrypted file at <code class="inline">~/.local/share/com.queryden.app/vault.json</code> is
+        protected by the layers below. Remove any one and it stops working — that's the test.
+      </p>
+      <div class="layers s-content">
+        {layers.map((l, i) => (
+          <div class="layer">
+            <div class="l-i mono">{(i + 1).toString().padStart(2, '0')}</div>
+            <div class="l-name">{l.name}</div>
+            <div class="l-detail">{l.detail}</div>
+          </div>
+        ))}
+      </div>
+      <p style="margin-top: 36px; font-size: 13.5px; color: var(--ink-3);">
+        Source: <a href={`${SITE.repo}/blob/main/src-tauri/src/storage.rs`} class="src-link">src-tauri/src/storage.rs</a>
+      </p>
+    </div>
+  </section>
+
+  <section class="sec-pad-sm" id="threats" style="border-top: 1px solid var(--line);">
+    <div class="wrap">
+      <div class="eyebrow">03 · Threat model</div>
+      <h2 class="s-title" style="max-width: 760px;">What we defend against — and what we don't.</h2>
+      <div class="threats s-content">
+        {threats.map((t) => (
+          <div class="threat">
+            <div class="t-actor"><span class="t-bullet">▲</span>{t.actor}</div>
+            <div class="t-defense">{t.defense}</div>
+          </div>
+        ))}
+      </div>
+      <div class="card limits s-content">
+        <div class="eyebrow" style="margin-bottom: 12px;">What we do <em>not</em> defend against</div>
+        <ul>
+          <li>A rooted/compromised OS. If an attacker controls your kernel they control your memory; no userland app can recover from this.</li>
+          <li>A keylogger that captures your master password at the keyboard.</li>
+          <li>A network attacker between you and a database that lacks TLS. Use SSL/TLS or our SSH tunnel — that's what they're for.</li>
+          <li>You sharing a connection string in Slack. We can't fix that.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec-pad-sm" id="verify" style="border-top: 1px solid var(--line);">
+    <div class="wrap">
+      <div class="eyebrow">04 · Verify everything</div>
+      <h2 class="s-title" style="max-width: 760px;">Don't trust this page. Trust the code.</h2>
+      <div class="verify-grid s-content">
+        <a class="card verify-card" href={`${SITE.repo}/blob/main/src-tauri/src/storage.rs`}>
+          <div class="vc-eye">Source</div>
+          <div class="vc-title">Read the encryption code</div>
+          <div class="vc-meta">~300 lines of Rust. AES-GCM, Argon2id, machine fingerprint. No closed-source layer.</div>
+        </a>
+        <a class="card verify-card" href={`${SITE.repo}/blob/main/.github/workflows/release.yml`}>
+          <div class="vc-eye">Build</div>
+          <div class="vc-title">Read the release pipeline</div>
+          <div class="vc-meta">Every installer is built by GitHub Actions from a public tag. Reproduce the build, compare hashes.</div>
+        </a>
+        <a class="card verify-card" href="/download#verify">
+          <div class="vc-eye">Hashes</div>
+          <div class="vc-title">Verify your download</div>
+          <div class="vc-meta">SHA-256 published next to every installer. The one-liner per OS is on the download page.</div>
+        </a>
+        <a class="card verify-card" href={`${SITE.repo}/security/advisories`}>
+          <div class="vc-eye">Report</div>
+          <div class="vc-title">Disclose a vulnerability</div>
+          <div class="vc-meta">GitHub Security Advisories. Private until fixed; public once a patch ships.</div>
+        </a>
+      </div>
+    </div>
+  </section>
+
+</Layout>
+
+<style>
+  .principles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  @media (max-width: 1000px) { .principles { grid-template-columns: 1fr; } }
+  .principle { padding: 28px; position: relative; }
+  .principle h3 { margin-top: 14px; margin-bottom: 12px; font-size: 18px; }
+  .principle p { font-size: 14.5px; color: var(--ink-2); line-height: 1.6; }
+  .p-num { font-size: 11px; letter-spacing: 0.14em; color: var(--ink-4); }
+
+  .layers { display: grid; grid-template-columns: 1fr; gap: 0; border-top: 1px solid var(--line); }
+  .layer {
+    display: grid; grid-template-columns: 56px 220px 1fr; gap: 22px;
+    align-items: start; padding: 20px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  @media (max-width: 800px) {
+    .layer { grid-template-columns: 56px 1fr; }
+    .l-detail { grid-column: 2 / 3; padding-top: 6px; }
+  }
+  .l-i { color: var(--ink-4); font-size: 12px; }
+  .l-name { font-weight: 500; color: var(--ink); font-size: 15px; }
+  .l-detail { color: var(--ink-2); font-size: 14px; line-height: 1.6; }
+
+  .threats { display: grid; grid-template-columns: 1fr; gap: 0; border-top: 1px solid var(--line); }
+  .threat {
+    display: grid; grid-template-columns: 1fr 1.4fr; gap: 32px;
+    padding: 22px 0; border-bottom: 1px solid var(--line);
+  }
+  @media (max-width: 800px) { .threat { grid-template-columns: 1fr; gap: 8px; } }
+  .t-actor {
+    font-family: var(--mono); font-size: 13.5px; color: var(--ink-2);
+    display: flex; gap: 10px;
+  }
+  .t-bullet { color: var(--warn); }
+  .t-defense { color: var(--ink-2); font-size: 14.5px; line-height: 1.55; }
+
+  .limits ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
+  .limits li { font-size: 14px; line-height: 1.55; color: var(--ink-2); padding-left: 18px; position: relative; }
+  .limits li::before {
+    content: '—'; position: absolute; left: 0; color: var(--ink-4);
+  }
+  .limits { padding: 24px 28px; }
+  .limits em { color: var(--ink); font-style: normal; }
+
+  .verify-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+  @media (max-width: 800px) { .verify-grid { grid-template-columns: 1fr; } }
+  .verify-card {
+    padding: 24px 28px; transition: border-color .15s, background .15s;
+    display: block; color: inherit;
+  }
+  .verify-card:hover { border-color: var(--line-2); background: var(--bg-2); }
+  .vc-eye {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px;
+  }
+  .vc-title { font-size: 16px; color: var(--ink); font-weight: 500; margin-bottom: 8px; }
+  .vc-meta  { font-size: 13.5px; color: var(--ink-3); line-height: 1.55; }
+
+  .src-link { color: var(--accent); border-bottom: 1px solid color-mix(in oklch, var(--accent) 40%, transparent); }
+  .src-link:hover { color: var(--accent-w); }
+</style>
