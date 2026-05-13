@@ -1,6 +1,6 @@
 [package]
 name = "queryden"
-version = "1.0.10"
+version = "1.0.11"
 description = "A modern multi-database manager built with Tauri, React, and TypeScript"
 authors = ["QueryDen Team"]
 edition = "2021"
