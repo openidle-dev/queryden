@@ -1,4 +1,5 @@
 import { useRef, useEffect, memo, useCallback, useMemo } from "react";
+import "./monacoSetup";
 import Editor, { OnMount } from "@monaco-editor/react";
 import { Code as CodeIcon, Loader2, CheckCircle, XCircle } from "lucide-react";
 import { useTheme } from "../../contexts/ThemeContext";

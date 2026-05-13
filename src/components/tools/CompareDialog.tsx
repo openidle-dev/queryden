@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { X, GitCompare, ChevronRight, AlertCircle, GitMerge, ArrowRight, Check, Play, Loader2, CheckSquare, Square, Info } from "lucide-react";
+import "../editor/monacoSetup";
 import { DiffEditor } from "@monaco-editor/react";
 import { useConnections } from "../../contexts/useConnections";
 import { ToolGuideWizard } from "./ToolGuideWizard";

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { X, Code2, Copy, CheckCircle, XCircle } from "lucide-react";
+import "../editor/monacoSetup";
 import Editor from "@monaco-editor/react";
 import { useConnections } from "../../contexts/useConnections";
 import { useTheme } from "../../contexts/ThemeContext";

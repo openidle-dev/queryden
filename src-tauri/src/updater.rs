@@ -319,8 +319,9 @@ pub async fn install_update(app: tauri::AppHandle, file_path: String) -> Result<
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         match ext.to_lowercase().as_str() {
             "appimage" => install_appimage_linux(&path)?,
+            "deb" => install_deb_linux(&path)?,
             _ => {
-                // .deb (and unknown formats) — let the desktop pick a handler.
+                // Unknown format — let the desktop pick a handler.
                 std::process::Command::new("xdg-open")
                     .arg(&file_path)
                     .spawn()
@@ -391,6 +392,35 @@ fn install_appimage_linux(new_path: &std::path::Path) -> Result<(), String> {
             .spawn()
             .map_err(|e| format!("Failed to launch AppImage: {e}"))?;
     }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn install_deb_linux(deb_path: &std::path::Path) -> Result<(), String> {
+    // Prefer `pkexec dpkg -i` for a single polkit prompt + silent install
+    // when pkexec is available. Fall back to `xdg-open` (opens the
+    // desktop's package-manager UI) when pkexec isn't on PATH or returns
+    // non-zero — covers auth cancel, dpkg dependency failure, missing
+    // polkit agent, etc.
+    if which::which("pkexec").is_ok() {
+        info!("Installing .deb via pkexec dpkg -i");
+        let status = std::process::Command::new("pkexec")
+            .args(["dpkg", "-i"])
+            .arg(deb_path)
+            .status();
+        match status {
+            Ok(s) if s.success() => return Ok(()),
+            Ok(s) => warn!("pkexec dpkg -i exited with {s}; falling back to xdg-open"),
+            Err(e) => warn!("Failed to invoke pkexec ({e}); falling back to xdg-open"),
+        }
+    } else {
+        info!("pkexec not available; using xdg-open for .deb install");
+    }
+
+    std::process::Command::new("xdg-open")
+        .arg(deb_path)
+        .spawn()
+        .map_err(|e| format!("Failed to open .deb installer: {e}"))?;
     Ok(())
 }
 
@@ -686,8 +716,8 @@ mod tests {
     fn parse_command_line_handles_quoted_path_with_spaces() {
         // The exact format NSIS writes to UninstallString — a single quoted
         // path with no following args.
-        let (p, a) = parse_command_line(r#""C:\Users\Nicol\AppData\Local\QueryDen\uninstall.exe""#);
-        assert_eq!(p, r"C:\Users\Nicol\AppData\Local\QueryDen\uninstall.exe");
+        let (p, a) = parse_command_line(r#""C:\Users\alice\AppData\Local\QueryDen\uninstall.exe""#);
+        assert_eq!(p, r"C:\Users\alice\AppData\Local\QueryDen\uninstall.exe");
         assert!(a.is_empty());
     }
 
