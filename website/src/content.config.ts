@@ -5,7 +5,10 @@ const docs = defineCollection({
   loader: glob({ pattern: '**/*.{md,mdx}', base: './src/content/docs' }),
   schema: z.object({
     title: z.string(),
-    description: z.string().optional(),
+    // Required for SEO: every doc needs a unique meta description. Don't
+    // weaken to .optional() — falling back to the site-wide default hurts
+    // per-page search ranking.
+    description: z.string().min(20).max(180),
     section: z.enum([
       'getting-started',
       'engines',
