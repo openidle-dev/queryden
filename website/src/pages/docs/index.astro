@@ -1,0 +1,171 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { getCollection } from 'astro:content';
+import { SECTIONS, getDocsNav } from '../../lib/docs';
+
+const nav = await getDocsNav();
+
+// Recently updated — pull dates from frontmatter, sort desc, top 5.
+const all = await getCollection('docs', (e) => !e.data.draft);
+const recent = [...all]
+  .filter((e) => e.data.updated)
+  .sort((a, b) => (b.data.updated!.getTime() - a.data.updated!.getTime()))
+  .slice(0, 5)
+  .map((e) => ({
+    slug: e.id.replace(/\.(md|mdx)$/, ''),
+    title: e.data.title,
+    section: e.data.section,
+    updated: e.data.updated!,
+  }));
+
+const counts = Object.fromEntries(
+  nav.map((g) => [g.section, g.entries.length])
+);
+const sectionLabel = (slug: string) =>
+  SECTIONS.find((s) => s.slug === slug)?.label ?? slug;
+---
+<Layout title="Documentation · QueryDen" description="Install, connect, query, secure — the full reference." active="docs">
+  <header class="docs-landing-hero">
+    <div class="wrap">
+      <div class="eyebrow">Documentation</div>
+      <h1>Documentation</h1>
+      <p class="lede">
+        Install, set up the vault, run your first query — plus reference for each engine,
+        the editor, the AI integration, security, and troubleshooting.
+      </p>
+    </div>
+  </header>
+
+  <section class="section-pad" id="sections">
+    <div class="wrap">
+      <div class="docs-sec-grid">
+        {nav.map((group) => (
+          <a class="docs-sec-card" href={group.entries[0] ? `/docs/${group.entries[0].slug}` : '#'}>
+            <div class="docs-sec-eye mono">{group.label}</div>
+            <p class="docs-sec-blurb">{group.blurb}</p>
+            <div class="docs-sec-meta mono">
+              <span>{counts[group.section]} {counts[group.section] === 1 ? 'page' : 'pages'}</span>
+              <span class="docs-sec-arrow">→</span>
+            </div>
+          </a>
+        ))}
+      </div>
+
+      <section class="docs-recent">
+        <div class="eyebrow">Recently updated</div>
+        <ul class="docs-recent-list">
+          {recent.map((r) => (
+            <li>
+              <a href={`/docs/${r.slug}`} class="docs-recent-link">
+                <span class="docs-recent-title">{r.title}</span>
+                <span class="docs-recent-meta mono">
+                  <span>{sectionLabel(r.section)}</span>
+                  <span class="docs-recent-date">{r.updated.toISOString().slice(0, 10)}</span>
+                </span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </div>
+  </section>
+</Layout>
+
+<style>
+  .docs-landing-hero {
+    padding: 64px 0 28px;
+  }
+  .docs-landing-hero h1 {
+    margin-top: 18px;
+    max-width: 22ch;
+    font-size: clamp(32px, 4.4vw, 52px);
+    line-height: 1.05;
+    color: var(--ink-0);
+  }
+  .docs-landing-hero .lede {
+    margin-top: 22px;
+    max-width: 64ch;
+  }
+
+  .docs-sec-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+    margin-bottom: 72px;
+  }
+  @media (max-width: 900px) { .docs-sec-grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 560px) { .docs-sec-grid { grid-template-columns: 1fr; } }
+
+  .docs-sec-card {
+    display: flex; flex-direction: column;
+    gap: 10px;
+    padding: 22px 24px;
+    border-radius: var(--r-3);
+    border: 1px solid var(--line-1);
+    background: linear-gradient(180deg,
+      color-mix(in oklch, var(--bg-1) 100%, transparent) 0%,
+      color-mix(in oklch, var(--bg-1) 50%, var(--bg-0)) 100%);
+    color: inherit;
+    text-decoration: none;
+    transition: border-color var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+    min-height: 160px;
+  }
+  .docs-sec-card:hover {
+    border-color: color-mix(in oklch, var(--accent) 35%, var(--line-2));
+  }
+  .docs-sec-card:hover .docs-sec-arrow { transform: translateX(3px); }
+  .docs-sec-eye {
+    font-size: 12px;
+    color: var(--ink-0);
+    letter-spacing: 0.02em;
+    text-transform: none;
+    font-weight: 500;
+  }
+  .docs-sec-blurb {
+    color: var(--ink-2);
+    font-size: 13.5px;
+    line-height: 1.55;
+    margin: 0;
+  }
+  .docs-sec-meta {
+    margin-top: auto;
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 11px;
+    color: var(--ink-4);
+    letter-spacing: 0.04em;
+  }
+  .docs-sec-arrow {
+    color: var(--accent);
+    transition: transform var(--t-fast) var(--ease);
+  }
+
+  .docs-recent {
+    border-top: 1px solid var(--line-1);
+    padding-top: 32px;
+  }
+  .docs-recent-list {
+    list-style: none; padding: 0; margin: 18px 0 0;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .docs-recent-link {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 24px;
+    padding: 12px 14px;
+    margin: 0 -14px;
+    border-radius: var(--r-2);
+    color: inherit;
+    text-decoration: none;
+    align-items: center;
+    transition: background var(--t-fast) var(--ease);
+  }
+  .docs-recent-link:hover { background: color-mix(in oklch, var(--bg-2) 50%, transparent); }
+  .docs-recent-title { color: var(--ink-0); font-size: 14.5px; }
+  .docs-recent-meta {
+    display: flex; gap: 14px;
+    color: var(--ink-3);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+  }
+  .docs-recent-date { color: var(--ink-4); }
+</style>

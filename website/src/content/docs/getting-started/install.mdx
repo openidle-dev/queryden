@@ -1,0 +1,54 @@
+---
+title: Install
+description: Native installers for macOS, Windows, and Linux. ~11 MB across platforms.
+section: getting-started
+order: 10
+updated: 2026-05-13
+---
+
+QueryDen ships native installers built by GitHub Actions from the public source tree. Pick your OS:
+
+| Platform | File | Size |
+|----------|------|------|
+| macOS (Apple Silicon) | `QueryDen_1.0.11_aarch64.dmg` | ~11 MB |
+| Windows (x86_64) | `QueryDen_1.0.11_x64-setup.exe` | ~8 MB |
+| Linux (.deb) | `QueryDen_1.0.11_amd64.deb` | ~11 MB |
+| Linux (AppImage) | `QueryDen_1.0.11_amd64.AppImage` | ~84 MB |
+
+The AppImage bundles its own runtime, which is why it's larger. Use the `.deb` if your distribution supports it.
+
+[Download page →](/download)
+
+## Verify the download
+
+Every installer ships with a matching `.sha256` next to it on the GitHub release page. Run the matching command for your OS and compare the output with the published hash.
+
+```powershell
+# Windows (PowerShell)
+Get-FileHash QueryDen_1.0.11_x64-setup.exe -Algorithm SHA256
+```
+
+```bash
+# macOS / Linux
+shasum -a 256 QueryDen_1.0.11_aarch64.dmg
+sha256sum QueryDen_1.0.11_amd64.deb
+```
+
+If the hashes don't match, don't run the installer — open an issue.
+
+## System requirements
+
+- **macOS** 11 Big Sur or newer. Apple Silicon only (no Intel build right now).
+- **Windows** 10 1809 or newer. x86_64. WebView2 runtime is auto-installed by the setup .exe.
+- **Linux** glibc 2.31+ (Debian 11 / Ubuntu 22.04+). `webkit2gtk` 4.1. `libsecret` / GNOME Keyring for the vault.
+
+## Build from source
+
+```bash
+git clone https://github.com/openidle-dev/queryden.git
+cd queryden
+npm install
+npm run tauri build
+```
+
+Full instructions live in [the repo's README](https://github.com/openidle-dev/queryden#building).

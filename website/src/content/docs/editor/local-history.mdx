@@ -1,0 +1,37 @@
+---
+title: Local history
+description: Silent line-level snapshots of every editor tab. Locally, never synced.
+section: editor
+order: 30
+updated: 2026-05-13
+---
+
+QueryDen takes a snapshot of every editor tab every five seconds. The snapshots are stored encrypted in your vault, never leave your machine, and never expire.
+
+## What gets captured
+
+- Every editor tab, including unsaved scratch tabs.
+- Full buffer contents at the snapshot instant.
+- Connection context (so you can see which DB you were aiming at).
+- A timestamp.
+
+## What you do with it
+
+`Ctrl+Alt+H` (or **Tab → History** in the toolbar) opens the local-history panel for the current tab. The panel shows every snapshot as a timestamped row. Click any row to see a **line-level diff** against the current buffer. Hit **Revert** to swap the current buffer for the snapshot.
+
+> Reverting does not destroy the current buffer — it gets snapshotted first. So "revert" is one undoable step, not a one-way trip.
+
+## Where it lives on disk
+
+`~/.local/share/com.queryden.app/local-history.json` on Linux, equivalent paths on macOS and Windows. The file is encrypted alongside your other vault data — see [Vault setup](/docs/getting-started/vault-setup).
+
+## When to use it
+
+- You wrote a clever query, ran it, then "improved" it for fifteen minutes, then realized the first version was better.
+- A teammate asked "what did the query look like before the migration?" and you ran the migration on Monday.
+- You closed a tab with unsaved scratch work and want it back.
+
+## Coming soon
+
+- Cross-tab diff (compare snapshots from different tabs).
+- Export a snapshot to a `.sql` file.

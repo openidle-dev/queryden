@@ -1,0 +1,37 @@
+---
+title: Statement-aware run
+description: Ctrl+Enter runs the one statement under your cursor — not the whole buffer.
+section: editor
+order: 20
+updated: 2026-05-13
+---
+
+The single most-loved shortcut in QueryDen: `Ctrl+Enter` parses the current buffer, finds the statement boundary at your cursor, and runs **only** that one.
+
+## Why this matters
+
+Most database clients run "the whole tab" or "everything you have selected." Both are bad defaults:
+
+- Running the whole tab is destructive when one of those statements is a `DELETE`.
+- Forcing a selection means the muscle memory is "double-click → triple-click → run" instead of just "run."
+
+Statement-aware run inverts the default. You write a 30-statement scratch tab. The cursor is wherever you last typed. `Ctrl+Enter` fires that one statement. The other 29 sit untouched.
+
+## How boundaries are detected
+
+The parser walks tokens forward and backward from the cursor, treating `;` outside of strings and comments as the statement boundary. CTEs, DO blocks, and multi-line statements are handled — the parser does **not** split on `;` inside a `$$ body $$` or inside a `CASE WHEN ... END` clause.
+
+If the cursor sits on whitespace between two statements, QueryDen runs the **next** one — the one your eye is reading toward.
+
+## Running multiple statements
+
+If you want to run several statements at once, select the range first. Selection wins over cursor.
+
+## Per-statement gutter status
+
+After a run, the gutter next to the executed statement shows a small status indicator: green check for success, red dot for error, yellow dot for warning. Click the indicator for the row count, elapsed time, and (on error) the full server message.
+
+## What doesn't work yet
+
+- Multiple parallel selections across non-contiguous statements. (Open feature request.)
+- `\` meta-commands when piped through the embedded `psql` — those run in the CLI tab, not the editor.

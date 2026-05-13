@@ -1,0 +1,32 @@
+---
+title: PostgreSQL
+description: Native driver via the patched tauri-plugin-sql. INTERVAL, OID, and array types supported.
+section: engines
+order: 10
+updated: 2026-05-13
+---
+
+PostgreSQL is QueryDen's first-class engine. The driver is the upstream `tauri-plugin-sql` with a local patch that adds support for several types upstream doesn't emit cleanly: `INTERVAL`, `OID`, multidimensional arrays, and a few `bytea` edge cases.
+
+## Connection
+
+The standard PG connection fields apply:
+
+- **Host** — e.g. `db.acme.dev`
+- **Port** — default `5432`
+- **Database** — the database name
+- **User / Password** — stored in the encrypted vault
+- **SSL** — required / preferred / disabled. Required on managed PG (Supabase, Cloud SQL, RDS) by default.
+- **SSH tunnel** — optional. Real `ssh2`-backed tunneling; no `ssh` subprocess.
+
+## Cockroach + Supabase
+
+Both speak the Postgres wire protocol and use the same driver. The Supabase connection helper UI generates the right host/port/SSL fields from a Supabase project URL — that's the only delta.
+
+## Coming soon
+
+- Full type catalog table — every PG type with how QueryDen renders it in the grid.
+- Logical replication quickstart.
+- `psql` integration deep-dive (the version-matched embedded client).
+
+If a specific type or feature is missing, open an issue with a minimal reproduction.

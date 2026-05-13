@@ -1,0 +1,40 @@
+---
+title: Set up the vault
+description: On first launch you create a master password. The vault is encrypted and machine-bound.
+section: getting-started
+order: 20
+updated: 2026-05-13
+---
+
+On first launch, QueryDen asks you to create a **master password** for the encrypted vault. The vault stores every connection string, every saved query, and every local-history snapshot.
+
+> The master password never leaves your machine. It is mixed with a machine fingerprint to derive the AES-256-GCM encryption key. The key never leaves your machine either.
+
+## What you choose
+
+- A passphrase you'll remember. A long one is better than a clever short one — Argon2id is memory-hard, so the slow KDF is doing the heavy lifting either way.
+- That's it. There is no recovery flow. If you forget it, the vault is unreadable.
+
+## What QueryDen does behind the scenes
+
+1. Reads a machine fingerprint — `/etc/machine-id` on Linux, `IOPlatformUUID` on macOS, `CSP UUID` on Windows.
+2. Loads (or creates) the OS-keychain entry for the master key.
+3. Derives the AES-256-GCM key from your passphrase + the machine fingerprint via Argon2id.
+4. Writes the encrypted vault file to the Tauri app data directory.
+
+Full layer-by-layer walkthrough lives on [the security page](/security#vault).
+
+## Brute-force lockout
+
+After 5 failed unlock attempts, the vault locks for an exponentially increasing duration. State persists across app restarts via the encrypted state file, so a relaunch doesn't reset the counter.
+
+## Moving machines
+
+By design, the vault file does **not** load on a different computer — even with the correct password. The machine fingerprint changes; the derived key changes; the MAC fails.
+
+If you want to move connections between machines:
+
+1. Export the connection list (plaintext JSON of the structure you choose — passwords are not exported by default).
+2. Set the same passwords on the new machine after import.
+
+A future release will add an explicit "move vault" flow.

@@ -1,0 +1,708 @@
+---
+import Layout from './Layout.astro';
+import DocsSearch from '../components/DocsSearch.astro';
+import { getDocsNav, findSiblings, type DocSectionGroup } from '../lib/docs';
+import { SITE } from '../lib/site';
+
+interface Heading { depth: number; slug: string; text: string }
+
+interface Props {
+  title: string;
+  description?: string;
+  section: string;
+  currentSlug: string;
+  updated?: Date;
+  headings: Heading[];
+  sourcePath?: string;
+}
+
+const { title, description, section, currentSlug, updated, headings, sourcePath } = Astro.props;
+
+const editUrl = sourcePath
+  ? `${SITE.repo}/edit/main/website/src/content/docs/${sourcePath}`
+  : `${SITE.repo}/edit/main/website/src/content/docs/${currentSlug}.mdx`;
+
+const nav: DocSectionGroup[] = await getDocsNav();
+const { prev, next } = findSiblings(nav, currentSlug);
+
+const tocHeadings = headings.filter((h) => h.depth >= 2 && h.depth <= 3);
+---
+<Layout title={`${title} · QueryDen docs`} description={description} active="docs">
+  <div class="docs-shell">
+    <aside class="docs-side" aria-label="Documentation navigation">
+      <div class="docs-side-inner">
+        <DocsSearch />
+        <nav class="docs-nav">
+          {nav.map((group) => (
+            <section class="docs-nav-section">
+              <div class="docs-nav-label mono">{group.label}</div>
+              <ul class="docs-nav-list">
+                {group.entries.length === 0 ? (
+                  <li class="docs-nav-empty mono">soon →</li>
+                ) : (
+                  group.entries.map((e) => (
+                    <li>
+                      <a
+                        href={`/docs/${e.slug}`}
+                        class:list={['docs-nav-link', { 'is-active': e.slug === currentSlug }]}
+                      >
+                        {e.title}
+                      </a>
+                    </li>
+                  ))
+                )}
+              </ul>
+            </section>
+          ))}
+        </nav>
+      </div>
+    </aside>
+
+    <article class="docs-article">
+      <header class="docs-head">
+        <div class="docs-crumb mono">
+          <a href="/docs">Docs</a>
+          <span class="docs-crumb-sep">/</span>
+          <span class="docs-crumb-section">{section.replace(/-/g, ' ')}</span>
+        </div>
+        <h1 class="docs-title">{title}</h1>
+        {description && <p class="docs-lede">{description}</p>}
+        <div class="docs-meta-row mono">
+          {updated && (
+            <span class="docs-updated">Last updated {updated.toISOString().slice(0, 10)}</span>
+          )}
+          <a class="docs-edit" href={editUrl} rel="noopener" target="_blank">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            Edit on GitHub
+          </a>
+        </div>
+      </header>
+
+      <div class="docs-body">
+        <slot />
+      </div>
+
+      <footer class="docs-foot">
+        <div class="docs-nav-prev">
+          {prev && (
+            <a href={`/docs/${prev.slug}`}>
+              <div class="docs-nav-dir mono">← Previous</div>
+              <div class="docs-nav-name">{prev.title}</div>
+            </a>
+          )}
+        </div>
+        <div class="docs-nav-next">
+          {next && (
+            <a href={`/docs/${next.slug}`}>
+              <div class="docs-nav-dir mono">Next →</div>
+              <div class="docs-nav-name">{next.title}</div>
+            </a>
+          )}
+        </div>
+      </footer>
+    </article>
+
+    <aside class="docs-toc" aria-label="On this page">
+      {tocHeadings.length > 0 && (
+        <div class="docs-toc-inner">
+          <div class="docs-toc-eye mono">On this page</div>
+          <ul class="docs-toc-list">
+            {tocHeadings.map((h) => (
+              <li class={`docs-toc-${h.depth}`}>
+                <a href={`#${h.slug}`} data-toc-slug={h.slug}>{h.text}</a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </aside>
+  </div>
+</Layout>
+
+<script>
+  // Code block chrome — wrap every <pre> in the docs body with a language label
+  // and a copy button. Runs once on page load.
+  const LANG_LABELS: Record<string, string> = {
+    bash: 'shell',
+    sh: 'shell',
+    shell: 'shell',
+    js: 'javascript',
+    ts: 'typescript',
+    powershell: 'powershell',
+    ps1: 'powershell',
+    rust: 'rust',
+    rs: 'rust',
+    sql: 'sql',
+    json: 'json',
+    yaml: 'yaml',
+    yml: 'yaml',
+    toml: 'toml',
+    plaintext: 'text',
+    text: 'text',
+  };
+
+  const COPY_ICON = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
+  const CHECK_ICON = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4.5 4.5L19 7"/></svg>';
+
+  document.querySelectorAll<HTMLPreElement>('.docs-body pre').forEach((pre) => {
+    if (pre.parentElement?.classList.contains('docs-code-block')) return;
+    const code = pre.querySelector('code');
+    const langClass = Array.from(code?.classList ?? []).find((c) => c.startsWith('language-'));
+    const raw = langClass?.replace('language-', '')
+      ?? pre.dataset.language
+      ?? 'text';
+    const label = LANG_LABELS[raw] ?? raw;
+
+    const wrap = document.createElement('figure');
+    wrap.className = 'docs-code-block';
+    const bar = document.createElement('div');
+    bar.className = 'docs-code-bar';
+    bar.innerHTML = `
+      <span class="docs-code-lang">${label}</span>
+      <button type="button" class="docs-code-copy" aria-label="Copy code">
+        ${COPY_ICON}
+        <span class="docs-code-copy-label">Copy</span>
+      </button>
+    `;
+    pre.parentNode?.insertBefore(wrap, pre);
+    wrap.appendChild(bar);
+    wrap.appendChild(pre);
+
+    const btn = wrap.querySelector<HTMLButtonElement>('.docs-code-copy')!;
+    const labelSpan = btn.querySelector<HTMLSpanElement>('.docs-code-copy-label')!;
+    const iconHost = btn;
+    btn.addEventListener('click', async () => {
+      const text = code?.innerText ?? pre.innerText ?? '';
+      let ok = false;
+      try {
+        await navigator.clipboard.writeText(text);
+        ok = true;
+      } catch {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+        document.body.appendChild(ta);
+        ta.select();
+        try { ok = document.execCommand('copy'); } catch {}
+        document.body.removeChild(ta);
+      }
+      if (ok) {
+        btn.classList.add('is-copied');
+        const prevIcon = iconHost.querySelector('svg');
+        if (prevIcon) prevIcon.outerHTML = CHECK_ICON;
+        labelSpan.textContent = 'Copied';
+        window.setTimeout(() => {
+          btn.classList.remove('is-copied');
+          const cur = iconHost.querySelector('svg');
+          if (cur) cur.outerHTML = COPY_ICON;
+          labelSpan.textContent = 'Copy';
+        }, 1500);
+      }
+    });
+  });
+
+  // Scroll-spy: highlight the ToC link for the heading currently in view.
+  const tocLinks = document.querySelectorAll<HTMLAnchorElement>('.docs-toc-list a[data-toc-slug]');
+  if (tocLinks.length && 'IntersectionObserver' in window) {
+    const linkBySlug = new Map<string, HTMLAnchorElement>();
+    tocLinks.forEach((l) => {
+      const slug = l.dataset.tocSlug;
+      if (slug) linkBySlug.set(slug, l);
+    });
+
+    const headings = Array.from(linkBySlug.keys())
+      .map((slug) => document.getElementById(slug))
+      .filter((el): el is HTMLElement => el !== null);
+
+    // Track which headings are currently intersecting. Choose the topmost
+    // intersecting heading as the active one; if none intersect, fall back
+    // to the last heading scrolled past.
+    const visible = new Set<string>();
+    let lastActive = '';
+
+    const setActive = (slug: string) => {
+      if (slug === lastActive) return;
+      lastActive = slug;
+      tocLinks.forEach((l) => l.classList.toggle('is-active', l.dataset.tocSlug === slug));
+    };
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((e) => {
+          const id = (e.target as HTMLElement).id;
+          if (e.isIntersecting) visible.add(id);
+          else visible.delete(id);
+        });
+
+        if (visible.size > 0) {
+          // Pick the topmost visible heading.
+          let topmost: HTMLElement | null = null;
+          let topY = Infinity;
+          for (const h of headings) {
+            if (visible.has(h.id)) {
+              const y = h.getBoundingClientRect().top;
+              if (y < topY) { topY = y; topmost = h; }
+            }
+          }
+          if (topmost) setActive(topmost.id);
+        } else {
+          // None visible — find the last heading above the viewport top.
+          let above: HTMLElement | null = null;
+          for (const h of headings) {
+            if (h.getBoundingClientRect().top < 100) above = h;
+            else break;
+          }
+          if (above) setActive(above.id);
+        }
+      },
+      { rootMargin: '-80px 0px -65% 0px', threshold: [0, 1] }
+    );
+
+    headings.forEach((h) => observer.observe(h));
+
+    // Click any ToC link → smooth scroll AND immediately set active (don't wait
+    // for the IntersectionObserver to catch up).
+    tocLinks.forEach((l) => {
+      l.addEventListener('click', () => {
+        const slug = l.dataset.tocSlug;
+        if (slug) setActive(slug);
+      });
+    });
+  }
+</script>
+
+<style is:global>
+  .docs-shell {
+    display: grid;
+    grid-template-columns: 232px minmax(0, 1fr) 208px;
+    gap: 44px;
+    max-width: var(--maxw);
+    margin: 0 auto;
+    padding: 48px var(--gutter) 96px;
+  }
+  @media (max-width: 1100px) {
+    .docs-shell { grid-template-columns: 220px minmax(0, 1fr); gap: 32px; }
+    .docs-toc { display: none; }
+  }
+  @media (max-width: 760px) {
+    .docs-shell { grid-template-columns: 1fr; padding: 28px var(--gutter) 64px; }
+    .docs-side { position: static; }
+    .docs-side-inner { max-height: none; }
+  }
+
+  /* ----- Sidebar ----- */
+  .docs-side {
+    position: sticky;
+    top: 80px;
+    align-self: start;
+    height: calc(100vh - 96px);
+  }
+  .docs-side-inner {
+    height: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 8px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-2) transparent;
+  }
+  .docs-side-inner::-webkit-scrollbar { width: 6px; }
+  .docs-side-inner::-webkit-scrollbar-track { background: transparent; }
+  .docs-side-inner::-webkit-scrollbar-thumb {
+    background: var(--line-2);
+    border-radius: 3px;
+  }
+  .docs-side-inner::-webkit-scrollbar-thumb:hover { background: var(--ink-4); }
+  .docs-side-eye {
+    font-size: 10.5px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-4);
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--line-1);
+    margin-bottom: 16px;
+  }
+  .docs-nav { display: flex; flex-direction: column; gap: 22px; }
+  .docs-nav-section { display: flex; flex-direction: column; gap: 8px; }
+  .docs-nav-label {
+    font-size: 10.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .docs-nav-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 2px; }
+  .docs-nav-link {
+    display: block;
+    padding: 4px 0 4px 14px;
+    color: var(--ink-2);
+    font-size: 13px;
+    line-height: 1.5;
+    text-decoration: none;
+    border-left: 1px solid color-mix(in oklch, var(--line-1) 60%, transparent);
+    margin-left: -1px;
+    transition: color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+  }
+  .docs-nav-link:hover {
+    color: var(--ink-0);
+    border-left-color: var(--ink-4);
+  }
+  .docs-nav-link.is-active {
+    color: var(--accent);
+    border-left-color: var(--accent);
+    border-left-width: 2px;
+    margin-left: -2px;
+  }
+  .docs-nav-empty {
+    font-size: 11px;
+    color: var(--ink-4);
+    padding: 4px 0;
+    letter-spacing: 0.04em;
+  }
+
+  /* ----- Article ----- */
+  .docs-article { min-width: 0; }
+  .docs-head { margin-bottom: 32px; }
+  .docs-crumb { display: flex; gap: 8px; font-size: 11px; color: var(--ink-4); letter-spacing: 0.06em; margin-bottom: 14px; }
+  .docs-crumb a { color: var(--ink-3); text-decoration: none; }
+  .docs-crumb a:hover { color: var(--ink-1); }
+  .docs-crumb-sep { color: var(--ink-4); }
+  .docs-crumb-section { color: var(--ink-2); text-transform: capitalize; }
+  .docs-title {
+    font-size: clamp(28px, 3.4vw, 42px);
+    line-height: 1.08;
+    letter-spacing: -0.022em;
+    margin: 0 0 14px;
+    color: var(--ink-0);
+    font-weight: 500;
+  }
+  .docs-lede {
+    font-size: 16.5px;
+    color: var(--ink-2);
+    line-height: 1.55;
+    margin: 0 0 12px;
+    max-width: 60ch;
+  }
+  .docs-meta-row {
+    display: flex; flex-wrap: wrap;
+    gap: 18px;
+    align-items: center;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    color: var(--ink-4);
+  }
+  .docs-updated { color: var(--ink-4); }
+  .docs-edit {
+    display: inline-flex; align-items: center; gap: 5px;
+    color: var(--ink-3);
+    text-decoration: none;
+    padding: 3px 8px;
+    margin: -3px -8px;
+    border-radius: 5px;
+    transition: color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+  }
+  .docs-edit:hover {
+    color: var(--accent);
+    background: color-mix(in oklch, var(--accent) 8%, transparent);
+  }
+  .docs-edit svg { opacity: 0.85; }
+
+  .docs-body {
+    color: var(--ink-1);
+    font-size: 15px;
+    line-height: 1.7;
+  }
+  .docs-body > * + * { margin-top: 18px; }
+  .docs-body h2 {
+    margin-top: 64px;
+    margin-bottom: 14px;
+    padding-top: 22px;
+    font-size: 26px;
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+    color: var(--ink-0);
+    font-weight: 600;
+    scroll-margin-top: 90px;
+    background-image: linear-gradient(90deg, var(--accent) 0%, transparent 100%);
+    background-position: 0 0;
+    background-size: 36px 2px;
+    background-repeat: no-repeat;
+  }
+  .docs-body h3 {
+    margin-top: 36px;
+    margin-bottom: 8px;
+    font-size: 18px;
+    line-height: 1.3;
+    color: var(--ink-1);
+    scroll-margin-top: 90px;
+    font-weight: 600;
+  }
+  .docs-body h2:first-child {
+    margin-top: 0;
+    padding-top: 0;
+    background-image: none;
+  }
+  .docs-body h3:first-child { margin-top: 0; }
+  .docs-body h2 code, .docs-body h3 code {
+    background: transparent;
+    border: 0;
+    color: var(--accent);
+    padding: 0;
+  }
+  .docs-title { font-weight: 600; font-size: clamp(32px, 3.6vw, 44px); }
+  .docs-body p { color: var(--ink-1); margin: 0; }
+  .docs-body strong { color: var(--ink-0); font-weight: 500; }
+  .docs-body a:not(.btn):not(.docs-callout-cta) {
+    color: var(--accent);
+    border-bottom: 1px solid color-mix(in oklch, var(--accent) 35%, transparent);
+    text-decoration: none;
+    transition: color var(--t-fast) var(--ease);
+  }
+  .docs-body a:not(.btn):hover { color: var(--accent-w); }
+
+  .docs-body code:not(pre code) {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    background: var(--bg-2);
+    border: 1px solid var(--line-1);
+    padding: 1px 6px;
+    border-radius: 5px;
+    color: var(--ink-0);
+  }
+  .docs-code-block {
+    position: relative;
+    margin: 0;
+    border: 1px solid var(--line-1);
+    border-radius: var(--r-2);
+    background: var(--bg-1);
+    overflow: hidden;
+  }
+  .docs-code-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 10px 6px 14px;
+    border-bottom: 1px solid color-mix(in oklch, var(--line-1) 60%, transparent);
+    background: color-mix(in oklch, var(--bg-2) 50%, transparent);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+  }
+  .docs-code-lang {
+    color: var(--ink-4);
+    text-transform: uppercase;
+  }
+  .docs-code-copy {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--ink-3);
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    cursor: pointer;
+    transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+  }
+  .docs-code-copy:hover {
+    color: var(--ink-0);
+    border-color: var(--line-2);
+    background: var(--bg-2);
+  }
+  .docs-code-copy:focus-visible {
+    outline: none;
+    color: var(--ink-0);
+    border-color: color-mix(in oklch, var(--accent) 55%, var(--line-2));
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 18%, transparent);
+  }
+  .docs-code-copy.is-copied {
+    color: var(--accent);
+    border-color: color-mix(in oklch, var(--accent) 35%, var(--line-2));
+  }
+  .docs-code-copy svg { display: block; }
+
+  .docs-body pre {
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    padding: 14px 16px;
+    margin: 0;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.7;
+  }
+  .docs-body pre > code { background: transparent; border: 0; padding: 0; }
+  .docs-code-block + p,
+  .docs-code-block + .docs-callout,
+  .docs-code-block + ul,
+  .docs-code-block + ol {
+    margin-top: 22px;
+  }
+
+  .docs-body ul, .docs-body ol {
+    margin: 0;
+    padding-left: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .docs-body li { color: var(--ink-1); }
+  .docs-body li > * + * { margin-top: 8px; }
+
+  .docs-body blockquote {
+    margin: 0;
+    padding: 14px 18px;
+    border-left: 3px solid color-mix(in oklch, var(--accent) 45%, var(--line-2));
+    background: color-mix(in oklch, var(--accent) 5%, var(--bg-1));
+    border-radius: 0 var(--r-2) var(--r-2) 0;
+    color: var(--ink-1);
+  }
+  .docs-body blockquote p { color: var(--ink-1); }
+
+  /* Generous breathing room around block components — the default `> * + *`
+     18px is too tight when the previous element is a paragraph and the next
+     is a heavier block. */
+  .docs-body > * + blockquote,
+  .docs-body > * + table,
+  .docs-body > * + .docs-code-block,
+  .docs-body > * + .docs-callout,
+  .docs-body > blockquote + *,
+  .docs-body > table + *,
+  .docs-body > .docs-code-block + *,
+  .docs-body > .docs-callout + * {
+    margin-top: 26px;
+  }
+
+  .docs-body table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13.5px;
+    border: 1px solid var(--line-1);
+    border-radius: var(--r-2);
+    overflow: hidden;
+  }
+  .docs-body th, .docs-body td {
+    padding: 10px 14px;
+    text-align: left;
+    border-bottom: 1px solid color-mix(in oklch, var(--line-1) 50%, transparent);
+  }
+  .docs-body th {
+    background: var(--bg-2);
+    color: var(--ink-1);
+    font-weight: 500;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .docs-body tr:last-child td { border-bottom: 0; }
+
+  /* Callout component — used in MDX */
+  .docs-callout {
+    margin: 24px 0;
+    padding: 16px 20px;
+    border-radius: var(--r-2);
+    border: 1px solid color-mix(in oklch, var(--accent) 25%, var(--line-1));
+    background:
+      linear-gradient(180deg,
+        color-mix(in oklch, var(--accent) 5%, transparent) 0%,
+        color-mix(in oklch, var(--accent) 2%, transparent) 100%);
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 14px;
+  }
+  .docs-callout-warn {
+    border-color: color-mix(in oklch, var(--warn) 35%, var(--line-1));
+    background: linear-gradient(180deg,
+      color-mix(in oklch, var(--warn) 7%, transparent) 0%,
+      color-mix(in oklch, var(--warn) 2%, transparent) 100%);
+  }
+  .docs-callout-icon {
+    width: 22px; height: 22px;
+    display: grid; place-items: center;
+    background: var(--bg-2);
+    border-radius: 50%;
+    color: var(--accent);
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  .docs-callout-warn .docs-callout-icon { color: var(--warn); }
+  .docs-callout-body { color: var(--ink-1); font-size: 14px; line-height: 1.6; }
+  .docs-callout-body > * + * { margin-top: 8px; }
+
+  /* ----- Footer (prev/next) ----- */
+  .docs-foot {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin-top: 72px;
+    padding-top: 28px;
+    border-top: 1px solid var(--line-1);
+  }
+  .docs-foot a {
+    display: block;
+    padding: 14px 18px;
+    border: 1px solid var(--line-1);
+    border-radius: var(--r-2);
+    background: var(--bg-1);
+    color: inherit;
+    text-decoration: none;
+    transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+  }
+  .docs-foot a:hover {
+    border-color: var(--line-2);
+    background: var(--bg-2);
+  }
+  .docs-nav-dir { font-size: 11px; color: var(--ink-3); letter-spacing: 0.04em; margin-bottom: 6px; }
+  .docs-nav-name { color: var(--ink-0); font-size: 14.5px; font-weight: 500; }
+  .docs-nav-next a { text-align: right; }
+  .docs-nav-next { grid-column: 2; }
+
+  /* ----- On-this-page ToC ----- */
+  .docs-toc {
+    position: sticky;
+    top: 80px;
+    align-self: start;
+    transform: translateZ(0);
+    will-change: transform;
+  }
+  .docs-toc-inner { padding-left: 14px; position: relative; }
+  .docs-toc-inner::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 1px;
+    background: var(--line-1);
+  }
+  .docs-toc-eye {
+    font-size: 10.5px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-4);
+    margin-bottom: 14px;
+  }
+  .docs-toc-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; }
+  .docs-toc-list li { position: relative; }
+  .docs-toc-list a {
+    display: block;
+    padding: 4px 0;
+    color: var(--ink-3);
+    text-decoration: none;
+    line-height: 1.4;
+    transition: color var(--t-med) var(--ease);
+  }
+  .docs-toc-list a:hover { color: var(--ink-1); }
+  .docs-toc-list a.is-active {
+    color: var(--accent);
+  }
+  .docs-toc-list a.is-active::before {
+    content: '';
+    position: absolute;
+    left: -15px; top: 6px; bottom: 6px;
+    width: 2px;
+    background: var(--accent);
+    border-radius: 1px;
+    box-shadow: 0 0 12px color-mix(in oklch, var(--accent) 60%, transparent);
+  }
+  .docs-toc-3 a { padding-left: 12px; font-size: 12px; color: var(--ink-4); }
+  .docs-toc-3 a.is-active::before { left: -15px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .docs-toc-list a { transition: none; }
+  }
+</style>

@@ -1,0 +1,58 @@
+---
+title: Vault internals
+description: AES-256-GCM, Argon2id, machine binding, OS keychain. The full layer cake.
+section: security
+order: 10
+updated: 2026-05-13
+---
+
+The encrypted vault file is what makes QueryDen safe to trust with production credentials. This page walks the layers; for the byte-by-byte hex view, see [the Security page](/security#vault).
+
+## The encrypted file
+
+Path on disk:
+
+- **Linux** — `~/.local/share/com.queryden.app/vault.json`
+- **macOS** — `~/Library/Application Support/com.queryden.app/vault.json`
+- **Windows** — `%APPDATA%\com.queryden.app\vault.json`
+
+The file is binary despite the `.json` suffix. The layout is:
+
+| Region | Size | Purpose |
+|--------|------|---------|
+| Magic + version | 6 B | File-format header, version-tagged |
+| Salt | 16 B | Argon2id salt — currently static, [issue #14](https://github.com/openidle-dev/queryden/issues/14) tracks per-vault randomization |
+| Nonce | 12 B | AES-GCM nonce, regenerated on each write |
+| Ciphertext | variable | The encrypted vault body |
+| MAC | 16 B | AES-GCM authentication tag |
+
+## The encryption pipeline
+
+1. You type a master password.
+2. QueryDen reads the **machine fingerprint** for your OS:
+   - Linux: `/etc/machine-id`
+   - macOS: `IOPlatformUUID`
+   - Windows: `CSP UUID`
+3. The OS keychain entry for the master key is loaded (or created):
+   - macOS Keychain (Secure Enclave-bound when available)
+   - Windows Credential Manager (DPAPI)
+   - Linux `libsecret` / GNOME Keyring
+4. The three inputs feed Argon2id, which derives the AES-256-GCM key.
+5. The key encrypts the vault payload. The nonce + ciphertext + MAC are written atomically.
+
+If any single input is wrong on read — wrong password, wrong machine, missing OS keychain entry — the MAC validation fails and the file refuses to decrypt.
+
+## Brute-force lockout
+
+Five failed unlock attempts in a row trip the lockout. The lockout duration doubles each retry. State persists across app restarts via the encrypted state file, so a relaunch doesn't reset the counter.
+
+## What we don't defend against
+
+- A rooted / compromised OS. If an attacker controls your kernel, no userland app survives.
+- A keylogger between your keyboard and your master password.
+- A network attacker between you and a database that lacks TLS. Use SSL or the SSH tunnel — that's why they're there.
+- You pasting a connection string in Slack. We can't fix that.
+
+## Verify everything
+
+The encryption code is roughly 300 lines of Rust at [`src-tauri/src/storage.rs`](https://github.com/openidle-dev/queryden/blob/main/src-tauri/src/storage.rs). The CI pipeline that builds the binaries lives in the same repo. There is no closed-source layer.

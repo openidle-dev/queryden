@@ -1,0 +1,100 @@
+---
+// Callout / admonition for MDX:
+//   <Callout type="info">…</Callout>
+//   <Callout type="tip" title="Heads up">…</Callout>
+//   <Callout type="warn">…</Callout>
+//   <Callout type="danger">…</Callout>
+interface Props {
+  type?: 'info' | 'tip' | 'warn' | 'danger';
+  title?: string;
+}
+const { type = 'info', title } = Astro.props;
+
+const ICON = {
+  info:   'i',
+  tip:    '★',
+  warn:   '!',
+  danger: '×',
+}[type];
+---
+<div class={`docs-callout docs-callout-${type}`}>
+  <div class="docs-callout-icon" aria-hidden="true">{ICON}</div>
+  <div class="docs-callout-body">
+    {title && <div class="docs-callout-title">{title}</div>}
+    <slot />
+  </div>
+</div>
+
+<style is:global>
+  .docs-callout {
+    margin: 24px 0;
+    padding: 14px 18px 16px;
+    border-radius: var(--r-2);
+    border: 1px solid color-mix(in oklch, var(--accent) 22%, var(--line-1));
+    background:
+      linear-gradient(180deg,
+        color-mix(in oklch, var(--accent) 6%, transparent) 0%,
+        color-mix(in oklch, var(--accent) 2%, transparent) 100%);
+    display: grid;
+    grid-template-columns: 24px 1fr;
+    gap: 14px;
+    align-items: start;
+  }
+  .docs-callout-icon {
+    width: 22px; height: 22px;
+    display: grid; place-items: center;
+    background: var(--bg-2);
+    border: 1px solid color-mix(in oklch, var(--accent) 30%, var(--line-1));
+    border-radius: 50%;
+    color: var(--accent);
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1;
+    margin-top: 1px;
+  }
+  .docs-callout-body { color: var(--ink-1); font-size: 14px; line-height: 1.65; }
+  .docs-callout-body > * + * { margin-top: 8px; }
+  .docs-callout-title {
+    color: var(--ink-0);
+    font-weight: 600;
+    font-size: 13.5px;
+    letter-spacing: -0.005em;
+  }
+
+  .docs-callout-tip {
+    border-color: color-mix(in oklch, oklch(0.75 0.18 145) 32%, var(--line-1));
+    background:
+      linear-gradient(180deg,
+        color-mix(in oklch, oklch(0.75 0.18 145) 7%, transparent) 0%,
+        color-mix(in oklch, oklch(0.75 0.18 145) 2%, transparent) 100%);
+  }
+  .docs-callout-tip .docs-callout-icon {
+    border-color: color-mix(in oklch, oklch(0.75 0.18 145) 40%, var(--line-1));
+    color: oklch(0.82 0.16 145);
+  }
+
+  .docs-callout-warn {
+    border-color: color-mix(in oklch, var(--warn) 35%, var(--line-1));
+    background:
+      linear-gradient(180deg,
+        color-mix(in oklch, var(--warn) 7%, transparent) 0%,
+        color-mix(in oklch, var(--warn) 2%, transparent) 100%);
+  }
+  .docs-callout-warn .docs-callout-icon {
+    border-color: color-mix(in oklch, var(--warn) 45%, var(--line-1));
+    color: var(--warn);
+  }
+
+  .docs-callout-danger {
+    border-color: color-mix(in oklch, oklch(0.65 0.18 22) 40%, var(--line-1));
+    background:
+      linear-gradient(180deg,
+        color-mix(in oklch, oklch(0.65 0.18 22) 8%, transparent) 0%,
+        color-mix(in oklch, oklch(0.65 0.18 22) 2%, transparent) 100%);
+  }
+  .docs-callout-danger .docs-callout-icon {
+    border-color: color-mix(in oklch, oklch(0.65 0.18 22) 50%, var(--line-1));
+    color: oklch(0.78 0.16 22);
+  }
+</style>

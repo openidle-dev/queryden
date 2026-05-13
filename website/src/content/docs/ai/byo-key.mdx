@@ -1,0 +1,50 @@
+---
+title: Bring your own AI key
+description: QueryDen calls OpenAI, Anthropic, Gemini, or Ollama with a key you provide. No server-side AI.
+section: ai
+order: 10
+updated: 2026-05-13
+---
+
+QueryDen does not run an inference server. When you use the AI features, the call goes directly from your machine to the provider you configured, with the API key you provided.
+
+## Configuring a provider
+
+**Settings → AI → Add provider**. Pick one of:
+
+- **OpenAI** — paste an `sk-...` key.
+- **Anthropic** — paste an `sk-ant-...` key.
+- **Google (Gemini)** — paste an `AIza...` key.
+- **Ollama** — point at a local Ollama instance (`http://localhost:11434` by default). No key needed.
+
+The key is written to the encrypted vault, alongside your connections. It never leaves your machine except as the `Authorization` header on the request to the provider.
+
+## Where the AI is actually used
+
+- **EXPLAIN visualizer** — given a plan tree, the AI is asked for a one-paragraph diagnosis and a suggested `CREATE INDEX` or `ALTER TABLE` statement. The suggestion is read-only until you click **Apply**.
+
+That is the **only** wired-up surface today. The standalone "AI Assistant" toolbar dialog is a stub and does not call any provider — [issue #10](https://github.com/openidle-dev/queryden/issues/10).
+
+## Model selection
+
+Default models per provider:
+
+| Provider | Default | Why |
+|----------|---------|-----|
+| OpenAI | `gpt-4o-mini` | Cheap, fast, good enough for plan-tree analysis |
+| Anthropic | `claude-3-5-haiku-latest` | Cheapest tier; switch to `sonnet` for harder plans |
+| Google | `gemini-1.5-flash` | Free tier covers most use |
+| Ollama | `llama3.1:8b` | Local; no network call |
+
+Override per-provider in settings.
+
+## Privacy posture
+
+- No telemetry. The app does not record AI usage or send it anywhere except the provider.
+- No prompts are stored unless **you** save the resulting suggestion to local history.
+- No background pings. If you don't use the AI surface, no AI requests are made.
+
+## Coming soon
+
+- "Ask the schema" inline assistant in the editor — wired to the same provider chain. Currently blocked on the stub linked above.
+- Cost guardrails (max tokens per request, monthly spend ceiling).

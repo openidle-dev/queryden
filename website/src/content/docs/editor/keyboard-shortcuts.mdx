@@ -1,0 +1,51 @@
+---
+title: Keyboard shortcuts
+description: Default keymap. Edit the JSON in Settings to customize per feature.
+section: editor
+order: 10
+updated: 2026-05-13
+---
+
+QueryDen is keyboard-first. The defaults below are wired in `src/App.tsx` (global) and the per-feature stores. Bindings can be remapped per feature in **Settings → Keymap**.
+
+## Global
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Enter` | Run statement under cursor (statement-aware) |
+| `Ctrl+T` | New query tab |
+| `Ctrl+W` | Close current tab |
+| `Ctrl+H` | Open help |
+| `Ctrl+Alt+S` | Open settings |
+| `Ctrl+\` | Toggle explorer pane *(see issue #13 — current build still uses `Ctrl+D`, which collides with Monaco multi-cursor)* |
+
+## In the editor
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Click` on an identifier | Jump to definition |
+| Hover an identifier | Live `CREATE TABLE` tooltip with columns |
+| `Alt+Enter` | Intention actions (JetBrains-style refactor popup) |
+| `Ctrl+Shift+F` | Format the current SQL document |
+| `Ctrl+Space` | Trigger autocomplete |
+| `Ctrl+/` | Toggle line comment |
+| `Ctrl+Alt+L` | Duplicate line |
+
+## In the results grid
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+S` | Export visible rows (CSV / TSV / JSON) |
+| `Ctrl+F` | Filter |
+| Arrow keys | Cell navigation |
+| `Ctrl+C` | Copy cell value (or selection) |
+
+## Why some bindings are missing
+
+QueryDen ships a **DataGrip-flavored preset** in addition to the defaults. Bindings advertised in that preset that aren't yet wired (e.g. `Shift Shift` global search, `F4` console, `Ctrl+B` go-to-definition, `Shift+F6` rename, `Alt+Left/Right` tab cycling) are tracked in [issue #11](https://github.com/openidle-dev/queryden/issues/11).
+
+> If a shortcut feels missing, check the issue tracker before customizing — it may already be on the roadmap.
+
+## Customizing
+
+Open **Settings → Keymap** to remap any per-feature binding. The keymap is stored encrypted alongside your connections, so it follows your master password — not your operating system's preferences.

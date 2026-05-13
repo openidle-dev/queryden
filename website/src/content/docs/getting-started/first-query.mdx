@@ -1,0 +1,52 @@
+---
+title: Run your first query
+description: Add a connection, open a tab, run a statement. Three keystrokes.
+section: getting-started
+order: 30
+updated: 2026-05-13
+---
+
+## 1. Add a connection
+
+`New connection → pick engine → fill the host / port / user / database`. Optional SSH tunnel for jump-host setups. Connections are stored encrypted and locked to this machine (see [Vault setup](/docs/getting-started/vault-setup)).
+
+| Engine | Notes |
+|--------|-------|
+| PostgreSQL | Native driver. Patched `tauri-plugin-sql` adds support for `INTERVAL`, `OID`, and array types. |
+| MySQL / MariaDB | Native driver. Standard types + JSON. |
+| SQLite | File-path connection. Multiple DB files per project. |
+| CockroachDB | Uses the Postgres wire protocol — same driver as PG. |
+| Supabase | Postgres driver + helper UI for the Supabase connection format. |
+
+## 2. Open a tab
+
+`Ctrl+T` opens a new query tab in the current connection. Tabs persist across app restarts — locally, never synced.
+
+## 3. Write and run
+
+```sql
+SELECT u.email AS customer, count(o.id) AS orders, sum(o.total) AS total
+FROM users u
+JOIN orders o ON u.id = o.user_id
+GROUP BY u.email
+ORDER BY total DESC
+LIMIT 10;
+```
+
+Hit **`Ctrl+Enter`** to run.
+
+QueryDen parses the buffer and runs only the **statement under your cursor** — not the whole file. If you have 30 statements in the tab, the cursor decides which one fires. This is the single most-loved shortcut in the editor.
+
+To run several statements, select the range first, then `Ctrl+Enter`.
+
+## 4. What you see next
+
+- A **results grid** appears below the editor with one row per matched record. Glide Data Grid; scrolls smoothly at 100k+ rows.
+- A **status line** at the bottom: row count, execution time, whether the query plan was cached.
+- If you ran `EXPLAIN ANALYZE`, the plan tree renders as a [visual viewer](/docs/editor/explain) — hot nodes highlighted, cost percentages shown, one-click "suggest index" via your configured AI provider.
+
+## What to learn next
+
+- [Editor keyboard shortcuts](/docs/editor/keyboard-shortcuts) — the full keymap.
+- [Statement-aware run](/docs/editor/statement-aware-run) — how cursor-driven execution works under the hood.
+- [Local history](/docs/editor/local-history) — every five seconds, every tab, locally.

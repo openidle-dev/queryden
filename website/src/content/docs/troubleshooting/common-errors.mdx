@@ -1,0 +1,53 @@
+---
+title: Common errors
+description: A growing list of error messages with diagnoses and fixes.
+section: troubleshooting
+order: 10
+updated: 2026-05-13
+---
+
+If your error isn't here yet, open an issue with the exact message, the engine, and your OS. The list grows by reproduction.
+
+## Connection
+
+### `connection refused`
+
+The database isn't listening on the host/port you provided, or a firewall is blocking. Verify with `telnet host port` or `nc -zv host port`.
+
+### `password authentication failed for user "..."`
+
+Wrong password, or the database isn't configured to accept password auth from your IP. Check `pg_hba.conf` for PostgreSQL.
+
+### `server version mismatch` (psql / pg_dump)
+
+QueryDen handles this for you — the embedded CLI auto-downloads the matching client version. If you see this from a system-installed `psql`, you're not using QueryDen's bundled one. Run via **Tab → CLI** instead.
+
+## Vault
+
+### `vault refuses to load on this machine`
+
+By design. The vault is bound to the machine fingerprint. Copying `vault.json` to a different computer makes it unreadable, even with the right password. See [Vault internals](/docs/security/vault-internals).
+
+### `5 failed unlock attempts — locked for N minutes`
+
+Brute-force lockout tripped. Wait it out. There is no override — if you're locked out of your own data, you'll need to wait for the cooldown.
+
+## Editor
+
+### `Ctrl+Shift+L doesn't format`
+
+[Issue #9](https://github.com/openidle-dev/queryden/issues/9) — the global handler dispatches the wrong event name. Use `Ctrl+Shift+F` inside the editor instead, which is wired to Monaco's built-in formatter directly. Will be unified in a future release.
+
+### `Ctrl+D toggles the explorer when I wanted multi-cursor`
+
+[Issue #13](https://github.com/openidle-dev/queryden/issues/13) — `Ctrl+D` is double-bound. The explorer toggle will move to `Ctrl+\` in a future release.
+
+## Performance
+
+### `EXPLAIN runs but the visualizer hangs`
+
+Plans with thousands of nodes (10k+) can stall the visualizer. Open an issue with the plan JSON; we have a known optimization queued.
+
+### Cold start is slow
+
+Cold start should be under a second on modern hardware. If it's not, the most common cause on Linux is missing WebKitGTK env vars — see [Build from source](/docs/getting-started/install#system-requirements).

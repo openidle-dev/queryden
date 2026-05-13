@@ -6,11 +6,13 @@
   "scripts": {
     "dev": "astro dev",
     "start": "astro dev",
-    "build": "astro build",
+    "build": "astro build && pagefind --site dist --glob \"docs/**/*.html\"",
     "preview": "astro preview",
     "astro": "astro"
   },
   "dependencies": {
-    "astro": "^5.0.0"
+    "@astrojs/mdx": "^5.0.4",
+    "astro": "^5.0.0",
+    "pagefind": "^1.5.2"
   }
 }
