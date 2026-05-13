@@ -106,11 +106,18 @@ QueryDen itself sends no analytics, no crash reports, and no telemetry. If you e
 
 QueryDen has no server in the middle — requests go straight from the desktop app to the provider's API. Your provider's data-retention policy applies. The AI assistant is **off by default** and can be disabled at any time from Settings → AI.
 
+## Documentation
+
+Full reference lives at **<https://queryden.openidle.com/docs>** — install, vault setup, the editor, every engine, the AI integration, security internals, and troubleshooting.
+
+The docs are MDX files in [`website/src/content/docs/`](website/src/content/docs/). Every page has an "Edit on GitHub" link in its header. See [`website/README.md`](website/README.md) for the docs system, and [CONTRIBUTING.md](CONTRIBUTING.md#contributing-documentation) for the contribution guide.
+
 ## Contributing
 
 Pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, coding conventions, and PR checklist. By participating you agree to abide by the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 - Found a bug? Open an [issue](https://github.com/openidle-dev/queryden/issues/new/choose).
+- Spot a typo in the docs? The "Edit on GitHub" button on any [docs page](https://queryden.openidle.com/docs) takes you straight to the file.
 - Want to discuss something larger? Start a [discussion](https://github.com/openidle-dev/queryden/discussions).
 
 ## Project Structure

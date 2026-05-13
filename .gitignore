@@ -98,25 +98,15 @@ test-results/
 # session-scratch captures). These are personal workspace artifacts —
 # product screenshots that the website displays live in
 # website/public/product/ and are NOT covered by these patterns.
-/audit-*.png
-/audit-*.jpg
-/new-*.png
-/new-*.jpg
-/sec-*.png
-/sec-*.jpg
-/cl-*.png
-/cl-*.jpg
-/wordmark-*.png
-/wordmark-*.jpg
-/cta-*.png
-/cta-*.jpg
-/pill-*.png
-/pill-*.jpg
-/stars-*.png
-/stars-*.jpg
-/status-*.png
-/status-*.jpg
-/final-*.png
-/final-*.jpg
-/changelog-*.png
-/changelog-*.jpg
+/*.png
+/*.jpg
+/*.jpeg
+/*.gif
+/*.webp
+
+# Audit reports + agent research — useful locally, not for the public repo.
+/audit/
+/.planning/
+
+# Website-side agent research (mirror of /audit/ scoped to docs work).
+website/audit/

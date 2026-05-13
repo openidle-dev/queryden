@@ -51,6 +51,10 @@ queryden/
 │   │   └── sysinfo.rs         System info for the about dialog
 │   ├── capabilities/          Tauri permission scopes (scoped to app data dirs)
 │   └── patches/               Patched tauri-plugin-sql (extended PG type support)
+├── website/                   Marketing site and documentation (Astro 5 + MDX)
+│   ├── src/content/docs/      MDX documentation, one file per page
+│   ├── src/layouts/           Site + DocsLayout
+│   └── README.md              Website-specific guide
 └── scripts/                   Maintenance scripts
 ```
 
@@ -90,6 +94,65 @@ E2E testing isn't wired up. The official Tauri E2E story is `webdriverio` + `tau
 ## Tauri command surface
 
 Every new `#[tauri::command]` must be registered in `src-tauri/src/lib.rs` inside `tauri::generate_handler!`. Forgetting this is the single most common cause of "command not found" errors at runtime.
+
+## Contributing documentation
+
+The website + documentation lives in [`website/`](website/) and deploys to <https://queryden.openidle.com>.
+
+Documentation pages are MDX files at `website/src/content/docs/{section}/<slug>.mdx`. Sections are: `getting-started`, `engines`, `editor`, `ai`, `security`, `troubleshooting`.
+
+### Add or edit a page
+
+Every documentation page has an **"Edit on GitHub"** link in its header — for typo fixes and small clarifications, that's a one-click flow into the GitHub editor.
+
+For larger changes, work locally:
+
+```bash
+cd website
+npm install
+npm run dev          # http://localhost:4321
+```
+
+Drop your MDX file into the right section folder. Frontmatter is required and validated at build time:
+
+```yaml
+---
+title: Run your first query
+description: One-sentence summary used for the lede and meta description.
+section: getting-started            # must match the parent folder name
+order: 30                           # lower numbers sort first in the sidebar
+updated: 2026-05-13                 # surfaces in the page header
+---
+```
+
+The sidebar, breadcrumbs, prev/next, ToC, and search index update automatically. Code blocks get a copy button and a language label without any extra markup.
+
+For callouts, import the component inside the MDX:
+
+```mdx
+import Callout from '../../../components/Callout.astro';
+
+<Callout type="warn" title="Heads up">
+  Body text — supports inline markdown.
+</Callout>
+```
+
+Types: `info`, `tip`, `warn`, `danger`.
+
+### Verify before pushing
+
+```bash
+npm run build        # runs astro build, then pagefind --site dist --glob "docs/**/*.html"
+npm run preview      # serve dist/ locally and confirm search works against your changes
+```
+
+If you added or moved a page, click around the sidebar / prev-next / search to make sure everything still resolves. The build will fail loudly if your frontmatter is invalid or a link inside an MDX page is broken.
+
+### When fixing an app bug that has docs implications
+
+If you're closing an issue that's referenced in a `troubleshooting/` page or marked as a "known issue" caveat in an editor / security / AI page, update that page in the same PR. The convention is to grep `website/src/content/docs/` for the issue number (e.g. `#13`) before opening the PR.
+
+For more, see [`website/README.md`](website/README.md).
 
 ## Security-sensitive changes
 

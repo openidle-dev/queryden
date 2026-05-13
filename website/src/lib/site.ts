@@ -7,7 +7,7 @@ export const SITE = {
   name: 'QueryDen',
   version: pkg.version,
   repo: 'https://github.com/openidle-dev/queryden',
-  homepage: 'https://queryden.dev',
+  homepage: 'https://queryden.openidle.com',
 } as const;
 
 // Build-time GitHub star count. null on rate-limit, offline, or any error.
