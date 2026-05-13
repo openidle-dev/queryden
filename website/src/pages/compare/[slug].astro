@@ -103,6 +103,21 @@ const breadcrumbJsonLd = {
     @media (max-width: 720px) {
       section[style*="grid-template-columns: 1fr 1fr"] {
         grid-template-columns: 1fr !important;
+        gap: 1.25rem !important;
+      }
+      .compare-table th, .compare-table td {
+        padding: 0.6rem 0.6rem !important;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+      .compare-table th {
+        font-size: 12px;
+      }
+    }
+    @media (max-width: 420px) {
+      .compare-table th, .compare-table td {
+        padding: 0.5rem 0.45rem !important;
+        font-size: 12.5px;
       }
     }
   </style>

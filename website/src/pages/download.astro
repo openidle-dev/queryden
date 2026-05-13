@@ -222,6 +222,17 @@ npm run tauri build</pre>
   }
   .pkg-sha .name { color: var(--ink-3); }
 
+  @media (max-width: 700px) {
+    .os-card { padding: 20px; }
+    .os-card h3 { font-size: 19px; }
+    .vrec { margin-bottom: 14px; }
+    .pkg { padding: 9px 11px; gap: 6px; grid-template-columns: 1fr auto; row-gap: 4px; font-size: 11.5px; }
+    .pkg .name { grid-column: 1 / -1; }
+    .pkg .tag-rec { grid-column: 1; font-size: 10px; }
+    .pkg .arch { grid-column: 2; text-align: right; }
+    .pkg .size { grid-column: 1 / -1; text-align: right; color: var(--ink-2); }
+  }
+
   .all-assets {
     margin-top: 28px; text-align: center;
     font-family: var(--mono); font-size: 12.5px; color: var(--ink-3);
