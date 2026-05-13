@@ -12,6 +12,8 @@ const { title, description, active } = Astro.props;
 const version = `v${SITE.version}`;
 const desc = description ?? "A native, open-source SQL client for Postgres, MySQL, SQLite, CockroachDB and Supabase. 8 MB installer. Built in Rust.";
 const stars = STARS;
+const canonicalPath = Astro.url.pathname.replace(/\/$/, '') || '/';
+const canonicalUrl = `${SITE.homepage}${canonicalPath === '/' ? '' : canonicalPath}`;
 ---
 <!DOCTYPE html>
 <html lang="en">
@@ -20,10 +22,11 @@ const stars = STARS;
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{title}</title>
   <meta name="description" content={desc} />
+  <link rel="canonical" href={canonicalUrl} />
   <meta property="og:title"        content={title} />
   <meta property="og:description"  content={desc} />
   <meta property="og:type"         content="website" />
-  <meta property="og:url"          content={SITE.homepage} />
+  <meta property="og:url"          content={canonicalUrl} />
   <meta property="og:image"        content={`${SITE.homepage}/og.jpg`} />
   <meta property="og:image:width"  content="1200" />
   <meta property="og:image:height" content="630" />

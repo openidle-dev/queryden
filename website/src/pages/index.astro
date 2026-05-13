@@ -35,6 +35,33 @@ const ROWS: Array<{ label: string; values: Array<string | boolean>; wedge: boole
 ];
 const WEDGE_COUNT = ROWS.filter(r => r.wedge).length;
 
+// JSON-LD: SoftwareApplication schema. Tells Google this is a downloadable
+// app, what platforms it runs on, that it's free, and where to find it. Drives
+// rich-snippet eligibility for app-category searches.
+const softwareJsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'SoftwareApplication',
+  name: SITE.name,
+  applicationCategory: 'DeveloperApplication',
+  applicationSubCategory: 'DatabaseManagement',
+  operatingSystem: 'macOS, Windows, Linux',
+  url: SITE.homepage,
+  downloadUrl: `${SITE.homepage}/download`,
+  softwareVersion: SITE.version,
+  license: 'https://opensource.org/licenses/MIT',
+  description: "A native, open-source SQL client for Postgres, MySQL, SQLite, CockroachDB and Supabase. ~11 MB installer. Built in Rust. Zero telemetry.",
+  offers: {
+    '@type': 'Offer',
+    price: '0',
+    priceCurrency: 'USD',
+  },
+  publisher: {
+    '@type': 'Organization',
+    name: 'OpenIdle',
+    url: 'https://openidle.com',
+  },
+};
+
 // Bento feature tiles. The first (Cmd+K) is the interactive showpiece — keystrokes
 // drive the right pane via fuzzy-matched command names. The other five are static
 // visual demonstrations of specific features the desktop app actually ships.
@@ -63,6 +90,7 @@ const FOOTPRINT = [
   description="A native, open-source SQL client for Postgres, MySQL, SQLite, CockroachDB and Supabase. 8 MB installer. Built in Rust. Zero telemetry."
   active="product"
 >
+  <script slot="head" type="application/ld+json" set:html={JSON.stringify(softwareJsonLd)}></script>
 
   <!-- ============== HERO ============== -->
   <section class="hero">

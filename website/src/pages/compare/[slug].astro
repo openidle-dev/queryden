@@ -1,0 +1,109 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { COMPETITORS, getCompetitor } from '../../lib/competitors';
+import { SITE } from '../../lib/site';
+
+export function getStaticPaths() {
+  return COMPETITORS.map((c) => ({ params: { slug: c.slug } }));
+}
+
+const { slug } = Astro.params;
+const competitor = getCompetitor(slug!);
+if (!competitor) {
+  throw new Error(`Unknown competitor slug: ${slug}`);
+}
+
+const title = `QueryDen vs ${competitor.name} — comparison`;
+const description = `${competitor.name} vs QueryDen: ${competitor.tagline}. Side-by-side comparison of footprint, license, performance, and security.`;
+
+// JSON-LD: BreadcrumbList for richer SERP rendering.
+const breadcrumbJsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'BreadcrumbList',
+  itemListElement: [
+    { '@type': 'ListItem', position: 1, name: 'Home',    item: SITE.homepage },
+    { '@type': 'ListItem', position: 2, name: 'Compare', item: `${SITE.homepage}/compare/${competitor.slug}` },
+    { '@type': 'ListItem', position: 3, name: competitor.name, item: `${SITE.homepage}/compare/${competitor.slug}` },
+  ],
+};
+---
+<Layout title={title} description={description} active="compare">
+  <script slot="head" type="application/ld+json" set:html={JSON.stringify(breadcrumbJsonLd)}></script>
+
+  <header class="page-hero">
+    <div class="wrap">
+      <p class="tag" style="margin-bottom: 1rem;">
+        <span class="dot"></span>
+        Comparison · {competitor.measuredAt ? `measured ${competitor.measuredAt}` : 'fair comparison'}
+      </p>
+      <h1>QueryDen vs {competitor.name}</h1>
+      <p class="lede" style="max-width: 64ch;">{competitor.intro}</p>
+      <div style="display: flex; gap: 1rem; margin-top: 1.5rem; flex-wrap: wrap;">
+        <a class="btn btn-primary" href="/download">Download QueryDen</a>
+        <a class="btn btn-ghost" href={competitor.sourceUrl} rel="noopener nofollow">Visit {competitor.name} ↗</a>
+      </div>
+    </div>
+  </header>
+
+  <section class="wrap" style="padding-block: 3rem 4rem;">
+    <h2>Side-by-side</h2>
+    <div style="overflow-x: auto; margin-top: 1.5rem;">
+      <table class="compare-table" style="width: 100%; border-collapse: collapse;">
+        <thead>
+          <tr>
+            <th style="text-align: left; padding: 0.85rem 1rem; border-bottom: 1px solid var(--border, #2a2f3a); font-weight: 500; opacity: 0.75; font-size: 0.85rem;">&nbsp;</th>
+            <th style="text-align: left; padding: 0.85rem 1rem; border-bottom: 1px solid var(--border, #2a2f3a); font-weight: 600;">QueryDen</th>
+            <th style="text-align: left; padding: 0.85rem 1rem; border-bottom: 1px solid var(--border, #2a2f3a); font-weight: 600;">{competitor.name}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {competitor.rows.map((row) => (
+            <tr>
+              <td style="padding: 0.75rem 1rem; border-bottom: 1px solid rgba(255,255,255,0.04); font-weight: 500; opacity: 0.9;">{row.label}</td>
+              <td style="padding: 0.75rem 1rem; border-bottom: 1px solid rgba(255,255,255,0.04);">{row.ours}</td>
+              <td style="padding: 0.75rem 1rem; border-bottom: 1px solid rgba(255,255,255,0.04); opacity: 0.85;">{row.theirs}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="wrap" style="padding-block: 1rem 4rem; display: grid; grid-template-columns: 1fr 1fr; gap: 2rem;">
+    <div>
+      <h2 style="margin-bottom: 1rem;">When {competitor.name} is the better choice</h2>
+      <ul style="line-height: 1.7; padding-left: 1.2rem;">
+        {competitor.theyWin.map((point) => <li style="margin-bottom: 0.5rem;">{point}</li>)}
+      </ul>
+    </div>
+    <div>
+      <h2 style="margin-bottom: 1rem;">When QueryDen is the better choice</h2>
+      <ul style="line-height: 1.7; padding-left: 1.2rem;">
+        {competitor.weWin.map((point) => <li style="margin-bottom: 0.5rem;">{point}</li>)}
+      </ul>
+    </div>
+  </section>
+
+  <section class="wrap" style="padding-block: 1rem 5rem;">
+    <h2>Other comparisons</h2>
+    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem; margin-top: 1.5rem;">
+      {COMPETITORS.filter((c) => c.slug !== competitor.slug).map((c) => (
+        <a href={`/compare/${c.slug}`} class="card" style="display: block; padding: 1rem 1.25rem; border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; text-decoration: none;">
+          <div style="font-weight: 600; margin-bottom: 0.25rem;">QueryDen vs {c.name}</div>
+          <div style="font-size: 0.85rem; opacity: 0.7;">{c.tagline}</div>
+        </a>
+      ))}
+    </div>
+  </section>
+
+  <style>
+    .compare-table tbody tr:hover {
+      background: rgba(255,255,255,0.02);
+    }
+    @media (max-width: 720px) {
+      section[style*="grid-template-columns: 1fr 1fr"] {
+        grid-template-columns: 1fr !important;
+      }
+    }
+  </style>
+</Layout>

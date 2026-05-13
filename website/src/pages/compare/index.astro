@@ -1,0 +1,40 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { COMPETITORS } from '../../lib/competitors';
+---
+<Layout
+  title="Compare QueryDen — head-to-head with DBeaver, DataGrip, TablePlus, pgAdmin, Beekeeper"
+  description="Side-by-side comparisons of QueryDen against the major database managers. Installer size, RAM, license, telemetry, and feature coverage — measured and sourced."
+  active="compare"
+>
+  <header class="page-hero">
+    <div class="wrap">
+      <p class="tag" style="margin-bottom: 1rem;"><span class="dot"></span> Fair, sourced comparisons</p>
+      <h1>How QueryDen compares</h1>
+      <p class="lede" style="max-width: 64ch;">
+        Side-by-side comparisons against the most common database managers. Numbers
+        are measured against the latest QueryDen release and the competitor's current
+        public version. Each page calls out where the competitor is the better tool —
+        because honest comparison earns more trust than a hit piece.
+      </p>
+    </div>
+  </header>
+
+  <section class="wrap" style="padding-block: 3rem 5rem;">
+    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1.25rem;">
+      {COMPETITORS.map((c) => (
+        <a href={`/compare/${c.slug}`} class="card" style="display: block; padding: 1.5rem; border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; text-decoration: none; transition: border-color 0.15s, transform 0.15s;">
+          <div style="font-weight: 700; font-size: 1.15rem; margin-bottom: 0.4rem;">QueryDen vs {c.name}</div>
+          <div style="font-size: 0.9rem; opacity: 0.75; line-height: 1.5;">{c.tagline}</div>
+        </a>
+      ))}
+    </div>
+  </section>
+
+  <style>
+    .card:hover {
+      border-color: rgba(255,255,255,0.18) !important;
+      transform: translateY(-1px);
+    }
+  </style>
+</Layout>
