@@ -1420,22 +1420,24 @@ Download "${filename}" (~80MB)?`,
       }
     };
 
+    const handleShowLocalHistory = () => setShowLocalHistory(true);
+
     window.addEventListener("run-specific-query", handleRunSpecific);
     window.addEventListener("open-query-window", handleNewTabWrapper);
     window.addEventListener("open-query-window-psql", handleNewTabPsql);
     window.addEventListener("open-query-with-text", handleNewTabWithText);
     window.addEventListener("open-definition", handleOpenDefinition);
-    window.addEventListener("show-local-history", () => setShowLocalHistory(true));
+    window.addEventListener("show-local-history", handleShowLocalHistory);
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("tx-control", handleTxControl);
-    
+
     return () => {
       window.removeEventListener("run-specific-query", handleRunSpecific);
       window.removeEventListener("open-query-window", handleNewTabWrapper);
       window.removeEventListener("open-query-window-psql", handleNewTabPsql);
       window.removeEventListener("open-query-with-text", handleNewTabWithText);
       window.removeEventListener("open-definition", handleOpenDefinition);
-      window.removeEventListener("show-local-history", () => setShowLocalHistory(true));
+      window.removeEventListener("show-local-history", handleShowLocalHistory);
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("tx-control", handleTxControl);
     };
