@@ -466,6 +466,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     setSelectedDatabase(null);
     setDatabases([]);
     setSchemaItems(null);
+    // Notify the Monaco editor (if loaded) to drop its module-level schema cache.
+    window.dispatchEvent(new CustomEvent("connection-disconnected"));
   };
 
   const loadSchema = async (_database: string, overrideSchemas?: string[]) => {

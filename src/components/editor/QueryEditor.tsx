@@ -16,6 +16,24 @@ let globalSchemaItems: any = null;
 let cachedSuggestions: any[] = [];
 let lastSchemaHash: string = "";
 
+/**
+ * Drop the module-level schema cache. Call when disconnecting from a database
+ * so the previous connection's schema (which can be tens of MB on wide DBs)
+ * is no longer pinned by these module globals.
+ */
+export function resetEditorSchemaCache(): void {
+  globalSchemaItems = null;
+  cachedSuggestions = [];
+  lastSchemaHash = "";
+}
+
+// Listen for connection-disconnected at module scope so the cache is released
+// even when no <QueryEditor> is currently mounted. This module is only loaded
+// once the editor is first used, so registering once is sufficient.
+if (typeof window !== "undefined") {
+  window.addEventListener("connection-disconnected", resetEditorSchemaCache);
+}
+
 // Smart alias generation - like DataGrip/DBeaver
 // Generates alias from table name: "users" -> "u", "user_roles" -> "ur", "project_issue" -> "pi"
 const generateTableAlias = (tableName: string, existingAliases: Set<string>): string => {
