@@ -99,11 +99,25 @@ body {
   color: var(--ink-0);
 }
 
-/* Subtle grain — kept very light; depth without distraction. */
+/* Filmic grain — fixed full-viewport overlay, slowly drifting.
+   `soft-light` is the blend mode that actually shows up on dark backgrounds;
+   `overlay` washes out at this brightness. 8s drift loop is felt, not seen. */
 body::before {
-  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 200;
-  opacity: 0.022; mix-blend-mode: overlay;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='1.6' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  content: ''; position: fixed; inset: -10% -10% -10% -10%; pointer-events: none; z-index: 200;
+  opacity: 0.12; mix-blend-mode: soft-light;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  animation: body-grain 8s linear infinite;
+  will-change: transform;
+}
+@keyframes body-grain {
+  0%   { transform: translate3d(0, 0, 0); }
+  25%  { transform: translate3d(-8px, 4px, 0); }
+  50%  { transform: translate3d(6px, -6px, 0); }
+  75%  { transform: translate3d(-4px, 8px, 0); }
+  100% { transform: translate3d(0, 0, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  body::before { animation: none; }
 }
 
 a { color: inherit; text-decoration: none; }
@@ -359,7 +373,59 @@ footer.site {
   background: linear-gradient(180deg, transparent, color-mix(in oklch, var(--bg-1) 50%, transparent));
   overflow: hidden;
 }
+footer.site::before {
+  content: '';
+  position: absolute;
+  top: -200px; left: 50%;
+  transform: translateX(-50%);
+  width: 70%; max-width: 880px; height: 320px;
+  pointer-events: none;
+  background: radial-gradient(ellipse 50% 60% at 50% 100%,
+    color-mix(in oklch, var(--accent) 18%, transparent) 0%,
+    transparent 70%);
+  filter: blur(24px);
+  animation: footer-breath 16s ease-in-out infinite;
+  z-index: 0;
+}
+@keyframes footer-breath {
+  0%, 100% { opacity: 0.5; transform: translateX(-50%) scale(1); }
+  50%      { opacity: 0.8; transform: translateX(-50%) scale(1.08); }
+}
+@media (prefers-reduced-motion: reduce) {
+  footer.site::before { animation: none; opacity: 0.45; }
+}
 footer.site > .wrap { position: relative; z-index: 1; }
+
+/* Footer constellation — sparse, intentional positions around the ghost
+   wordmark. Each dot has its own delay so they twinkle out of sync. */
+.footer-stars {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+.footer-star {
+  position: absolute;
+  width: 2px; height: 2px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px color-mix(in oklch, var(--accent) 60%, transparent);
+  opacity: 0;
+  animation: star-twinkle var(--dur, 5s) ease-in-out var(--delay, 0s) infinite;
+}
+.footer-star.is-bigger {
+  width: 3px; height: 3px;
+  box-shadow: 0 0 8px color-mix(in oklch, var(--accent) 80%, transparent);
+}
+@keyframes star-twinkle {
+  0%, 100% { opacity: 0; transform: scale(0.6); }
+  40%      { opacity: 0.9; transform: scale(1); }
+  60%      { opacity: 0.6; transform: scale(0.95); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .footer-star { animation: none; opacity: 0.45; transform: scale(1); }
+}
 .footer-wordmark {
   position: absolute;
   left: 50%;

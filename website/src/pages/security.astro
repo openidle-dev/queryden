@@ -1,5 +1,6 @@
 ---
 import Layout from '../layouts/Layout.astro';
+import SignatureMesh from '../components/SignatureMesh.astro';
 import { SITE } from '../lib/site';
 
 const principles = [
@@ -30,9 +31,24 @@ const threats = [
     defense: 'QueryDen is the client. The server can return malicious result rows, but the result grid renders them as text. We do not eval, we do not exec, we do not auto-run a follow-up query based on a result.' },
 ];
 
+// Illustrative bytes from a QueryDen vault file. Layout reflects the real
+// AES-256-GCM file format: magic+version, salt, nonce, ciphertext body, MAC.
+// Bytes themselves are random — this is a visual, not a live decryption.
+type Region = 'magic' | 'salt' | 'nonce' | 'cipher' | 'tag';
+const VAULT_BYTES: { hex: string; region: Region }[] = (() => {
+  const make = (s: string, region: Region) => s.split(' ').map(hex => ({ hex, region }));
+  return [
+    ...make('51 44 56 4e 5f 02', 'magic'),
+    ...make('e7 3a 9c 1f b8 4d 02 91 75 c0 ae 6b 32 d8 49 a7', 'salt'),
+    ...make('c4 8e 1a 7f 5d b2 09 33 e6 4c 91 a8', 'nonce'),
+    ...make('6f 92 b1 04 d7 8a 3e cc f1 27 5b 84 a0 19 6d e3 48 0c b7 95 22 fe d4 7a 91 c8 0b 64 e7 a2', 'cipher'),
+    ...make('5f b8 14 6a 92 f3 0d 4e 27 c5 91 a8 6f 14 d3 02', 'tag'),
+  ];
+})();
+
 const layers = [
   { name: 'AES-256-GCM',                detail: 'Authenticated encryption for every connection, every saved query, every vault entry. Tampering invalidates the MAC; the file refuses to decrypt.' },
-  { name: 'Argon2id (memory-hard KDF)', detail: 'Master password → encryption key. Tuned to take ~1 second on a modern laptop, making brute-force orders of magnitude slower than a GPU farm.' },
+  { name: 'Argon2id (memory-hard KDF)', detail: 'Master password → encryption key. Memory-hard by design, making brute-force orders of magnitude slower than a GPU farm.' },
   { name: 'Machine fingerprint',        detail: 'Linux: /etc/machine-id. macOS: IOPlatformUUID. Windows: Win32_ComputerSystemProduct.UUID. Mixed into the KDF — change machines, the vault refuses to load.' },
   { name: 'OS keychain master key',     detail: 'macOS Keychain (Secure Enclave-bound) · Windows Credential Manager (DPAPI) · libsecret on Linux. Falls back to a file-based key only if the OS keyring is unavailable.' },
   { name: 'Brute-force lockout',        detail: '5 failed unlocks → exponential backoff. Implemented in atomic counters in-process; the lock persists across app restarts via the encrypted state file.' },
@@ -42,8 +58,8 @@ const layers = [
 <Layout title="Security · QueryDen" active="security">
 
   <header class="page-hero">
-    <div class="grid-bg"></div>
-    <div class="wrap">
+    <SignatureMesh intensity="normal" maskFalloff="hard" />
+    <div class="wrap" style="position: relative; z-index: 1;">
       <div class="eyebrow">Security &amp; encryption</div>
       <h1 style="margin-top: 22px; max-width: 900px;">
         A database manager you can trust with production credentials.
@@ -79,7 +95,58 @@ const layers = [
         The encrypted file at <code class="inline">~/.local/share/com.queryden.app/vault.json</code> is
         protected by the layers below. Remove any one and it stops working — that's the test.
       </p>
-      <div class="layers s-content">
+
+      <div class="vault-bytes-card s-content">
+        <div class="vb-side vb-side-in">
+          <div class="vb-eye mono">▲ &nbsp;Input · plaintext credentials</div>
+          <pre class="vb-plain mono"><span class="vbp-k">host</span><span class="vbp-eq">=</span><span class="vbp-v">db.acme.dev</span>
+<span class="vbp-k">port</span><span class="vbp-eq">=</span><span class="vbp-v">5432</span>
+<span class="vbp-k">user</span><span class="vbp-eq">=</span><span class="vbp-v">alice</span>
+<span class="vbp-k">password</span><span class="vbp-eq">=</span><span class="vbp-v">correct-horse-battery-staple</span>
+<span class="vbp-k">database</span><span class="vbp-eq">=</span><span class="vbp-v">analytics</span>
+<span class="vbp-k">ssh</span><span class="vbp-eq">=</span><span class="vbp-v">bastion.acme.dev:22</span></pre>
+          <div class="vb-foot mono">5 fields · UTF-8 · human-readable</div>
+        </div>
+
+        <div class="vb-sep" aria-hidden="true">
+          <div class="vb-sep-line"></div>
+          <div class="vb-sep-chip mono">
+            Argon2id &nbsp;→&nbsp; AES-256-GCM &nbsp;·&nbsp; key bound to <strong>this machine</strong>
+          </div>
+          <div class="vb-sep-line"></div>
+        </div>
+
+        <div class="vb-side vb-side-out">
+          <div class="vb-eye mono">▲ &nbsp;Disk · vault.json bytes</div>
+          <div class="vault-dump" aria-hidden="true">
+            {Array.from({ length: Math.ceil(VAULT_BYTES.length / 8) }).map((_, rowIdx) => (
+              <div class="vd-row" style={`--i:${rowIdx}`}>
+                <span class="vd-ofs mono">{(rowIdx * 8).toString(16).padStart(4, '0')}</span>
+                {VAULT_BYTES.slice(rowIdx * 8, rowIdx * 8 + 8).map(b => (
+                  <span class={`vd-b vd-${b.region} mono`}>{b.hex}</span>
+                ))}
+              </div>
+            ))}
+          </div>
+          <div class="vault-legend mono">
+            <span class="vl-item"><span class="vl-sw vd-magic-bg"></span>magic</span>
+            <span class="vl-item"><span class="vl-sw vd-salt-bg"></span>salt · 16 B</span>
+            <span class="vl-item"><span class="vl-sw vd-nonce-bg"></span>nonce · 12 B</span>
+            <span class="vl-item"><span class="vl-sw vd-cipher-bg"></span>ciphertext</span>
+            <span class="vl-item"><span class="vl-sw vd-tag-bg"></span>tag · 16 B</span>
+          </div>
+        </div>
+      </div>
+
+      <p class="vault-bytes-caption mono">
+        Illustrative bytes from a vault file. Field layout reflects the real format in
+        <a href={`${SITE.repo}/blob/main/src-tauri/src/storage.rs`} class="src-link">storage.rs</a>:
+        magic header, Argon2id salt, GCM nonce, encrypted payload, authentication tag.
+        Every byte after the header looks like noise — because it is.
+      </p>
+
+      <div class="vault-layers-eyebrow mono">The six layers, one by one</div>
+      <div class="layers">
         {layers.map((l, i) => (
           <div class="layer">
             <div class="l-i mono">{(i + 1).toString().padStart(2, '0')}</div>
@@ -149,6 +216,23 @@ const layers = [
 
 </Layout>
 
+<script>
+  const card = document.querySelector<HTMLElement>('.vault-bytes-card');
+  if (card && 'IntersectionObserver' in window) {
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (e.isIntersecting) {
+          card.classList.add('printed');
+          io.unobserve(card);
+        }
+      }
+    }, { threshold: 0.25 });
+    io.observe(card);
+  } else if (card) {
+    card.classList.add('printed');
+  }
+</script>
+
 <style>
   .principles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
   @media (max-width: 1000px) { .principles { grid-template-columns: 1fr; } }
@@ -208,4 +292,194 @@ const layers = [
 
   .src-link { color: var(--accent); border-bottom: 1px solid color-mix(in oklch, var(--accent) 40%, transparent); }
   .src-link:hover { color: var(--accent-w); }
+
+  /* ========== Vault bytes (plaintext → ciphertext visual) ========== */
+  .vault-bytes-card {
+    display: grid;
+    grid-template-columns: 1fr auto 1.25fr;
+    gap: 0;
+    background:
+      radial-gradient(ellipse 80% 60% at 50% 0%,
+        color-mix(in oklch, var(--accent) 7%, transparent),
+        transparent 70%),
+      linear-gradient(180deg,
+        color-mix(in oklch, var(--bg-1) 100%, transparent) 0%,
+        color-mix(in oklch, var(--bg-2) 50%, transparent) 100%);
+    border: 1px solid var(--line-1);
+    border-radius: var(--r-3);
+    box-shadow: var(--sh-1);
+    overflow: hidden;
+    margin-top: 36px;
+  }
+  .vb-side {
+    padding: 28px 30px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .vb-side-out { background: color-mix(in oklch, var(--bg-0) 30%, transparent); }
+  .vb-eye {
+    font-size: 10.5px;
+    color: var(--ink-4);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+  .vb-side-in .vb-eye::before  { content: ''; }
+  .vb-plain {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.85;
+    color: var(--ink-1);
+    white-space: pre;
+    background: transparent;
+    border: 0;
+    padding: 0;
+  }
+  .vbp-k  { color: var(--ink-1); }
+  .vbp-eq { color: var(--ink-4); padding: 0 6px; }
+  .vbp-v  { color: var(--accent); }
+  .vb-foot {
+    margin-top: auto;
+    font-size: 10.5px;
+    color: var(--ink-4);
+    letter-spacing: 0.04em;
+  }
+
+  .vb-sep {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 0 4px;
+    position: relative;
+  }
+  .vb-sep-line {
+    width: 1px;
+    flex: 1;
+    background: linear-gradient(180deg,
+      transparent 0%,
+      color-mix(in oklch, var(--accent) 35%, var(--line-2)) 50%,
+      transparent 100%);
+  }
+  .vb-sep-chip {
+    font-size: 10.5px;
+    color: var(--ink-1);
+    letter-spacing: 0.06em;
+    padding: 8px 14px;
+    margin: 12px 0;
+    background: var(--bg-1);
+    border: 1px solid color-mix(in oklch, var(--accent) 30%, var(--line-2));
+    border-radius: 999px;
+    white-space: nowrap;
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    box-shadow: 0 0 0 4px color-mix(in oklch, var(--bg-0) 60%, transparent);
+  }
+  .vb-sep-chip strong {
+    color: var(--accent);
+    font-weight: 500;
+  }
+
+  .vault-dump {
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.65;
+    background:
+      linear-gradient(180deg,
+        color-mix(in oklch, var(--bg-0) 50%, transparent) 0%,
+        color-mix(in oklch, var(--bg-0) 70%, transparent) 100%);
+    border: 1px solid color-mix(in oklch, var(--line-1) 70%, transparent);
+    border-radius: var(--r-2);
+    padding: 14px 16px;
+  }
+  .vd-row {
+    display: grid;
+    grid-template-columns: 44px repeat(8, 1fr);
+    gap: 6px;
+    align-items: baseline;
+    opacity: 0;
+    transform: translateY(2px);
+    transition: opacity 240ms var(--ease), transform 240ms var(--ease);
+    transition-delay: calc(var(--i, 0) * 50ms);
+  }
+  .vault-bytes-card.printed .vd-row { opacity: 1; transform: none; }
+  .vd-ofs {
+    color: var(--ink-4);
+    font-size: 10.5px;
+    letter-spacing: 0.04em;
+  }
+  .vd-b {
+    text-align: center;
+    font-size: 12px;
+    letter-spacing: 0.02em;
+    color: var(--ink-3);
+    border-radius: 2px;
+    padding: 1px 2px;
+    transition: color var(--t-med) var(--ease), background var(--t-med) var(--ease);
+  }
+  .vd-magic  { color: var(--ink-0); background: color-mix(in oklch, var(--ink-2) 12%, transparent); }
+  .vd-salt   { color: oklch(0.82 0.12 78); background: color-mix(in oklch, oklch(0.82 0.12 78) 10%, transparent); }
+  .vd-nonce  { color: var(--accent);       background: color-mix(in oklch, var(--accent) 10%, transparent); }
+  .vd-cipher { color: var(--ink-4); }
+  .vd-tag    { color: oklch(0.80 0.13 295); background: color-mix(in oklch, oklch(0.80 0.13 295) 10%, transparent); }
+
+  .vault-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-top: 4px;
+    font-size: 10.5px;
+    color: var(--ink-3);
+    letter-spacing: 0.04em;
+  }
+  .vl-item { display: inline-flex; align-items: center; gap: 6px; }
+  .vl-sw {
+    width: 10px; height: 10px;
+    border-radius: 2px;
+    border: 1px solid color-mix(in oklch, var(--line-2) 70%, transparent);
+  }
+  .vd-magic-bg  { background: color-mix(in oklch, var(--ink-1) 60%, transparent); }
+  .vd-salt-bg   { background: oklch(0.82 0.12 78); }
+  .vd-nonce-bg  { background: var(--accent); }
+  .vd-cipher-bg { background: color-mix(in oklch, var(--ink-4) 80%, transparent); }
+  .vd-tag-bg    { background: oklch(0.80 0.13 295); }
+
+  .vault-bytes-caption {
+    margin-top: 20px;
+    font-size: 11.5px;
+    line-height: 1.6;
+    color: var(--ink-4);
+    max-width: 760px;
+  }
+  .vault-layers-eyebrow {
+    margin-top: 64px;
+    font-size: 10.5px;
+    color: var(--ink-3);
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--line-1);
+  }
+  .vault-layers-eyebrow + .layers { border-top: 0; }
+
+  @media (max-width: 1000px) {
+    .vault-bytes-card { grid-template-columns: 1fr; }
+    .vb-sep { flex-direction: row; padding: 4px 0; }
+    .vb-sep-line { width: auto; height: 1px; flex: 1; background:
+      linear-gradient(90deg,
+        transparent 0%,
+        color-mix(in oklch, var(--accent) 35%, var(--line-2)) 50%,
+        transparent 100%); }
+    .vb-sep-chip { writing-mode: horizontal-tb; transform: none; margin: 0 12px; }
+    .vb-side { padding: 24px 22px; }
+  }
+  @media (max-width: 560px) {
+    .vd-row { grid-template-columns: 36px repeat(8, 1fr); gap: 3px; }
+    .vd-b { font-size: 11px; }
+    .vd-ofs { font-size: 10px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .vd-row { opacity: 1; transform: none; transition: none; }
+  }
 </style>

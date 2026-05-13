@@ -1,5 +1,6 @@
 ---
 import Layout from '../layouts/Layout.astro';
+import SignatureMesh from '../components/SignatureMesh.astro';
 import { SITE, RELEASE } from '../lib/site';
 import { CHANGELOG, type Kind } from '../lib/changelog';
 
@@ -16,8 +17,8 @@ const KIND_LABEL: Record<Kind, string> = {
 <Layout title="Changelog · QueryDen" active="changelog">
 
   <header class="page-hero">
-    <div class="grid-bg"></div>
-    <div class="wrap">
+    <SignatureMesh intensity="subtle" maskFalloff="hard" />
+    <div class="wrap" style="position: relative; z-index: 1;">
       <div class="eyebrow">Releases &amp; release notes</div>
       <h1 style="margin-top: 22px;">What changed, version by version.</h1>
       <p class="lede">

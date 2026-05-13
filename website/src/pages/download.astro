@@ -1,5 +1,6 @@
 ---
 import Layout from '../layouts/Layout.astro';
+import SignatureMesh from '../components/SignatureMesh.astro';
 import { SITE, RELEASE, downloadUrl, shaUrl } from '../lib/site';
 
 const groups = (['macOS', 'Windows', 'Linux'] as const).map((os) => ({
@@ -25,8 +26,8 @@ const requirements = [
 <Layout title="Download · QueryDen" active="download">
 
   <header class="page-hero">
-    <div class="grid-bg"></div>
-    <div class="wrap">
+    <SignatureMesh intensity="subtle" maskFalloff="hard" />
+    <div class="wrap" style="position: relative; z-index: 1;">
       <div class="eyebrow">Release · {RELEASE.tag}</div>
       <h1 style="margin-top: 22px;">Native installers.<br/>No browser bundled.</h1>
       <p class="lede">
@@ -107,10 +108,15 @@ const requirements = [
       </div>
       <div class="verify-cmds">
         {verifyCmds.map((v) => (
-          <div class="vcmd">
+          <button type="button" class="vcmd vcmd-copy" data-copy={v.cmd} aria-label={`Copy: ${v.cmd}`}>
             <div class="vcmd-label">{v.label}</div>
             <pre class="code">{v.cmd}</pre>
-          </div>
+            <span class="vcmd-cta mono" aria-hidden="true">
+              <svg class="vcmd-i vcmd-i-copy" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+              <svg class="vcmd-i vcmd-i-done" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4.5 4.5L19 7"/></svg>
+              <span class="vcmd-cta-text">Copy</span>
+            </span>
+          </button>
         ))}
       </div>
     </div>
@@ -154,6 +160,32 @@ npm run tauri build</pre>
   </section>
 
 </Layout>
+
+<script>
+  const copies = document.querySelectorAll<HTMLButtonElement>('.vcmd-copy');
+  copies.forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const cmd = btn.dataset.copy ?? '';
+      let ok = false;
+      try {
+        await navigator.clipboard.writeText(cmd);
+        ok = true;
+      } catch {
+        const ta = document.createElement('textarea');
+        ta.value = cmd;
+        ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+        document.body.appendChild(ta);
+        ta.focus(); ta.select();
+        try { ok = document.execCommand('copy'); } catch {}
+        document.body.removeChild(ta);
+      }
+      if (ok) {
+        btn.classList.add('copied');
+        window.setTimeout(() => btn.classList.remove('copied'), 1500);
+      }
+    });
+  });
+</script>
 
 <style>
   .release-meta {
@@ -206,6 +238,83 @@ npm run tauri build</pre>
   .vcmd-label {
     font-family: var(--mono); font-size: 11px; color: var(--ink-3);
     letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 6px;
+  }
+
+  .vcmd-copy {
+    position: relative;
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+  }
+  .vcmd-copy .code {
+    transition: border-color var(--t-fast) var(--ease),
+                background var(--t-fast) var(--ease),
+                color var(--t-fast) var(--ease);
+    padding-right: 92px;
+  }
+  .vcmd-copy:hover .code {
+    border-color: color-mix(in oklch, var(--accent) 35%, var(--line-2));
+    background: color-mix(in oklch, var(--accent) 4%, var(--bg-1));
+  }
+  .vcmd-copy:focus-visible {
+    outline: none;
+  }
+  .vcmd-copy:focus-visible .code {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 22%, transparent);
+  }
+
+  .vcmd-cta {
+    position: absolute;
+    right: 12px; bottom: 12px;
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 10.5px; color: var(--ink-3);
+    padding: 4px 9px 4px 8px;
+    border-radius: 6px;
+    background: color-mix(in oklch, var(--bg-2) 90%, transparent);
+    border: 1px solid color-mix(in oklch, var(--line-1) 80%, transparent);
+    letter-spacing: 0.04em;
+    opacity: 0.55;
+    transition: opacity var(--t-fast) var(--ease),
+                color var(--t-fast) var(--ease),
+                border-color var(--t-fast) var(--ease),
+                background var(--t-fast) var(--ease),
+                transform var(--t-fast) var(--ease);
+    backdrop-filter: blur(4px);
+  }
+  .vcmd-copy:hover .vcmd-cta {
+    opacity: 1;
+    color: var(--ink-1);
+    border-color: var(--line-2);
+  }
+  .vcmd-copy.copied .vcmd-cta {
+    opacity: 1;
+    color: var(--accent);
+    border-color: color-mix(in oklch, var(--accent) 45%, var(--line-2));
+    background: color-mix(in oklch, var(--accent) 8%, var(--bg-2));
+  }
+  .vcmd-copy.copied .vcmd-cta { transform: scale(1.02); }
+
+  .vcmd-i { transition: opacity 120ms var(--ease); }
+  .vcmd-i-done { display: none; }
+  .vcmd-copy.copied .vcmd-i-copy { display: none; }
+  .vcmd-copy.copied .vcmd-i-done { display: inline-block; }
+  .vcmd-copy.copied .vcmd-cta-text::before {
+    content: 'Copied';
+  }
+  .vcmd-copy.copied .vcmd-cta-text {
+    color: var(--accent);
+    font-size: 0;
+  }
+  .vcmd-copy.copied .vcmd-cta-text::before {
+    font-size: 10.5px;
   }
 
   .req-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
