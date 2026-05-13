@@ -1,9 +1,10 @@
 import { create } from 'zustand';
-import { invokeCmd, UpdateCheckResultDto } from '../lib/ipc';
+import { check, type Update } from '@tauri-apps/plugin-updater';
+import { relaunch } from '@tauri-apps/plugin-process';
+import { getVersion } from '@tauri-apps/api/app';
+import { invokeCmd } from '../lib/ipc';
 
 // ── Types ──────────────────────────────────────────────────────────
-
-export type UpdateCheckResult = UpdateCheckResultDto;
 
 export type UpdatePhase =
   | 'idle'
@@ -17,12 +18,17 @@ export type UpdatePhase =
 
 interface UpdateState {
   phase: UpdatePhase;
-  result: UpdateCheckResult | null;
-  downloadPath: string | null;
+  /** The pending update returned by tauri-plugin-updater, or null. */
+  update: Update | null;
+  /** Installed version. Populated on every check, regardless of phase. */
+  currentVersion: string | null;
+  /** 0..100, kept in sync with download events. */
   downloadProgress: number;
+  downloadedBytes: number;
+  totalBytes: number | null;
   error: string | null;
   buildDate: string | null;
-  /** Whether the notification badge was dismissed by the user */
+  /** Whether the user dismissed the notification badge for this update. */
   dismissed: boolean;
 
   // Actions
@@ -34,11 +40,22 @@ interface UpdateState {
   fetchBuildDate: () => Promise<void>;
 }
 
+/**
+ * Derive the public release page URL for a given version. The plugin
+ * doesn't expose this — we synthesise it so the UI can offer "View on
+ * GitHub" links.
+ */
+export function releaseUrl(version: string): string {
+  return `https://github.com/openidle-dev/queryden/releases/tag/v${version}`;
+}
+
 export const useUpdateStore = create<UpdateState>((set, get) => ({
   phase: 'idle',
-  result: null,
-  downloadPath: null,
+  update: null,
+  currentVersion: null,
   downloadProgress: 0,
+  downloadedBytes: 0,
+  totalBytes: null,
   error: null,
   buildDate: null,
   dismissed: false,
@@ -46,11 +63,13 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
   checkForUpdates: async () => {
     set({ phase: 'checking', error: null, dismissed: false });
     try {
-      const result = await invokeCmd('check_for_updates_v2');
-      set({
-        result,
-        phase: result.update_available ? 'available' : 'up-to-date',
-      });
+      const update = await check();
+      const currentVersion = update?.currentVersion ?? (await getVersion());
+      if (update) {
+        set({ update, currentVersion, phase: 'available' });
+      } else {
+        set({ update: null, currentVersion, phase: 'up-to-date' });
+      }
     } catch (err: unknown) {
       set({
         phase: 'error',
@@ -60,20 +79,38 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
   },
 
   downloadUpdate: async () => {
-    const { result } = get();
-    if (!result?.download_url || !result?.asset_name) {
-      set({ phase: 'error', error: 'No download URL available for this platform' });
+    const { update } = get();
+    if (!update) {
+      set({ phase: 'error', error: 'No update available' });
       return;
     }
 
-    set({ phase: 'downloading', downloadProgress: 0, error: null });
+    set({
+      phase: 'downloading',
+      downloadProgress: 0,
+      downloadedBytes: 0,
+      totalBytes: null,
+      error: null,
+    });
 
     try {
-      const path = await invokeCmd('download_update', {
-        url: result.download_url,
-        assetName: result.asset_name,
+      await update.download((event) => {
+        if (event.event === 'Started') {
+          set({ totalBytes: event.data.contentLength ?? null });
+        } else if (event.event === 'Progress') {
+          const downloaded = get().downloadedBytes + event.data.chunkLength;
+          const total = get().totalBytes;
+          set({
+            downloadedBytes: downloaded,
+            downloadProgress: total
+              ? Math.min(100, (downloaded / total) * 100)
+              : 0,
+          });
+        } else if (event.event === 'Finished') {
+          set({ downloadProgress: 100 });
+        }
       });
-      set({ phase: 'ready', downloadPath: path, downloadProgress: 100 });
+      set({ phase: 'ready' });
     } catch (err: unknown) {
       set({
         phase: 'error',
@@ -83,17 +120,19 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
   },
 
   installUpdate: async () => {
-    const { downloadPath } = get();
-    if (!downloadPath) {
-      set({ phase: 'error', error: 'No downloaded update found' });
+    const { update } = get();
+    if (!update) {
+      set({ phase: 'error', error: 'No update downloaded' });
       return;
     }
     set({ phase: 'installing', error: null });
 
     try {
-      await invokeCmd('install_update', { filePath: downloadPath });
-      // The app will exit after this, but just in case:
-      set({ phase: 'idle' });
+      await update.install();
+      // The plugin's install() doesn't auto-restart on most platforms.
+      // We tell the process plugin to relaunch so the user lands on the
+      // new build instead of staring at a closed window.
+      await relaunch();
     } catch (err: unknown) {
       set({
         phase: 'error',
@@ -107,9 +146,10 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
   reset: () =>
     set({
       phase: 'idle',
-      result: null,
-      downloadPath: null,
+      update: null,
       downloadProgress: 0,
+      downloadedBytes: 0,
+      totalBytes: null,
       error: null,
       dismissed: false,
     }),

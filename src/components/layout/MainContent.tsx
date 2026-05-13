@@ -1,12 +1,15 @@
-import { useState, useEffect, useRef, useCallback, Suspense, lazy } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import { QueryEditor } from "../editor/QueryEditor";
 import { ResultsPanel } from "../results/ResultsPanel";
 import { useConnections } from "../../contexts/useConnections";
 import { useQueryHistory } from "../../store/queryHistoryStore";
 import { useSettings } from "../../store/settingsStore";
 import { Play, Plus, X, ChevronDown, ChevronRight, Terminal, Database, Sparkles, GitCompare, Save, Square, Activity, Loader2, CheckCircle, XCircle } from "lucide-react";
+import { CompareDialog } from "../tools/CompareDialog";
 import { useSavedQueries } from "../../store/savedQueryStore";
 import { AIAssistantDialog } from "../tools/AIAssistantDialog";
+import { DefinitionModal } from "../tools/DefinitionModal";
 import { useConfirmDialog } from "../ui/ConfirmDialog";
 import { CloneDialog } from "../tools/CloneDialog";
 import { Copy, FileText, BarChart2, Activity as ActivityIcon, Monitor, Zap, Clock, HardDrive, ShieldCheck, Layers } from "lucide-react";
@@ -14,13 +17,7 @@ import { logger } from "../../utils/logger";
 import { getDefaultDatabaseName } from "../../config/app";
 import { formatSql } from "../../utils/SqlFormatter";
 import { ActivityMonitor } from "../tools/ActivityMonitor";
-
-// Monaco-heavy components — lazy-loaded so the editor bundle stays out of
-// cold start. Idle RAM drops materially when the user hasn't opened a tab.
-const QueryEditor       = lazy(() => import("../editor/QueryEditor").then(m => ({ default: m.QueryEditor })));
-const CompareDialog     = lazy(() => import("../tools/CompareDialog").then(m => ({ default: m.CompareDialog })));
-const DefinitionModal   = lazy(() => import("../tools/DefinitionModal").then(m => ({ default: m.DefinitionModal })));
-const MultiQueryDialog  = lazy(() => import("../tools/MultiQueryDialog").then(m => ({ default: m.MultiQueryDialog })));
+import { MultiQueryDialog } from "../tools/MultiQueryDialog";
 import { VariableSubstitutionDialog, extractVariables, substituteVariables, VariableValues } from "../ui/VariableSubstitutionDialog";
 import { PsqlWindow } from "../ui/PsqlWindow";
 import { LocalHistoryDialog } from "../ui/LocalHistoryDialog";
@@ -2340,22 +2337,20 @@ Download "${filename}" (~80MB)?`,
                 </div>
               </div>
             ) : (
-              <Suspense fallback={<div className="h-full w-full bg-[var(--background)]" />}>
-                <QueryEditor
-                  key={activeTabId!}
-                  value={activeTab!.query}
-                  onChange={updateTabQuery}
-                  onRun={(q: string) => executeQuery(q)}
-                  connectionName={activeTab?.target?.connectionName || activeConnection?.name || undefined}
-                  databaseName={activeTab?.target?.database || selectedDatabase || undefined}
-                  tabId={activeTabId!}
-                  tabName={activeTab?.name}
-                  isExecuting={isExecuting}
-                  hasError={!!error}
-                  hasSuccess={!!success}
-                  statementResults={activeTab?.statementResults}
-                />
-              </Suspense>
+              <QueryEditor
+                key={activeTabId!}
+                value={activeTab!.query}
+                onChange={updateTabQuery}
+                onRun={(q: string) => executeQuery(q)}
+                connectionName={activeTab?.target?.connectionName || activeConnection?.name || undefined}
+                databaseName={activeTab?.target?.database || selectedDatabase || undefined}
+                tabId={activeTabId!}
+                tabName={activeTab?.name}
+                isExecuting={isExecuting}
+                hasError={!!error}
+                hasSuccess={!!success}
+                statementResults={activeTab?.statementResults}
+              />
             )
           ) : (
             <div className="h-full flex flex-col items-center justify-center bg-[var(--background)] p-6 overflow-y-auto">
@@ -2419,28 +2414,16 @@ Download "${filename}" (~80MB)?`,
         )}
       </PanelGroup>
 
-      {showCompareDialog && (
-        <Suspense fallback={null}>
-          <CompareDialog isOpen={showCompareDialog} onClose={() => setShowCompareDialog(false)} />
-        </Suspense>
-      )}
+      <CompareDialog isOpen={showCompareDialog} onClose={() => setShowCompareDialog(false)} />
       <CloneDialog isOpen={showCloneDialog} onClose={() => setShowCloneDialog(false)} />
       <ActivityMonitor isOpen={showActivityMonitor} onClose={() => setShowActivityMonitor(false)} />
-      {showMultiQueryDialog && (
-        <Suspense fallback={null}>
-          <MultiQueryDialog isOpen={showMultiQueryDialog} onClose={() => setShowMultiQueryDialog(false)} />
-        </Suspense>
-      )}
+      <MultiQueryDialog isOpen={showMultiQueryDialog} onClose={() => setShowMultiQueryDialog(false)} />
       <AIAssistantDialog isOpen={showAIDialog} onClose={() => setShowAIDialog(false)} currentQuery={activeTab?.query || ""} onUpdateQuery={updateTabQuery} />
-      {defModalState.isOpen && (
-        <Suspense fallback={null}>
-          <DefinitionModal
-            isOpen={defModalState.isOpen}
-            tableName={defModalState.table}
-            onClose={() => setDefModalState({ isOpen: false, table: "" })}
-          />
-        </Suspense>
-      )}
+      <DefinitionModal
+        isOpen={defModalState.isOpen}
+        tableName={defModalState.table}
+        onClose={() => setDefModalState({ isOpen: false, table: "" })}
+      />
       <LocalHistoryDialog
         isOpen={_showLocalHistory}
         onClose={() => setShowLocalHistory(false)}

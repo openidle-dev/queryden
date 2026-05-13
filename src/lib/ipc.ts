@@ -147,20 +147,6 @@ export interface CliQueryResult {
   error: string | null;
 }
 
-/** Mirrors `updater.rs::UpdateCheckResult` (serde keeps snake_case). */
-export interface UpdateCheckResultDto {
-  update_available: boolean;
-  current_version: string;
-  latest_version: string;
-  release_name: string | null;
-  changelog: string | null;
-  release_url: string;
-  published_at: string | null;
-  download_url: string | null;
-  download_size: number | null;
-  asset_name: string | null;
-}
-
 /** Mirrors `sysinfo.rs::SystemInfo`. */
 export interface SystemInfoDto {
   os_name: string;
@@ -322,13 +308,7 @@ export interface IpcCommands {
     result: string[];
   };
 
-  // updater + sysinfo
-  check_for_updates_v2: { args: void; result: UpdateCheckResultDto };
-  download_update: {
-    args: { url: string; assetName: string };
-    result: string;
-  };
-  install_update: { args: { filePath: string }; result: void };
+  // sysinfo + build info (updater itself now goes through tauri-plugin-updater)
   get_build_info: { args: void; result: string };
   get_system_info: { args: void; result: SystemInfoDto };
 }

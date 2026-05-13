@@ -10,6 +10,9 @@
     "sql:default",
     "sql:allow-execute",
     "dialog:default",
+    "updater:default",
+    "process:default",
+    "process:allow-restart",
     "fs:default",
     {
       "identifier": "fs:allow-write-text-file",

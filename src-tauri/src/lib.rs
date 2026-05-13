@@ -2,11 +2,18 @@ mod cli;
 mod ssh;
 mod storage;
 mod sysinfo;
-mod updater;
 
 use tauri::Manager;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+/// Build timestamp injected by build.rs at compile time. Surfaced to the
+/// frontend so the About dialog can show "built on YYYY-MM-DD" alongside
+/// the version number.
+#[tauri::command]
+fn get_build_info() -> Result<String, String> {
+    Ok(env!("QUERYDEN_BUILD_DATE").to_string())
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -36,6 +43,8 @@ pub fn run() {
         )
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             storage::save_connections,
             storage::load_connections,
@@ -58,10 +67,7 @@ pub fn run() {
             storage::save_vault_credentials,
             storage::load_vault_credentials,
             sysinfo::get_system_info,
-            updater::check_for_updates_v2,
-            updater::download_update,
-            updater::install_update,
-            updater::get_build_info,
+            get_build_info,
             cli::cli_check_tools,
             cli::cli_list_cached,
             cli::cli_check_tool,

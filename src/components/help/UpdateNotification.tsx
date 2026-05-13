@@ -13,13 +13,16 @@ import {
   Rocket,
   FileText,
 } from "lucide-react";
-import { useUpdateStore } from "../../store/updateStore";
+import { releaseUrl, useUpdateStore } from "../../store/updateStore";
 import ReactMarkdown from "react-markdown";
 
 export function UpdateNotification() {
   const {
     phase,
-    result,
+    update,
+    currentVersion,
+    downloadProgress,
+    totalBytes,
     error,
     dismissed,
     checkForUpdates,
@@ -128,14 +131,14 @@ export function UpdateNotification() {
             )}
 
             {/* Up to date */}
-            {phase === "up-to-date" && result && (
+            {phase === "up-to-date" && currentVersion && (
               <div className="p-8 text-center">
                 <div className="w-14 h-14 bg-green-500/15 rounded-full flex items-center justify-center mx-auto mb-4">
                   <CheckCircle className="w-7 h-7 text-green-400" />
                 </div>
                 <h4 className="text-base font-bold mb-1">You're up to date!</h4>
                 <p className="text-xs text-[var(--text-secondary)]">
-                  QueryDen v{result.current_version} is the latest version.
+                  QueryDen v{currentVersion} is the latest version.
                 </p>
                 <button
                   onClick={checkForUpdates}
@@ -147,7 +150,7 @@ export function UpdateNotification() {
             )}
 
             {/* Update available */}
-            {phase === "available" && result && (
+            {phase === "available" && update && (
               <div className="p-5 space-y-4">
                 {/* Version badge */}
                 <div className="flex items-center gap-3 p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl">
@@ -159,57 +162,49 @@ export function UpdateNotification() {
                       New Version Available
                     </div>
                     <div className="text-sm font-bold">
-                      {result.release_name || `v${result.latest_version}`}
+                      v{update.version}
                     </div>
                     <div className="text-[10px] text-[var(--text-secondary)] mt-0.5">
-                      v{result.current_version} → v{result.latest_version}
-                      {result.published_at && (
-                        <> · {new Date(result.published_at).toLocaleDateString()}</>
+                      v{update.currentVersion} → v{update.version}
+                      {update.date && (
+                        <> · {new Date(update.date).toLocaleDateString()}</>
                       )}
                     </div>
                   </div>
                 </div>
 
                 {/* Changelog */}
-                {result.changelog && (
+                {update.body && (
                   <div className="space-y-2">
                     <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] opacity-60">
                       <FileText className="w-3 h-3" /> What's New
                     </div>
                     <div className="p-4 bg-[var(--background)] rounded-xl border border-[var(--border)] max-h-[200px] overflow-y-auto custom-scrollbar">
                       <div className="prose-sm text-xs text-[var(--text-secondary)] leading-relaxed [&_h1]:text-base [&_h1]:font-bold [&_h1]:text-[var(--text-primary)] [&_h1]:mb-2 [&_h2]:text-sm [&_h2]:font-bold [&_h2]:text-[var(--text-primary)] [&_h2]:mb-2 [&_h3]:text-xs [&_h3]:font-bold [&_h3]:text-[var(--text-primary)] [&_h3]:mb-1 [&_ul]:list-disc [&_ul]:pl-4 [&_ul]:space-y-1 [&_li]:text-xs [&_p]:mb-2 [&_code]:bg-white/10 [&_code]:px-1 [&_code]:rounded [&_code]:text-blue-300 [&_a]:text-blue-400 [&_a]:underline">
-                        <ReactMarkdown>{result.changelog}</ReactMarkdown>
+                        <ReactMarkdown>{update.body}</ReactMarkdown>
                       </div>
                     </div>
                   </div>
                 )}
 
-                {/* Download info & button */}
+                {/* Download button + release-page escape hatch */}
                 <div className="flex items-center gap-2">
-                  {result.download_url ? (
-                    <button
-                      onClick={downloadUpdate}
-                      className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-500 hover:bg-blue-600 text-white text-sm font-bold rounded-xl transition-colors shadow-lg shadow-blue-500/20"
-                    >
-                      <Download className="w-4 h-4" />
-                      Download Update
-                      {result.download_size && (
-                        <span className="text-xs opacity-70">
-                          ({formatSize(result.download_size)})
-                        </span>
-                      )}
-                    </button>
-                  ) : (
-                    <a
-                      href={result.release_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-500 hover:bg-blue-600 text-white text-sm font-bold rounded-xl transition-colors shadow-lg shadow-blue-500/20"
-                    >
-                      <ExternalLink className="w-4 h-4" />
-                      View on GitHub
-                    </a>
-                  )}
+                  <button
+                    onClick={downloadUpdate}
+                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-500 hover:bg-blue-600 text-white text-sm font-bold rounded-xl transition-colors shadow-lg shadow-blue-500/20"
+                  >
+                    <Download className="w-4 h-4" />
+                    Download Update
+                  </button>
+                  <a
+                    href={releaseUrl(update.version)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-2.5 bg-white/5 hover:bg-white/10 rounded-xl transition-colors"
+                    title="View release on GitHub"
+                  >
+                    <ExternalLink className="w-4 h-4 opacity-70" />
+                  </a>
                   <button
                     onClick={() => { dismiss(); setShowPanel(false); }}
                     className="px-4 py-2.5 bg-white/5 hover:bg-white/10 rounded-xl text-sm font-medium transition-colors"
@@ -227,16 +222,21 @@ export function UpdateNotification() {
                 <Loader2 className="w-8 h-8 animate-spin mx-auto mb-3 text-blue-400" />
                 <h4 className="text-sm font-bold mb-1">Downloading update…</h4>
                 <p className="text-xs text-[var(--text-secondary)]">
-                  {result?.asset_name || "Please wait"}
+                  {totalBytes
+                    ? `${Math.round(downloadProgress)}% of ${formatSize(totalBytes)}`
+                    : "Connecting…"}
                 </p>
                 <div className="mt-4 h-1.5 bg-[var(--border)] rounded-full overflow-hidden w-48 mx-auto">
-                  <div className="h-full bg-blue-500 rounded-full animate-pulse" style={{ width: "60%" }} />
+                  <div
+                    className="h-full bg-blue-500 rounded-full transition-all duration-150"
+                    style={{ width: `${downloadProgress}%` }}
+                  />
                 </div>
               </div>
             )}
 
             {/* Ready to install */}
-            {phase === "ready" && (
+            {phase === "ready" && update && (
               <div className="p-5 space-y-4">
                 <div className="flex items-center gap-3 p-4 bg-green-500/10 border border-green-500/20 rounded-xl">
                   <div className="w-10 h-10 bg-green-500/20 rounded-full flex items-center justify-center shrink-0">
@@ -248,7 +248,7 @@ export function UpdateNotification() {
                     </div>
                     <div className="text-sm font-bold">Ready to Install</div>
                     <div className="text-[10px] text-[var(--text-secondary)] mt-0.5">
-                      {result?.asset_name}
+                      QueryDen v{update.version}
                     </div>
                   </div>
                 </div>
@@ -316,8 +316,8 @@ export function UpdateNotification() {
           {/* Footer */}
           <div className="p-3 border-t border-[var(--border)] bg-[var(--surface-raised)] flex items-center justify-between text-[10px] text-[var(--text-secondary)]">
             <span>
-              {result && (
-                <>Current: v{result.current_version}</>
+              {currentVersion && (
+                <>Current: v{currentVersion}</>
               )}
             </span>
             <a
