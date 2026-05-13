@@ -1,0 +1,216 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { SITE } from '../lib/site';
+---
+<Layout
+  title="404 — page not found · QueryDen"
+  description="The page you asked for does not exist. Try the docs, the download page, or the comparison hub."
+>
+  <meta slot="head" name="robots" content="noindex, follow" />
+
+  <main class="nf">
+    <div class="nf-glow" aria-hidden="true"></div>
+
+    <div class="wrap nf-inner">
+      <p class="tag bad nf-pill">
+        <span class="dot"></span>
+        <span class="mono">HTTP 404</span>
+        <span class="nf-pill-sep" aria-hidden="true">·</span>
+        <span>0 rows returned</span>
+      </p>
+
+      <h1 class="nf-title">
+        <span class="nf-title-prefix">No such</span><br />
+        <span class="nf-title-key">page</span>
+      </h1>
+
+      <figure class="nf-query" aria-label="Sample SQL query illustrating the missing page">
+        <pre class="mono"><code>{`SELECT path, title
+FROM   pages
+WHERE  url = `}<span class="nf-q-str">'</span><span class="nf-q-path" id="nf-path">/this-page</span><span class="nf-q-str">'</span>
+<span class="nf-q-comment">-- 0 rows returned in 0.003s</span></code></pre>
+      </figure>
+
+      <p class="lede nf-lede">
+        The link you followed is broken, the URL was mistyped, or the page was moved.
+        Pick a known destination below.
+      </p>
+
+      <div class="nf-cards">
+        <a class="nf-card" href="/">
+          <div class="nf-card-eye mono">/</div>
+          <div class="nf-card-title">Home</div>
+          <div class="nf-card-sub">The product page</div>
+        </a>
+        <a class="nf-card" href="/docs">
+          <div class="nf-card-eye mono">/docs</div>
+          <div class="nf-card-title">Documentation</div>
+          <div class="nf-card-sub">Install, query, secure</div>
+        </a>
+        <a class="nf-card" href="/download">
+          <div class="nf-card-eye mono">/download</div>
+          <div class="nf-card-title">Download</div>
+          <div class="nf-card-sub">macOS · Windows · Linux</div>
+        </a>
+        <a class="nf-card" href="/compare">
+          <div class="nf-card-eye mono">/compare</div>
+          <div class="nf-card-title">Compare</div>
+          <div class="nf-card-sub">vs DBeaver, DataGrip, ...</div>
+        </a>
+        <a class="nf-card" href="/security">
+          <div class="nf-card-eye mono">/security</div>
+          <div class="nf-card-title">Security</div>
+          <div class="nf-card-sub">Vault, encryption, audit</div>
+        </a>
+        <a class="nf-card" href={`${SITE.repo}/issues`} rel="noopener">
+          <div class="nf-card-eye mono">github</div>
+          <div class="nf-card-title">Report a bad link</div>
+          <div class="nf-card-sub">Open an issue ↗</div>
+        </a>
+      </div>
+    </div>
+  </main>
+
+  <script is:inline>
+    // Show the path the visitor actually tried inside the fake SQL query.
+    // Pure cosmetic — graceful no-op if disabled or scripted out.
+    (function () {
+      const el = document.getElementById('nf-path');
+      if (!el) return;
+      const raw = (location.pathname || '/') + (location.search || '');
+      // Clamp so a pasted megastring can't blow the layout. Escape single
+      // quotes so the rendered SQL stays syntactically honest.
+      const clipped = raw.length > 64 ? raw.slice(0, 61) + '...' : raw;
+      el.textContent = clipped.replace(/'/g, "''");
+    })();
+  </script>
+
+  <style>
+    .nf {
+      position: relative;
+      min-height: calc(100vh - 220px);
+      padding: 96px 0 120px;
+      isolation: isolate;
+      overflow: hidden;
+    }
+    .nf-glow {
+      position: absolute;
+      inset: -10% -20% auto -20%;
+      height: 70vh;
+      background:
+        radial-gradient(60% 60% at 30% 30%, color-mix(in oklch, var(--accent) 22%, transparent), transparent 70%),
+        radial-gradient(50% 50% at 75% 40%, color-mix(in oklch, var(--bad)    16%, transparent), transparent 70%);
+      filter: blur(60px);
+      opacity: 0.6;
+      pointer-events: none;
+      z-index: -1;
+    }
+    .nf-inner {
+      display: grid;
+      gap: 22px;
+      justify-items: start;
+    }
+    .nf-pill { margin: 0; }
+    .nf-pill-sep { color: var(--ink-4); }
+
+    .nf-title {
+      font-size: clamp(56px, 9vw, 132px);
+      line-height: 0.96;
+      letter-spacing: -0.035em;
+      margin: 6px 0 4px;
+      font-weight: 500;
+      color: var(--ink-0);
+    }
+    .nf-title-prefix { color: var(--ink-3); font-weight: 400; }
+    .nf-title-key {
+      background: linear-gradient(
+        92deg,
+        oklch(0.82 0.18 200) 0%,
+        oklch(0.78 0.20 320) 45%,
+        oklch(0.85 0.18  80) 100%
+      );
+      background-clip: text;
+      -webkit-background-clip: text;
+      color: transparent;
+    }
+
+    .nf-query {
+      margin: 12px 0 8px;
+      width: min(720px, 100%);
+      padding: 18px 22px;
+      border: 1px solid var(--line-1);
+      border-radius: var(--r-2);
+      background:
+        linear-gradient(180deg,
+          color-mix(in oklch, var(--bg-1) 80%, transparent) 0%,
+          color-mix(in oklch, var(--bg-0) 90%, transparent) 100%);
+      box-shadow:
+        inset 0 1px 0 color-mix(in oklch, #fff 4%, transparent),
+        0 20px 60px -40px color-mix(in oklch, var(--accent) 35%, transparent);
+    }
+    .nf-query pre {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.65;
+      color: var(--ink-1);
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .nf-q-str     { color: oklch(0.82 0.13 30); }
+    .nf-q-path    { color: var(--accent); font-weight: 500; }
+    .nf-q-comment { color: var(--ink-4); font-style: italic; }
+
+    .nf-lede { margin: 6px 0 18px; }
+
+    .nf-cards {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      width: min(720px, 100%);
+    }
+    @media (max-width: 720px) {
+      .nf-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 420px) {
+      .nf-cards { grid-template-columns: 1fr; }
+    }
+
+    .nf-card {
+      display: block;
+      padding: 14px 16px;
+      border: 1px solid var(--line-1);
+      border-radius: var(--r-2);
+      background: color-mix(in oklch, var(--bg-1) 70%, transparent);
+      text-decoration: none;
+      color: inherit;
+      transition: border-color var(--t-fast, 150ms) ease, transform var(--t-fast, 150ms) ease, background var(--t-fast, 150ms) ease;
+    }
+    .nf-card:hover {
+      border-color: color-mix(in oklch, var(--accent) 45%, var(--line-2));
+      background: color-mix(in oklch, var(--bg-1) 90%, transparent);
+      transform: translateY(-1px);
+    }
+    .nf-card:focus-visible {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 22%, transparent);
+    }
+    .nf-card-eye {
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      color: var(--ink-4);
+      margin-bottom: 6px;
+    }
+    .nf-card-title {
+      font-weight: 600;
+      font-size: 15px;
+      color: var(--ink-0);
+      margin-bottom: 2px;
+    }
+    .nf-card-sub {
+      font-size: 12.5px;
+      color: var(--ink-3);
+      line-height: 1.4;
+    }
+  </style>
+</Layout>
