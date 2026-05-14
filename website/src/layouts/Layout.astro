@@ -5,7 +5,7 @@ import { SITE, NAV, RELEASE, STARS, formatStars } from '../lib/site';
 interface Props {
   title: string;
   description?: string;
-  active?: 'product' | 'security' | 'compare' | 'changelog' | 'docs' | 'download';
+  active?: 'product' | 'security' | 'compare' | 'roadmap' | 'changelog' | 'docs' | 'download';
 }
 
 const { title, description, active } = Astro.props;
@@ -113,6 +113,7 @@ const canonicalUrl = `${SITE.homepage}${canonicalPath === '/' ? '' : canonicalPa
           <h5>Resources</h5>
           <ul>
             <li><a href="/docs">Documentation</a></li>
+            <li><a href="/roadmap">Roadmap</a></li>
             <li><a href="/changelog">Changelog</a></li>
             <li><a href="/security">Security</a></li>
           </ul>
