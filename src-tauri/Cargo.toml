@@ -39,12 +39,11 @@ password-hash = "0.5"
 keyring = { version = "3" }
 ssh2 = "0.9"
 tokio = { version = "1", features = ["process", "io-util", "rt-multi-thread", "fs", "rt"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 zip = "2"
 flate2 = "1"
 tar = "0.4"
 which = "7"
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres"] }
 
 [patch.crates-io]
 # Patch tauri-plugin-sql to handle PostgreSQL types like INTERVAL, OID, arrays, etc.
@@ -53,7 +52,7 @@ tauri-plugin-sql = { path = "patches/tauri-plugin-sql" }
 
 [profile.release]
 strip = true
-lto = "thin"    # "thin" is much faster than true
-codegen-units = 16 # Parallelize compilation for speed
-incremental = true # Enable incremental release builds
+lto = "fat"          # Whole-program LTO: smaller binary, longer compile
+codegen-units = 1    # One codegen unit: maximizes LTO/inlining opportunities
+incremental = false  # Explicitly disable; incremental defeats LTO and is off by default in release
 panic = "abort"
