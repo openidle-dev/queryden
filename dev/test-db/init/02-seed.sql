@@ -62,8 +62,8 @@ INSERT INTO app.products (sku, name, description, price, attributes) VALUES
 -- 50 orders with varied statuses, distributed across users
 INSERT INTO app.orders (user_id, status, total, created_at, shipped_at)
 SELECT
-    1 + (generate_series % 20),
-    CASE generate_series % 6
+    1 + (n % 20),
+    CASE n % 6
         WHEN 0 THEN 'pending'::app.order_status
         WHEN 1 THEN 'paid'::app.order_status
         WHEN 2 THEN 'shipped'::app.order_status
@@ -72,19 +72,19 @@ SELECT
         ELSE 'refunded'::app.order_status
     END,
     0,  -- backfilled by the order_items insert below
-    NOW() - (generate_series || ' days')::interval,
-    CASE WHEN generate_series % 6 IN (2, 3) THEN NOW() - ((generate_series - 1) || ' days')::interval ELSE NULL END
-FROM generate_series(1, 50);
+    NOW() - (n || ' days')::interval,
+    CASE WHEN n % 6 IN (2, 3) THEN NOW() - ((n - 1) || ' days')::interval ELSE NULL END
+FROM generate_series(1, 50) AS gs(n);
 
 -- 200 order items distributed across the 50 orders
 INSERT INTO app.order_items (order_id, product_id, qty, unit_price)
 SELECT
-    1 + (generate_series % 50),
-    1 + (generate_series * 7 % 30),    -- pseudo-random product
-    1 + (generate_series * 3 % 4),     -- qty 1-4
+    1 + (gs.n % 50),                   -- order 1..50
+    1 + ((gs.n * 7) % 30),             -- pseudo-random product 1..30
+    1 + ((gs.n * 3) % 4),              -- qty 1..4
     p.price
-FROM generate_series(1, 200) gs
-JOIN app.products p ON p.id = 1 + (gs.generate_series * 7 % 30);
+FROM generate_series(1, 200) AS gs(n)
+JOIN app.products p ON p.id = 1 + ((gs.n * 7) % 30);
 
 -- Backfill order totals from items
 UPDATE app.orders o
