@@ -11,6 +11,7 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 
 ### Changed
 - **Rust release profile and dependency cleanup.** Tightened `[profile.release]` in `src-tauri/Cargo.toml` (`lto = "fat"`, `codegen-units = 1`, `incremental = false`), dropped the unused top-level `sqlx` dependency (it stays as a transitive dep of the patched `tauri-plugin-sql`, but is no longer pulled in twice with our own feature set), and swapped `reqwest` from the default native-tls backend to `rustls-tls`. The Windows release binary shrinks from **16.21 MB → 13.03 MB (-3.18 MB / -19.6%)**. The updater plugin (`tauri-plugin-updater`) ships its own TLS stack and is unaffected.
+- Pruned unused Monaco languages and workers from the build. The `monaco-editor` default entry pulled in ~80 basic-language Monarch tokenizers (ABAP, F#, Solidity, etc.) plus four language-service workers (JSON, TypeScript, CSS, HTML) — none of which a SQL editor uses. `monacoSetup.ts` now imports from `monaco-editor/esm/vs/editor/edcore.main.js` and re-registers only the SQL contribution; `vite.config.ts`'s `manualChunks` switched to a function so it groups what we actually import instead of naming the bare package (which was forcing `editor.main.js` and its full graph back into the build). Total `dist/assets/*.js` **14.99 MB → 5.29 MB raw (-65%), 3.59 MB → 1.39 MB gzipped (-61%)**; biggest chunk drops are the four eliminated language workers (`ts.worker` 7.0 MB, `css.worker` 1.0 MB, `html.worker` 695 KB, `json.worker` 385 KB raw).
 
 ## [1.0.12] - 2026-05-14
 
