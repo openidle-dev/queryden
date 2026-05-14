@@ -1,0 +1,32 @@
+# Throwaway Postgres for testing QueryDen against. Not for production use.
+#
+# Port 5434 (not 5432) to avoid clashing with a system-installed Postgres
+# or a second test instance. Volume is named so it survives container
+# rebuilds; `docker compose down -v` wipes it to re-run the init scripts.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: queryden-test-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: queryden
+      POSTGRES_PASSWORD: queryden
+      POSTGRES_DB: queryden_test
+      # Speeds up the first-boot init when there are many seed rows.
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    ports:
+      - "5434:5432"
+    volumes:
+      # Scripts in /docker-entrypoint-initdb.d run in lexical order on the
+      # very first container start (i.e. when the data volume is empty).
+      - ./init:/docker-entrypoint-initdb.d:ro
+      - queryden-test-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U queryden -d queryden_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  queryden-test-data:
+    name: queryden-test-data
