@@ -515,3 +515,59 @@ pre.code, .code-block {
   .reveal { opacity: 1; transform: none; transition: none; }
   * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
 }
+
+/* ---------- Mobile safeguards ----------
+   Last-mile defenses for narrow viewports. Page-specific @media rules
+   handle layout; these rules prevent the *content* from breaking out of
+   any container, regardless of how a section was authored. */
+
+/* Tighter side gutters on smaller viewports — the default 32px gutter
+   eats too much of a 360px viewport. */
+@media (max-width: 700px) {
+  :root { --gutter: 20px; }
+  .page-hero { padding: var(--s-12) 0 var(--s-10); }
+  .page-hero h1 { margin-top: 16px; }
+  .page-hero .lede { margin-top: 16px; }
+}
+@media (max-width: 420px) {
+  :root { --gutter: 16px; }
+  .btn-lg { height: 48px; padding: 0 22px; font-size: 15px; }
+}
+
+/* Any <pre> in body content must wrap or scroll horizontally — never push
+   the page wider. Inline-authored code blocks (download page, MDX docs)
+   inherit this even without the .code class. */
+pre {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Wide content blocks (raw HTML tables, etc.) get a horizontal-scroll
+   escape hatch instead of bursting the layout. */
+.scroll-x {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Footer rhythm on tight screens. The big watermark stays — it's clipped
+   by footer.site's overflow: hidden — but bring everything else in. */
+@media (max-width: 700px) {
+  footer.site { margin-top: var(--s-16); padding: var(--s-12) 0 var(--s-8); }
+  footer.site .row { grid-template-columns: 1fr 1fr; gap: var(--s-6) var(--s-4); }
+  footer.site .blurb { max-width: none; }
+  footer.site .legal { flex-direction: column; align-items: flex-start; gap: 6px; }
+  .footer-wordmark { font-size: clamp(72px, 22vw, 160px); }
+}
+@media (max-width: 420px) {
+  footer.site .row { grid-template-columns: 1fr; }
+}
+
+/* Make sure long URLs / hex strings / unbroken tokens never push a card
+   wider than its container. */
+.docs-body code:not(pre code),
+.docs-body a {
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}

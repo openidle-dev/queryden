@@ -630,6 +630,49 @@ const FOOTPRINT = [
           </div>
         ))}
       </div>
+
+      <!-- Mobile fallback: the full 7-column table is unusable on a phone.
+           Show a focused wedge-wins summary + direct links to each
+           dedicated comparison page. -->
+      <div class="reveal compare-mobile" aria-label="QueryDen advantages and per-tool comparisons">
+        <div class="compare-mobile-card">
+          <div class="compare-mobile-eye">QueryDen wedge wins</div>
+          <ul class="compare-mobile-list">
+            <li>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4.5 4.5L19 7"/></svg>
+              ~11 MB native installer
+            </li>
+            <li>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4.5 4.5L19 7"/></svg>
+              No Chromium bundled
+            </li>
+            <li>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4.5 4.5L19 7"/></svg>
+              Machine-locked vault, brute-force lockout
+            </li>
+            <li>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4.5 4.5L19 7"/></svg>
+              Integrated psql (per Postgres version)
+            </li>
+            <li>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4.5 4.5L19 7"/></svg>
+              AI assistant — BYO key, 4 providers
+            </li>
+            <li>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4.5 4.5L19 7"/></svg>
+              Zero telemetry by default
+            </li>
+          </ul>
+          <div class="compare-mobile-vs">
+            <a href="/compare/dbeaver">vs DBeaver</a>
+            <a href="/compare/datagrip">vs DataGrip</a>
+            <a href="/compare/tableplus">vs TablePlus</a>
+            <a href="/compare/pgadmin">vs pgAdmin</a>
+            <a href="/compare/beekeeper">vs Beekeeper</a>
+            <a href="/compare">All comparisons →</a>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -895,6 +938,12 @@ const FOOTPRINT = [
     .hd-result-row span:nth-child(2) { display: none; }
     .hd-result-head span:nth-child(2) { display: none; }
     .hd-side { display: none; }
+    .hd-editor { overflow-x: auto; -webkit-overflow-scrolling: touch; padding: 12px 0; }
+    .hd-code { font-size: 12.5px; line-height: 1.7; }
+    .hd-gut { width: 26px; margin-right: 10px; font-size: 10.5px; }
+    .hd-run { display: none; }
+    .hd-tab { font-size: 11px; padding: 4px 10px; }
+    .hd-tab-meta { display: none; }
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -1128,6 +1177,74 @@ const FOOTPRINT = [
     .compare-wrap { overflow-x: auto; }
     .ct-head-row, .ct-row { min-width: 900px; }
   }
+
+  /* Mobile compare: the full 7-column table is unusable below ~700px.
+     Hide it and replace with a stacked "wedge wins" card that links to
+     the dedicated comparison pages. Toolbar + section head stay. */
+  .compare-mobile { display: none; }
+  @media (max-width: 700px) {
+    .compare-toolbar { display: none; }
+    .compare-wrap { display: none; }
+    .compare-mobile { display: block; }
+  }
+  .compare-mobile-card {
+    border: 1px solid var(--line-1);
+    border-radius: var(--r-3);
+    background: var(--bg-1);
+    padding: 18px 18px 14px;
+    margin-top: 4px;
+    box-shadow: var(--sh-1);
+  }
+  .compare-mobile-eye {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 10px;
+  }
+  .compare-mobile-list {
+    list-style: none; padding: 0; margin: 0 0 16px;
+    display: flex; flex-direction: column; gap: 6px;
+    font-size: 14px;
+    color: var(--ink-1);
+  }
+  .compare-mobile-list li {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 0;
+    border-bottom: 1px solid color-mix(in oklch, var(--line-1) 50%, transparent);
+  }
+  .compare-mobile-list li:last-child { border-bottom: 0; }
+  .compare-mobile-list svg { color: var(--accent); flex-shrink: 0; }
+  .compare-mobile-vs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 4px;
+  }
+  .compare-mobile-vs a {
+    display: block;
+    padding: 10px 12px;
+    border: 1px solid var(--line-1);
+    border-radius: var(--r-2);
+    font-size: 13px;
+    color: var(--ink-1);
+    background: var(--bg-2);
+    text-align: center;
+    transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+  }
+  .compare-mobile-vs a:hover {
+    border-color: color-mix(in oklch, var(--accent) 45%, var(--line-2));
+    color: var(--ink-0);
+  }
+  .compare-mobile-full {
+    margin-top: 12px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink-3);
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .compare-mobile-full:hover { color: var(--accent); }
 
   /* ========== Footprint (installer-size, to scale) ========== */
   .footprint {
@@ -1621,6 +1738,14 @@ const FOOTPRINT = [
   .ex-hint .ex-rel { color: var(--ink-4); }
   .ex-hint .ex-cost { color: var(--ink-4); font-style: italic; }
   .ex-hint .ex-bar { opacity: 0.3; }
+
+  @media (max-width: 700px) {
+    .ex-row { grid-template-columns: 60px 1fr auto; gap: 10px; padding: 6px 10px; font-size: 11px; }
+    .ex-d1 { margin-left: 8px; }
+    .ex-d2 { margin-left: 16px; }
+    .ex-rel { display: none; }
+    .ex-cost { min-width: 44px; font-size: 10.5px; }
+  }
 
   .ex-flag-dot {
     width: 8px; height: 8px; border-radius: 50%;

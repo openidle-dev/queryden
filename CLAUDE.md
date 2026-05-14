@@ -14,10 +14,20 @@ npm run dev                 # Vite only (frontend at :1420) — rarely useful al
 npm run tauri dev           # full app (Tauri shell + Vite HMR) — primary dev command
 npm run tauri build         # production build (current host target)
 npm run build:windows       # cross-compile Windows MSVC target from Linux (cargo-xwin + lld + nsis required, see BUILD_WINDOWS.md)
+npm test                    # run Vitest pure-function tests (CI runs this on every PR)
+npm run test:watch          # Vitest in watch mode for local TDD
 node scripts/bump-version.js  # bump patch version in package.json, Cargo.toml, and tauri.conf.json in lockstep
 ```
 
-There is **no test suite, lint config, or formatter configured** in the repo. Playwright is a dev dependency but there are no tests committed. Vite's port is pinned to 1420 (`strictPort: true`).
+## Testing
+
+- **Frontend**: Vitest is configured (`vitest.config.ts`) with `environment: "node"` for pure-function tests. Test files live next to source as `*.test.ts` / `*.test.tsx` (current examples: `src/utils/sqlSecurity.test.ts`, `src/utils/SqlFormatter.test.ts`, `src/utils/logger.test.ts`, `src/components/ui/VariableSubstitutionDialog.test.ts`). **No jsdom / React Testing Library yet** — component tests aren't set up. Adding them is tracked in [#24](https://github.com/openidle-dev/queryden/issues/24).
+- **Backend**: `cargo test` is wired in `.github/workflows/ci.yml` (`src-tauri/` Rust job) but there are no tests in `src-tauri/src/` yet. The encryption/lockout logic in `storage.rs` is the highest-priority surface to backfill — also tracked in [#24](https://github.com/openidle-dev/queryden/issues/24).
+- **E2E**: none. Playwright is a transitive dev dep but no Playwright tests are configured. A Playwright + Tauri-IPC-mock setup is in the roadmap.
+- **No lint config or formatter** is configured — typecheck (`npx tsc --noEmit`) is the only static-analysis gate today, and `cargo clippy -- -D warnings` for Rust.
+- **Convention**: every bug fix should land with the failing test that proves it. For bugs that can't be cleanly fixed in the same PR, pin the test with Vitest's `it.fails(...)` (see `VariableSubstitutionDialog.test.ts` for the pattern referencing issue #19) so the bug is documented in executable form and CI flips red the moment it's fixed.
+
+Vite's port is pinned to 1420 (`strictPort: true`).
 
 ## Architecture
 
