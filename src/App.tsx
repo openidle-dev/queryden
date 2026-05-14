@@ -6,6 +6,7 @@ import { AppLayout } from "./components/layout/AppLayout";
 import { ConfirmDialogProvider } from "./components/ui/ConfirmDialog";
 import { ErrorBoundary } from "./components/ui/ErrorBoundary";
 import { Suspense, lazy } from "react";
+import { matchGlobalShortcut } from "./utils/globalShortcuts";
 import "./styles/globals.css";
 
 const SettingsDialog = lazy(() => import("./components/settings/SettingsDialog").then(m => ({ default: m.SettingsDialog })));
@@ -27,25 +28,19 @@ function AppContent() {
   // Global keyboard shortcut handler
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ctrl+H - Help
-      if (e.ctrlKey && e.key === "h") {
-        e.preventDefault();
-        setShowHelp(true);
-        return;
-      }
-      
-      // Ctrl+Alt+S - Settings
-      if (e.ctrlKey && e.altKey && e.key === "S") {
-        e.preventDefault();
-        setShowSettings(true);
-        return;
-      }
-      
-      // Ctrl+Shift+L - Format Code
-      if (e.ctrlKey && e.shiftKey && e.key === "L") {
-        e.preventDefault();
-        window.dispatchEvent(new CustomEvent("format-code"));
-        return;
+      const action = matchGlobalShortcut(e);
+      if (!action) return;
+      e.preventDefault();
+      switch (action.type) {
+        case "open-help":
+          setShowHelp(true);
+          return;
+        case "open-settings":
+          setShowSettings(true);
+          return;
+        case "dispatch-event":
+          window.dispatchEvent(new CustomEvent(action.name));
+          return;
       }
     };
 
