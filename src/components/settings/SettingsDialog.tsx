@@ -22,7 +22,7 @@ const categories: { id: SettingsCategory; label: string; icon: any; keywords: st
   { id: "queryExecution", label: "Query Execution", icon: Play, keywords: ["enter", "max rows", "commit", "prefetch", "execute", "run", "auto-commit", "inline", "results"] },
   { id: "explorer", label: "Database Explorer", icon: Database, keywords: ["view", "function", "trigger", "index", "constraint", "schema", "namespace", "tree", "explorer", "foreign tables", "empty groups"] },
   { id: "copyTransfer", label: "Copy/Transfer", icon: Copy, keywords: ["copy", "transfer", "merge", "schema", "data", "method", "batch size", "parallel", "threads", "compression", "logging", "pg_dump"] },
-  { id: "permissions", label: "Permissions & Rules", icon: Shield, keywords: ["drop", "truncate", "delete", "warn", "bypass", "rules", "permission", "safety", "allow sql execute", "sql:allow-execute", "guru", "dangerous"] },
+  { id: "permissions", label: "Permissions & Rules", icon: Shield, keywords: ["drop", "truncate", "delete", "warn", "bypass", "rules", "safety", "guru", "dangerous"] },
   { id: "ai", label: "AI Assistant", icon: Sparkles, keywords: ["ai", "assistant", "openai", "gemini", "anthropic", "llm", "api", "key", "model", "ollama", "gpt-4", "claude"] },
   { id: "importExport", label: "Import/Export", icon: Import, keywords: ["import", "export", "csv", "json", "sql", "tsv", "xml", "html", "delimiter", "headers", "null", "quote"] },
   { id: "vault", label: "Credential Vault", icon: Shield, keywords: ["vault", "security", "credentials", "password", "username", "encryption", "master", "profiles"] },
@@ -1044,23 +1044,6 @@ function PermissionsSettings() {
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
-          <Shield className="w-4 h-4 text-green-400" />
-          Global Permissions
-        </h3>
-        <p className="text-xs text-[var(--text-secondary)] mb-4">
-          Control high-level permissions for the application engine.
-        </p>
-
-        <ToggleOption
-          label="Allow SQL Execution"
-          description="Global permission for sql:allow-execute. Required for DROP, TRUNCATE, etc."
-          checked={settings.allowSqlExecute}
-          onChange={(checked) => settings.setSetting("allowSqlExecute", checked)}
-        />
-      </div>
-
-      <div className="pt-4 border-t border-[var(--border)]">
         <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4 text-yellow-500" />
           Safety Rules
