@@ -26,6 +26,124 @@ interface VariableSubstitutionDialogProps {
   onCancel: () => void;
 }
 
+interface VariableMatch {
+  start: number;
+  end: number;
+  name: string;
+  defaultValue?: string;
+  isOptional: boolean;
+}
+
+const VAR_RE = /^:([a-zA-Z_][a-zA-Z0-9_]*)(?::([^:?]+))?(\?)?/;
+const DOLLAR_TAG_RE = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/;
+
+/**
+ * Scan SQL and locate every real `:name` variable reference.
+ *
+ * Skips contexts where a colon does NOT introduce a variable:
+ *   - the `::` cast operator (e.g. `value::jsonb`)
+ *   - single-quoted string literals (`'foo:bar'`)
+ *   - double-quoted identifiers (`"foo:bar"`)
+ *   - dollar-quoted bodies (`$$ ... :foo ... $$` and `$tag$ ... $tag$`)
+ *   - `--` line comments and `/* ... *​/` block comments
+ *
+ * Both extractVariables and substituteVariables route through this so
+ * they apply the exact same rules. See issue #19.
+ */
+function findVariableMatches(query: string): VariableMatch[] {
+  const matches: VariableMatch[] = [];
+  let i = 0;
+  while (i < query.length) {
+    const c = query[i];
+
+    // Single-quoted string literal; `''` is the SQL escape for a literal `'`.
+    if (c === "'") {
+      i++;
+      while (i < query.length) {
+        if (query[i] === "'") {
+          if (query[i + 1] === "'") { i += 2; continue; }
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+
+    // Double-quoted identifier; same `""` escape pattern as `''`.
+    if (c === '"') {
+      i++;
+      while (i < query.length) {
+        if (query[i] === '"') {
+          if (query[i + 1] === '"') { i += 2; continue; }
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+
+    // `--` line comment runs to end of line.
+    if (c === "-" && query[i + 1] === "-") {
+      while (i < query.length && query[i] !== "\n") i++;
+      continue;
+    }
+
+    // `/* ... */` block comment. Not handling Postgres-style nesting —
+    // very rare in practice, and worst-case we under-skip rather than
+    // over-skip, which only risks false positives we can fix later.
+    if (c === "/" && query[i + 1] === "*") {
+      i += 2;
+      while (i < query.length) {
+        if (query[i] === "*" && query[i + 1] === "/") { i += 2; break; }
+        i++;
+      }
+      continue;
+    }
+
+    // Dollar-quoted block: `$tag$ ... $tag$` or `$$ ... $$`. The tag may
+    // be empty or `[A-Za-z_][A-Za-z0-9_]*`. A lone `$1` is a positional
+    // parameter — not a quote — and correctly fails this regex.
+    if (c === "$") {
+      const m = DOLLAR_TAG_RE.exec(query.slice(i));
+      if (m) {
+        const tag = m[0];
+        const bodyStart = i + tag.length;
+        const closeIdx = query.indexOf(tag, bodyStart);
+        i = closeIdx === -1 ? query.length : closeIdx + tag.length;
+        continue;
+      }
+    }
+
+    // `::` cast operator — skip both colons so neither is mistaken for
+    // a variable introducer.
+    if (c === ":" && query[i + 1] === ":") {
+      i += 2;
+      continue;
+    }
+
+    // Real variable: `:name`, `:name:default`, `:name?`, `:name:default?`.
+    if (c === ":") {
+      const m = VAR_RE.exec(query.slice(i));
+      if (m) {
+        matches.push({
+          start: i,
+          end: i + m[0].length,
+          name: m[1],
+          defaultValue: m[2],
+          isOptional: !!m[3],
+        });
+        i += m[0].length;
+        continue;
+      }
+    }
+
+    i++;
+  }
+  return matches;
+}
+
 /** Parse :varName patterns from a SQL query string.
  *  Supports:
  *  - :varname — required text variable
@@ -37,61 +155,56 @@ interface VariableSubstitutionDialogProps {
  */
 export function extractVariables(query: string): QueryVariable[] {
   const vars: QueryVariable[] = [];
-  // Match :varname with optional :default and optional ?
-  const regex = /:([a-zA-Z_][a-zA-Z0-9_]*)(?::([^:?]+))?(\?)?/g;
-  let match;
-
-  while ((match = regex.exec(query)) !== null) {
-    const fullName = match[1];
-    const defaultVal = match[2];
-    const isOptional = !!match[3];
-
-    // Determine type from default value
+  for (const m of findVariableMatches(query)) {
     let inferredType: QueryVariable["type"] = "text";
-    if (defaultVal !== undefined) {
-      if (/^\d+(\.\d+)?$/.test(defaultVal)) {
+    if (m.defaultValue !== undefined) {
+      if (/^\d+(\.\d+)?$/.test(m.defaultValue)) {
         inferredType = "number";
-      } else if (/^\d{4}-\d{2}-\d{2}/.test(defaultVal)) {
+      } else if (/^\d{4}-\d{2}-\d{2}/.test(m.defaultValue)) {
         inferredType = "date";
-      } else if (defaultVal === "true" || defaultVal === "false") {
+      } else if (m.defaultValue === "true" || m.defaultValue === "false") {
         inferredType = "boolean";
       }
     }
-
-    // Avoid duplicates — take first occurrence only
-    if (!vars.find(v => v.name === fullName)) {
+    if (!vars.find(v => v.name === m.name)) {
       vars.push({
-        name: fullName,
-        defaultValue: defaultVal,
-        isOptional,
+        name: m.name,
+        defaultValue: m.defaultValue,
+        isOptional: m.isOptional,
         type: inferredType,
-        position: match.index,
+        position: m.start,
       });
     }
   }
-
   return vars;
 }
 
 /** Substitute :varName patterns in a query with provided values.
- *  Handles string escaping for SQL safety.
+ *  Handles string escaping for SQL safety. Respects the same context
+ *  rules as extractVariables — a `:foo` inside a string literal or
+ *  function body is left untouched.
  */
 export function substituteVariables(
   query: string,
   values: VariableValues
 ): string {
-  let result = query;
-  for (const [name, value] of Object.entries(values)) {
-    // Escape single quotes in string values for SQL safety
-    const safeValue = String(value).replace(/'/g, "''");
-    result = result.replace(new RegExp(`:${name}(?::[^:?]+)?(\\?)?`, "g"), `'${safeValue}'`);
+  const matches = findVariableMatches(query);
+  let result = "";
+  let lastEnd = 0;
+  for (const m of matches) {
+    result += query.slice(lastEnd, m.start);
+    const userValue = values[m.name];
+    const effective =
+      userValue !== undefined && userValue !== "" ? userValue : m.defaultValue;
+    if (effective !== undefined) {
+      const safe = String(effective).replace(/'/g, "''");
+      result += `'${safe}'`;
+    } else {
+      result += "NULL";
+    }
+    lastEnd = m.end;
   }
-  // Remove any remaining unsubstituted optional variables (replace with NULL or empty)
-  result = result.replace(/:'([^']*)'(?::([^'?]+))?(\?)?/g, (_, name, _def, opt) => {
-    return opt ? "NULL" : `'${name}'`;
-  });
-  // Clean up any literal remaining variable references that weren't substituted
-  result = result.replace(/ :[a-zA-Z_][a-zA-Z0-9_]*(?::[^:?]+)?(\?)?/g, " NULL");
+  result += query.slice(lastEnd);
   return result;
 }
 
