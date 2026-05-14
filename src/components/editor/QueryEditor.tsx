@@ -7,6 +7,7 @@ import { useConnections } from "../../contexts/useConnections";
 import { useSettings } from "../../store/settingsStore";
 import { useLocalHistory } from "../../store/localHistoryStore";
 import { format } from "sql-formatter";
+import { detectSchemaDotContext, detectAliasDotContext } from "./completionContext";
 
 // Global tracking to prevent duplicate provider registration across component mounts
 let sqlProviderDisposable: any = null;
@@ -863,17 +864,78 @@ const isInJoinContext = /(\b|^)(JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|INNER\s+JOIN|CROSS
             const currentWord = word.word.toLowerCase();
             const currentWordLength = currentWord.length;
             
-            // Detect if user is typing table.column (e.g., "users.")
-            const lineContentAfterDot = lineContent.substring(0, position.column - 1);
-            const lastDotIndex = lineContentAfterDot.lastIndexOf('.');
-            let tablePrefix: string | null = null;
-            
-            if (lastDotIndex > 0) {
-              const beforeDot = lineContentAfterDot.substring(0, lastDotIndex).trim();
-              const lastSpaceIndex = beforeDot.lastIndexOf(' ');
-              const potentialTable = beforeDot.substring(lastSpaceIndex + 1);
-              if (potentialTable && !potentialTable.includes(' ')) {
-                tablePrefix = potentialTable.toLowerCase();
+            // Issue #28: schema-qualified autocomplete. When the cursor sits in `<schema>.<typed>`
+            // context, Monaco's default fuzzy matcher treats `.` as a member-access trigger and
+            // filters out `schema.table`-style labels. Build a dedicated suggestion list with bare
+            // labels and a replacement range that covers only the post-dot text, matching how
+            // DataGrip and DBeaver handle this.
+            if (items) {
+              const tableMatch = detectSchemaDotContext(lineContent, position.column, items.tables || []);
+              const viewMatch = detectSchemaDotContext(lineContent, position.column, items.views || []);
+              const fnMatch = detectSchemaDotContext(lineContent, position.column, items.functions || []);
+              const anyMatch = tableMatch || viewMatch || fnMatch;
+              if (anyMatch) {
+                const schemaRange = {
+                  startLineNumber: position.lineNumber,
+                  endLineNumber: position.lineNumber,
+                  startColumn: anyMatch.rangeStartColumn,
+                  endColumn: word.endColumn,
+                };
+                const schemaSuggestions = [
+                  ...(tableMatch?.bareNames || []).map((bare, idx) => ({
+                    label: bare,
+                    kind: monaco.languages.CompletionItemKind.Class,
+                    insertText: bare,
+                    detail: `${anyMatch.schema}.${bare}`,
+                    range: schemaRange,
+                    sortText: `0${String(idx).padStart(4, "0")}`,
+                  })),
+                  ...(viewMatch?.bareNames || []).map((bare, idx) => ({
+                    label: bare,
+                    kind: monaco.languages.CompletionItemKind.Interface,
+                    insertText: bare,
+                    detail: `${anyMatch.schema}.${bare}`,
+                    range: schemaRange,
+                    sortText: `1${String(idx).padStart(4, "0")}`,
+                  })),
+                  ...(fnMatch?.bareNames || []).map((bare, idx) => ({
+                    label: bare,
+                    kind: monaco.languages.CompletionItemKind.Method,
+                    insertText: `${bare}($1)`,
+                    detail: `${anyMatch.schema}.${bare}()`,
+                    range: schemaRange,
+                    sortText: `2${String(idx).padStart(4, "0")}`,
+                  })),
+                ];
+                return { suggestions: schemaSuggestions };
+              }
+
+              // Issue #28 (extended): alias.column and table.column completion. Same Monaco dot-trigger
+              // pitfall as the schema-dot case — bare column labels get filtered out when the range
+              // covers `<alias>.`. Resolve the alias against FROM/JOIN clauses in the visible query
+              // and surface that table's columns with a post-dot range.
+              const aliasMatch = detectAliasDotContext(
+                lineContent,
+                position.column,
+                model.getValue(),
+                items.columns || [],
+              );
+              if (aliasMatch) {
+                const aliasRange = {
+                  startLineNumber: position.lineNumber,
+                  endLineNumber: position.lineNumber,
+                  startColumn: aliasMatch.rangeStartColumn,
+                  endColumn: word.endColumn,
+                };
+                const aliasSuggestions = aliasMatch.columnNames.map((col, idx) => ({
+                  label: col,
+                  kind: monaco.languages.CompletionItemKind.Field,
+                  insertText: col,
+                  detail: `${aliasMatch.tableName}.${col}`,
+                  range: aliasRange,
+                  sortText: String(idx).padStart(4, "0"),
+                }));
+                return { suggestions: aliasSuggestions };
               }
             }
 
@@ -1019,40 +1081,6 @@ const isInJoinContext = /(\b|^)(JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|INNER\s+JOIN|CROSS
                 !queryTableColumns.includes(s)
               );
               sortedSuggestions = [...dynamicOnSuggestions, ...queryTableColumns.slice(0, 50), ...others.slice(0, 30)];
-            } else if (tablePrefix) {
-              // User is typing table.column (or alias.column)
-              // Resolve alias→tableName if the prefix is an alias
-              let resolvedTableName = tablePrefix;
-              
-              // Quick parse for alias→table in the query
-              const textForAlias = model.getValue();
-              const aliasTablePattern = /(?:FROM|JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|INNER\s+JOIN|CROSS\s+JOIN|FULL\s+JOIN)\s+["']?(\w+(?:\.\w+)?)["']?\s+(?:AS\s+)?(\w+)/gi;
-              let alMatch;
-              while ((alMatch = aliasTablePattern.exec(textForAlias)) !== null) {
-                if (alMatch[2].toLowerCase() === tablePrefix) {
-                  resolvedTableName = alMatch[1].toLowerCase();
-                  break;
-                }
-              }
-              
-              // Prioritize columns from that table (using resolved name)
-              const tableColumns = nonFkSuggestions.filter((s: any) => 
-                s.kind === monaco.languages.CompletionItemKind.Field && 
-                s.detail && (s.detail.toLowerCase().startsWith(resolvedTableName) || s.detail.toLowerCase().startsWith(tablePrefix))
-              );
-              const otherColumns = nonFkSuggestions.filter((s: any) => 
-                s.kind === monaco.languages.CompletionItemKind.Field && 
-                !tableColumns.includes(s)
-              );
-              const nonColumns = nonFkSuggestions.filter((s: any) => 
-                s.kind !== monaco.languages.CompletionItemKind.Field
-              );
-              
-              sortedSuggestions = [
-                ...tableColumns.slice(0, 30),
-                ...otherColumns.slice(0, 30),
-                ...nonColumns.slice(0, 20)
-              ];
             } else {
               // Normal context - standard priority
               // Limit total suggestions to prevent UI lag
