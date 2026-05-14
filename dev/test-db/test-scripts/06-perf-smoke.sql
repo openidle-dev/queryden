@@ -24,7 +24,7 @@
 --        - Multi-Query Dialog
 --        - AI Assistant
 --        - Open a definition (right-click a table -> View Definition)
---        - Open Local History (Ctrl+Shift+H or via the menu)
+--        - Open Local History (right-click in the editor → "Local History | Show History")
 --
 -- 3. SETTINGS / HELP HEADER BUTTONS (issue: duplicate eager imports)
 --      Click the gear icon (Settings) and the question-mark icon (Help)
@@ -32,9 +32,20 @@
 --      shortcuts should also work.
 --
 -- 4. SHOW-LOCAL-HISTORY LISTENER (issue: leak on every effect re-run)
---      Open Local History, close it, switch active query tab a few times,
---      open Local History again. It should still open correctly (this
---      verifies the named-handler fix didn't break the wiring).
+--      The `show-local-history` event is dispatched from the editor's
+--      RIGHT-CLICK context menu (entry "Local History | Show History" near
+--      the bottom). No keyboard shortcut is bound to fire it directly.
+--
+--      Steps:
+--        a. Right-click inside the SQL editor.
+--        b. Click "Local History | Show History" → dialog opens.
+--        c. Close it.
+--        d. Type a few characters or switch active query tabs (this triggers
+--           the useEffect that registers the listener to re-fire).
+--        e. Right-click → "Local History | Show History" again → dialog
+--           should open cleanly. Before the fix the listener handler
+--           reference changed every re-render so the cleanup didn't match —
+--           handlers accumulated. After the fix the handler is stable.
 -- ============================================================================
 
 -- Some useful queries to run during the perf smoke test:
