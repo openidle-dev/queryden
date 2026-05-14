@@ -41,23 +41,32 @@ describe("extractVariables — happy paths", () => {
   });
 });
 
-// Issue #19: extractVariables wrongly matches inside non-variable contexts.
-// These tests are pinned with it.fails so CI stays green today; when the
-// regex is fixed they flip to red, telling the implementer to drop `.fails`.
+// Issue #19: extractVariables must NOT match inside non-variable contexts.
 // https://github.com/openidle-dev/queryden/issues/19
-describe("extractVariables — issue #19 (currently broken)", () => {
-  it.fails("does NOT match the :: cast operator", () => {
-    // value::jsonb is a PostgreSQL type cast, not a :jsonb variable.
-    // Today the regex captures `:jsonb` because the second `:` looks like
-    // the start of a variable name.
+describe("extractVariables — issue #19 context-aware matching", () => {
+  it("does NOT match the :: cast operator", () => {
     expect(extractVariables("SELECT data::jsonb FROM x")).toEqual([]);
   });
 
-  it.fails("does NOT match :word inside single-quoted string literals", () => {
+  it("still treats a real variable after a cast on its own as a variable", () => {
+    // `WHERE data::jsonb = :payload` — the cast is skipped, :payload is real.
+    const vars = extractVariables(
+      "SELECT * FROM x WHERE data::jsonb = :payload"
+    );
+    expect(vars.map(v => v.name)).toEqual(["payload"]);
+  });
+
+  it("does NOT match :word inside single-quoted string literals", () => {
     expect(extractVariables("SELECT 'time::value' AS x")).toEqual([]);
   });
 
-  it.fails("does NOT match :word inside dollar-quoted function bodies", () => {
+  it("treats '' as an escaped quote inside a string literal", () => {
+    // The string runs from the first `'` to the LAST `'` here; the `''`
+    // in the middle is a literal apostrophe, not a string terminator.
+    expect(extractVariables("SELECT 'it''s :not_a_var' AS x")).toEqual([]);
+  });
+
+  it("does NOT match :word inside dollar-quoted function bodies", () => {
     const trigger = `CREATE OR REPLACE FUNCTION audit_delete() RETURNS trigger AS $$
 BEGIN
   INSERT INTO audit_log(payload) VALUES (OLD.data::jsonb);
@@ -67,12 +76,62 @@ $$ LANGUAGE plpgsql;`;
     expect(extractVariables(trigger)).toEqual([]);
   });
 
-  it.fails("does NOT match :word inside -- line comments", () => {
+  it("does NOT match inside tagged dollar-quote $body$ ... $body$", () => {
+    const sql = `CREATE FUNCTION f() RETURNS void AS $body$ SELECT :nope; $body$ LANGUAGE sql;`;
+    expect(extractVariables(sql)).toEqual([]);
+  });
+
+  it("does NOT match :word inside -- line comments", () => {
     expect(extractVariables("SELECT 1 -- :fake_var\nFROM t")).toEqual([]);
   });
 
-  it.fails("does NOT match :word inside /* */ block comments", () => {
+  it("does match a real variable on the line AFTER a -- comment", () => {
+    expect(
+      extractVariables("SELECT 1 -- :fake\nFROM t WHERE x = :real").map(v => v.name)
+    ).toEqual(["real"]);
+  });
+
+  it("does NOT match :word inside /* */ block comments", () => {
     expect(extractVariables("SELECT 1 /* :fake_var */ FROM t")).toEqual([]);
+  });
+
+  it("does NOT mistake a positional parameter $1 for a dollar-quote", () => {
+    // `$1` is a Postgres positional param, NOT a dollar-quote opener.
+    // The scanner should not swallow everything after it.
+    expect(
+      extractVariables("SELECT $1, :real_var FROM t").map(v => v.name)
+    ).toEqual(["real_var"]);
+  });
+});
+
+describe("substituteVariables — issue #19 context-aware substitution", () => {
+  it("does NOT substitute inside a string literal", () => {
+    // If extractVariables doesn't see :user inside the literal, substitution
+    // must also leave it alone. A user supplying a value for an UNRELATED
+    // variable :user must not corrupt the string.
+    const out = substituteVariables(
+      "SELECT 'hello :user' AS greeting, :user AS who",
+      { user: "alice" }
+    );
+    expect(out).toBe("SELECT 'hello :user' AS greeting, 'alice' AS who");
+  });
+
+  it("does NOT substitute :foo inside a dollar-quoted body", () => {
+    const out = substituteVariables(
+      "CREATE FUNCTION f() RETURNS void AS $$ SELECT :leave_alone; $$ LANGUAGE sql; SELECT :real",
+      { leave_alone: "X", real: "Y" }
+    );
+    expect(out).toBe(
+      "CREATE FUNCTION f() RETURNS void AS $$ SELECT :leave_alone; $$ LANGUAGE sql; SELECT 'Y'"
+    );
+  });
+
+  it("does NOT substitute :foo across a :: cast", () => {
+    const out = substituteVariables(
+      "SELECT data::jsonb FROM x WHERE id = :id",
+      { id: "42" }
+    );
+    expect(out).toBe("SELECT data::jsonb FROM x WHERE id = '42'");
   });
 });
 
