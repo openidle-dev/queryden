@@ -66,7 +66,7 @@ The version string is injected at build time via Vite's `define`: `__APP_VERSION
 
 ### Global keyboard shortcuts
 
-Wired in `App.tsx`'s top-level `useEffect`: Ctrl+H opens help, Ctrl+Alt+S opens settings, Ctrl+Shift+L dispatches a `format-code` CustomEvent on `window`. **Bug — issue [#9](https://github.com/openidle-dev/queryden/issues/9):** the editor listens for `format-sql`, not `format-code`, so the global format shortcut currently does nothing. Monaco's built-in `Ctrl+Shift+F` is the binding that actually formats inside the editor. Per-feature shortcuts live in `keymapStore`. New global shortcuts go in `App.tsx`; feature-local shortcuts go in their component.
+Wired in `App.tsx`'s top-level `useEffect`, which delegates the keydown → action mapping to the pure `matchGlobalShortcut` helper in `src/utils/globalShortcuts.ts` (unit-tested in `globalShortcuts.test.ts`). Current bindings: Ctrl+H opens help, Ctrl+Alt+S opens settings, Ctrl+Shift+L dispatches a `format-sql` CustomEvent on `window` (which `QueryEditor.tsx` listens for to run Monaco's format action — see [#9](https://github.com/openidle-dev/queryden/issues/9) for the historical mismatch). Monaco's built-in `Ctrl+Shift+F` is also wired to the same formatter inside the editor. Per-feature shortcuts live in `keymapStore`. New global shortcuts go in the `matchGlobalShortcut` table and (if they need state) a `case` in `App.tsx`; feature-local shortcuts go in their component.
 
 ### Versioning
 
