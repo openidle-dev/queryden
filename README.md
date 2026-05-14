@@ -1,116 +1,83 @@
+<div align="center">
+
+<img src="public/img/hero.jpg" alt="QueryDen — a glowing 3D render of the QueryDen desktop app floating between cyan and magenta light streams" width="900" />
+
 # QueryDen
 
-A modern, cross-platform database manager built with Tauri, React, and TypeScript. Lightweight, fast, and secure — designed for developers who need a reliable database tool without the bloat.
+**The database manager that isn't an Electron app.**
 
-![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)
+A native, open-source SQL client for Postgres, MySQL, SQLite, CockroachDB and Supabase.
+Built in Rust. ~11 MB installer. Zero telemetry.
 
-![QueryDen Database Explorer](public/img/explorer.png)
+[![License: MIT](https://img.shields.io/github/license/openidle-dev/queryden?color=blue)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/openidle-dev/queryden?label=release)](https://github.com/openidle-dev/queryden/releases/latest)
+[![Build status](https://img.shields.io/github/actions/workflow/status/openidle-dev/queryden/ci.yml?branch=main)](https://github.com/openidle-dev/queryden/actions/workflows/ci.yml)
+[![Downloads](https://img.shields.io/github/downloads/openidle-dev/queryden/total?color=brightgreen)](https://github.com/openidle-dev/queryden/releases)
+[![GitHub stars](https://img.shields.io/github/stars/openidle-dev/queryden?style=flat&logo=github)](https://github.com/openidle-dev/queryden/stargazers)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
+
+[**Download**](https://github.com/openidle-dev/queryden/releases/latest) ·
+[**Documentation**](https://queryden.openidle.com/docs) ·
+[**Website**](https://queryden.openidle.com) ·
+[**Changelog**](https://queryden.openidle.com/changelog) ·
+[**Roadmap**](https://queryden.openidle.com/roadmap)
+
+</div>
+
+---
+
+## Why QueryDen
+
+A database manager should be a database manager — not a 250 MB Java IDE, not a 200 MB Chromium bundle pretending to be an app. QueryDen is a native desktop client built on Tauri + Rust, with a Monaco-powered SQL editor, a real schema explorer, an encrypted machine-locked vault, and an integrated `psql` console. MIT-licensed. No accounts. No telemetry.
+
+## Install
+
+Pre-built binaries for the latest release:
+
+| Platform | Format |
+|----------|--------|
+| **Windows** | [`.exe` installer (NSIS)](https://github.com/openidle-dev/queryden/releases/latest) |
+| **macOS** (Apple Silicon) | [`.dmg`](https://github.com/openidle-dev/queryden/releases/latest) — universal build tracked in [#7](https://github.com/openidle-dev/queryden/issues/7) |
+| **Linux** | [`.deb`](https://github.com/openidle-dev/queryden/releases/latest) or [`.AppImage`](https://github.com/openidle-dev/queryden/releases/latest) |
+
+Or build from source — see [Building](#building) below.
 
 ## Features
 
-- **Multi-Database Support** — PostgreSQL, MySQL, MariaDB, SQLite, CockroachDB, and Supabase
-- **SSH Tunneling** — Connect to databases through SSH bastion hosts with password or key-based authentication
-- **Intelligent SQL Editor** — Monaco-powered editor with autocomplete, syntax highlighting, JOIN suggestions via foreign keys, and intention actions (Alt+Enter)
-- **Schema Explorer** — Tree-view database browser with schema selection, table details, columns, indexes, triggers, and foreign keys
-- **Visual Query Optimizer** — EXPLAIN ANALYZE visualization for query performance tuning
-- **Credential Vault** — Encrypted credential profiles with machine-locked AES-256-GCM encryption and Argon2id key derivation
-- **Local History** — Automatic file change tracking with encrypted storage, diff view, and revert capability
-- **Saved Queries** — Persistent query library with per-connection organization
-- **Query History** — Full execution history with timing and row counts
-- **Backup & Restore** — SQL dump and JSON backup/restore for databases
-- **psql Console** — Integrated PostgreSQL CLI terminal with tabular output rendering
-- **Connection Grouping** — Organize connections by database type in the explorer
-- **Keyboard Shortcuts** — Full keyboard navigation with customizable keymaps
-- **Live Templates** — SQL snippet templates for rapid query writing
-- **AI Integration** — Optional AI-powered SQL assistance (OpenAI, Anthropic, Google, Ollama)
+| | |
+|---|---|
+| **Multi-engine** | Postgres · MySQL · MariaDB · SQLite · CockroachDB · Supabase |
+| **SQL editor** | Monaco-powered with autocomplete, syntax highlighting, FK-aware JOIN suggestions, intention actions (Alt+Enter), and live templates |
+| **Schema explorer** | Tree-view browser for schemas, tables, columns, indexes, triggers, and foreign keys |
+| **Visual EXPLAIN** | EXPLAIN ANALYZE visualization for query performance tuning |
+| **Encrypted vault** | Credential profiles with AES-256-GCM, Argon2id KDF, machine-locked storage, and 5-attempt brute-force lockout |
+| **Local history** | Automatic file-change tracking with encrypted storage, diff view, and one-click revert |
+| **Saved queries** | Per-connection query library with full execution history (timing, row counts) |
+| **Backup & restore** | SQL dump and JSON backup/restore for whole databases |
+| **psql console** | Integrated PostgreSQL CLI terminal with tabular output rendering |
+| **SSH tunnels** | Connect through bastion hosts with password or key-based auth |
+| **AI assistant** *(optional)* | BYO key for OpenAI, Anthropic, Google, or a local Ollama instance — off by default |
+| **Keyboard-first** | Full keyboard navigation with customizable keymaps |
 
-## Installation
+See the full feature reference at [queryden.openidle.com/docs](https://queryden.openidle.com/docs).
 
-### Pre-built Binaries
+## Security & privacy
 
-Download the latest release from the [Releases](https://github.com/openidle-dev/queryden/releases) page:
-- **Linux**: `.deb` or `.AppImage`
-- **Windows**: `.exe` installer (NSIS)
-- **macOS (Apple Silicon)**: `.dmg` — a universal build covering Intel Macs is tracked in [#7](https://github.com/openidle-dev/queryden/issues/7); for now Intel users can build from source.
+- **AES-256-GCM** for every sensitive file, with **Argon2id** key derivation combining vault password + machine ID + master key.
+- **Machine-locked** — credential files refuse to load on a different computer.
+- **OS keyring** (Keychain / Credential Manager / libsecret) for master key storage, with a local-file fallback.
+- **Brute-force protection** — vault locks for a cooldown window after 5 failed attempts.
+- **Signed updates** — every release ships SHA256 checksums; the updater refuses to install a tampered asset.
+- **Zero telemetry.** QueryDen ships no analytics, no crash reports, no phone-home of any kind.
+- The optional AI assistant talks directly from your machine to your chosen provider — no QueryDen server sits in the middle.
 
-### Build from Source
-
-#### Prerequisites
-
-- [Node.js](https://nodejs.org/) 18+ (with npm or pnpm)
-- [Rust](https://rustup.rs/) 1.70+
-- Build essentials (gcc, make, etc.)
-
-#### Steps
-
-```bash
-# Clone the repository
-git clone https://github.com/openidle-dev/queryden.git
-cd queryden
-
-# Install frontend dependencies
-npm install
-# or: pnpm install
-
-# Run in development mode (opens Tauri dev window)
-npm run tauri dev
-
-# Build for production
-npm run tauri build
-```
-
-The built binaries will be in `src-tauri/target/release/bundle/`.
-
-#### Cross-compile for Windows from Linux
-
-```bash
-npm run build:windows
-```
-
-## Data Storage
-
-QueryDen stores data securely:
-
-| Data Type | Storage | Encryption |
-|-----------|---------|------------|
-| Connections | `~/.local/share/com.queryden.app/connections.json` | AES-256-GCM (machine-locked) |
-| Vault Credentials | `~/.local/share/com.queryden.app/vault.json` | AES-256-GCM (machine-locked) |
-| Query History | `~/.local/share/com.queryden.app/query-history.json` | AES-256-GCM |
-| Saved Queries | `~/.local/share/com.queryden.app/saved-queries.json` | AES-256-GCM |
-| Local History | `~/.local/share/com.queryden.app/local-history.json` | AES-256-GCM |
-| Settings | `~/.local/share/com.queryden.app/settings.json` | Plaintext |
-
-Data is machine-locked using `/etc/machine-id` (Linux), BIOS UUID (Windows), or IOPlatformUUID (macOS). Connection files cannot be loaded on a different computer.
-
-## Security
-
-- **AES-256-GCM** encryption for all sensitive data
-- **Argon2id** key derivation combining vault password + machine ID + master key
-- **OS Keyring** integration for master key storage (with file fallback)
-- **Machine-locked** storage — refuses to load on unauthorized machines
-- **Brute-force protection** — vault locks after 5 failed attempts
-- **No telemetry** — QueryDen collects zero usage data
-- **Parameterized queries** — all SQL execution uses prepared statements
-- **Signed updates** — every release ships SHA256 checksums; the in-app updater refuses to install an asset whose digest doesn't match
-
-To report a vulnerability, see [SECURITY.md](SECURITY.md).
-
-## Privacy & the AI assistant
-
-QueryDen itself sends no analytics, no crash reports, and no telemetry. If you enable the **optional AI assistant** in settings, the following data leaves your machine and is sent directly from the app to the provider you configure (OpenAI, Anthropic, Google, or a local Ollama instance):
-
-- Your prompt and any selected SQL / EXPLAIN output
-- A short system prompt describing the task
-- Your API key, in the `Authorization` / `x-api-key` header
-
-QueryDen has no server in the middle — requests go straight from the desktop app to the provider's API. Your provider's data-retention policy applies. The AI assistant is **off by default** and can be disabled at any time from Settings → AI.
+Full details: [queryden.openidle.com/security](https://queryden.openidle.com/security) · Vulnerability disclosure: [SECURITY.md](SECURITY.md).
 
 ## Documentation
 
-Full reference lives at **<https://queryden.openidle.com/docs>** — install, vault setup, the editor, every engine, the AI integration, security internals, and troubleshooting.
+The full reference — install, vault setup, the editor, every engine, the AI integration, security internals, and troubleshooting — lives at **<https://queryden.openidle.com/docs>**.
 
-The docs are MDX files in [`website/src/content/docs/`](website/src/content/docs/). Every page has an "Edit on GitHub" link in its header. See [`website/README.md`](website/README.md) for the docs system, and [CONTRIBUTING.md](CONTRIBUTING.md#contributing-documentation) for the contribution guide.
+Docs are MDX files in [`website/src/content/docs/`](website/src/content/docs/). Every page has an "Edit on GitHub" link in its header.
 
 ## Contributing
 
@@ -120,35 +87,52 @@ Pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the develo
 - Spot a typo in the docs? The "Edit on GitHub" button on any [docs page](https://queryden.openidle.com/docs) takes you straight to the file.
 - Want to discuss something larger? Start a [discussion](https://github.com/openidle-dev/queryden/discussions).
 
-## Project Structure
+## Building
+
+### Prerequisites
+
+- [Node.js](https://nodejs.org/) 18+ (npm or pnpm)
+- [Rust](https://rustup.rs/) 1.70+
+- Build essentials (gcc, make, etc.)
+
+### Steps
+
+```bash
+git clone https://github.com/openidle-dev/queryden.git
+cd queryden
+npm install
+npm run tauri dev      # development
+npm run tauri build    # production binaries
+```
+
+Output lands in `src-tauri/target/release/bundle/`. Cross-compiling to Windows from Linux: see [BUILD_WINDOWS.md](BUILD_WINDOWS.md).
+
+<details>
+<summary><strong>Project structure</strong></summary>
 
 ```
 queryden/
-├── src/                          # React frontend
-│   ├── components/               # UI components
-│   │   ├── editor/               # SQL editor (Monaco)
-│   │   ├── explorer/             # Database tree explorer
-│   │   ├── layout/               # Main layout panels
-│   │   ├── results/              # Query results grid
-│   │   ├── settings/             # Settings dialog
-│   │   └── ui/                   # Shared UI components
-│   ├── contexts/                 # React contexts (connections)
+├── src/                          # React + TypeScript frontend
+│   ├── components/               # UI components (editor, explorer, results, tools)
+│   ├── contexts/                 # React contexts (connections, theme)
 │   ├── store/                    # Zustand stores
-│   └── utils/                    # Helper utilities
+│   └── utils/                    # SQL formatting, security checks
 ├── src-tauri/                    # Rust backend
 │   ├── src/
-│   │   ├── cli.rs                # CLI tool management (psql, mysql, etc.)
-│   │   ├── ssh.rs                # SSH tunnel management
+│   │   ├── cli.rs                # External CLI management (psql, mysql, ...)
+│   │   ├── ssh.rs                # SSH tunnel lifecycle
 │   │   ├── storage.rs            # Encrypted file storage
-│   │   └── sysinfo.rs            # System info & updates
-│   └── patches/                  # Patched dependencies
-│       └── tauri-plugin-sql/     # Extended SQL plugin (arrays, intervals, etc.)
+│   │   └── sysinfo.rs            # System info
+│   └── patches/tauri-plugin-sql/ # Extended SQL plugin (arrays, intervals, ...)
+├── website/                      # Astro marketing site + MDX documentation
 └── package.json
 ```
 
+</details>
+
 ## License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE).
 
 ## Acknowledgments
 
