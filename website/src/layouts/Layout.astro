@@ -72,7 +72,28 @@ const canonicalUrl = `${SITE.homepage}${canonicalPath === '/' ? '' : canonicalPa
           )}
         </a>
         <a class="btn btn-sm btn-primary" href="/download">Download</a>
+        <button
+          type="button"
+          class="nav-toggle"
+          id="nav-toggle"
+          aria-label="Open menu"
+          aria-expanded="false"
+          aria-controls="nav-mobile-panel"
+        >
+          <span class="nav-toggle-bar" aria-hidden="true"></span>
+          <span class="nav-toggle-bar" aria-hidden="true"></span>
+          <span class="nav-toggle-bar" aria-hidden="true"></span>
+        </button>
       </div>
+    </div>
+    <div class="nav-mobile-panel" id="nav-mobile-panel" hidden>
+      <nav aria-label="Mobile primary">
+        {NAV.map((n) => (
+          <a href={n.href} class={active && n.label.toLowerCase().startsWith(active) ? 'active' : ''}>{n.label}</a>
+        ))}
+        <a href={SITE.repo} rel="noopener" class="nav-mobile-external">GitHub ↗</a>
+        <a href={`${SITE.repo}/releases/tag/${RELEASE.tag}`} rel="noopener" class="nav-mobile-external">Latest release · {RELEASE.tag}</a>
+      </nav>
     </div>
   </header>
 
@@ -143,6 +164,38 @@ const canonicalUrl = `${SITE.homepage}${canonicalPath === '/' ? '' : canonicalPa
   </footer>
 
   <script>
+    // Mobile nav toggle. Pure JS (no client framework). Closes on link click,
+    // Escape, viewport resize past the breakpoint, and outside click.
+    const toggle = document.getElementById('nav-toggle');
+    const panel = document.getElementById('nav-mobile-panel');
+    if (toggle && panel) {
+      const setOpen = (open: boolean) => {
+        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        toggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+        if (open) {
+          panel.removeAttribute('hidden');
+          document.body.classList.add('nav-mobile-open');
+        } else {
+          panel.setAttribute('hidden', '');
+          document.body.classList.remove('nav-mobile-open');
+        }
+      };
+      toggle.addEventListener('click', () => {
+        const open = toggle.getAttribute('aria-expanded') === 'true';
+        setOpen(!open);
+      });
+      panel.addEventListener('click', (e) => {
+        const tgt = e.target as HTMLElement;
+        if (tgt.tagName === 'A') setOpen(false);
+      });
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && toggle.getAttribute('aria-expanded') === 'true') setOpen(false);
+      });
+      window.addEventListener('resize', () => {
+        if (window.innerWidth > 800 && toggle.getAttribute('aria-expanded') === 'true') setOpen(false);
+      });
+    }
+
     // Reveal-on-scroll — single observer for the whole document.
     const reveals = document.querySelectorAll('.reveal');
     if ('IntersectionObserver' in window) {

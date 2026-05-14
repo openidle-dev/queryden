@@ -289,11 +289,6 @@ const tocHeadings = headings.filter((h) => h.depth >= 2 && h.depth <= 3);
     .docs-shell { grid-template-columns: 220px minmax(0, 1fr); gap: 32px; }
     .docs-toc { display: none; }
   }
-  @media (max-width: 760px) {
-    .docs-shell { grid-template-columns: 1fr; gap: 24px; padding: 24px var(--gutter) 56px; }
-    .docs-side { position: static; height: auto; }
-    .docs-side-inner { max-height: none; height: auto; padding-right: 0; }
-  }
 
   /* Mobile-only disclosure for the sidebar nav. On desktop the full nav
      is always visible (no toggle widget). On phones the 7-section nav is
@@ -358,6 +353,14 @@ const tocHeadings = headings.filter((h) => h.depth >= 2 && h.depth <= 3);
     top: 80px;
     align-self: start;
     height: calc(100vh - 96px);
+  }
+  @media (max-width: 760px) {
+    /* These three rules must come after the desktop defaults so the cascade
+       resolves correctly. Without this, the sidebar stays 100vh tall on
+       phones and pushes the article off-screen. */
+    .docs-shell { grid-template-columns: 1fr; gap: 24px; padding: 24px var(--gutter) 56px; }
+    .docs-side { position: static; height: auto; }
+    .docs-side-inner { max-height: none; height: auto; padding-right: 0; }
   }
   .docs-side-inner {
     height: 100%;
