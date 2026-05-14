@@ -6,9 +6,7 @@ import { FilesExplorer } from "../explorer/FilesExplorer";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useConnections } from "../../contexts/useConnections";
 import { useSettings } from "../../store/settingsStore";
-import { SettingsDialog } from "../settings/SettingsDialog";
 import { Database, Files, Settings, Search, X, HelpCircle, Table, Eye, Variable, BookOpen, AlertTriangle, CheckCircle, ChevronRight } from "lucide-react";
-import { HelpDialog } from "../help/HelpDialog";
 import { UpdateNotification } from "../help/UpdateNotification";
 import { useAppInfo } from "../../hooks/useAppInfo";
 
@@ -18,11 +16,11 @@ export function AppLayout() {
   const settings = useSettings();
   const [showExplorer, setShowExplorer] = useState(true);
   const { name: appName } = useAppInfo();
-  const [showSettings, setShowSettings] = useState(false);
   const [showFiles, setShowFiles] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
-  const [showHelpDialog, setShowHelpDialog] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const openHelp = () => window.dispatchEvent(new CustomEvent("open-help-dialog"));
+  const openSettings = () => window.dispatchEvent(new CustomEvent("open-settings-dialog"));
   const [selectedIndex, setSelectedIndex] = useState(0);
   // Status bar state
   const [statusInfo, setStatusInfo] = useState<{ rows?: number; time?: number; txActive?: boolean; txStatements?: number }>({});
@@ -74,15 +72,9 @@ export function AppLayout() {
     setSearchQuery("");
   };
 
-  // Handle keyboard shortcuts
+  // Handle keyboard shortcuts (Ctrl+Alt+S is owned by App.tsx)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ctrl+Alt+S - Settings
-      if (e.ctrlKey && e.altKey && e.key === "S") {
-        e.preventDefault();
-        setShowSettings(true);
-      }
-      
       // Ctrl+D - Database Explorer toggle
       if (e.ctrlKey && e.key === "d") {
         e.preventDefault();
@@ -167,7 +159,7 @@ export function AppLayout() {
           <UpdateNotification />
           
           <button
-            onClick={() => setShowHelpDialog(true)}
+            onClick={openHelp}
             className="flex items-center gap-2 px-3 py-1.5 rounded text-sm hover:bg-[var(--border)] transition-colors group relative"
             title="Help & Documentation (Ctrl+H)"
           >
@@ -176,7 +168,7 @@ export function AppLayout() {
           </button>
 
           <button
-            onClick={() => setShowSettings(true)}
+            onClick={openSettings}
             className="flex items-center gap-2 px-3 py-1.5 rounded text-sm hover:bg-[var(--border)]"
             title="Settings (Ctrl+Alt+S)"
           >
@@ -294,9 +286,9 @@ export function AppLayout() {
                       </div>
 
                       <div className="flex gap-2 justify-center">
-                        <button 
+                        <button
                           onClick={() => {
-                            setShowHelpDialog(true);
+                            openHelp();
                             setShowSearch(false);
                           }}
                           className="px-4 py-2 bg-[var(--color-accent)] text-white text-xs font-bold rounded-lg hover:bg-[var(--color-accent-hover)] transition-colors flex items-center gap-2 shadow-lg shadow-[var(--color-accent)]/20"
@@ -316,9 +308,9 @@ export function AppLayout() {
                         We couldn't find anything matching your search in the current database.
                       </p>
                       <div className="mt-6 flex gap-2">
-                        <button 
+                        <button
                           onClick={() => {
-                            setShowHelpDialog(true);
+                            openHelp();
                             setShowSearch(false);
                             setSearchQuery("");
                           }}
@@ -440,18 +432,6 @@ export function AppLayout() {
           )}
         </div>
       </div>
-
-      {/* Settings Dialog */}
-      <SettingsDialog 
-        isOpen={showSettings} 
-        onClose={() => setShowSettings(false)} 
-      />
-
-      {/* Help Dialog */}
-      <HelpDialog
-        isOpen={showHelpDialog}
-        onClose={() => setShowHelpDialog(false)}
-      />
     </div>
   );
 }

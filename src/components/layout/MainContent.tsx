@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, Suspense, lazy } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { QueryEditor } from "../editor/QueryEditor";
 import { ResultsPanel } from "../results/ResultsPanel";
@@ -6,23 +6,29 @@ import { useConnections } from "../../contexts/useConnections";
 import { useQueryHistory } from "../../store/queryHistoryStore";
 import { useSettings } from "../../store/settingsStore";
 import { Play, Plus, X, ChevronDown, ChevronRight, Terminal, Database, Sparkles, GitCompare, Save, Square, Activity, Loader2, CheckCircle, XCircle } from "lucide-react";
-import { CompareDialog } from "../tools/CompareDialog";
 import { useSavedQueries } from "../../store/savedQueryStore";
-import { AIAssistantDialog } from "../tools/AIAssistantDialog";
-import { DefinitionModal } from "../tools/DefinitionModal";
 import { useConfirmDialog } from "../ui/ConfirmDialog";
-import { CloneDialog } from "../tools/CloneDialog";
 import { Copy, FileText, BarChart2, Activity as ActivityIcon, Monitor, Zap, Clock, HardDrive, ShieldCheck, Layers } from "lucide-react";
 import { logger } from "../../utils/logger";
 import { getDefaultDatabaseName } from "../../config/app";
 import { formatSql } from "../../utils/SqlFormatter";
 import { splitStatements } from "../../utils/splitStatements";
-import { ActivityMonitor } from "../tools/ActivityMonitor";
-import { MultiQueryDialog } from "../tools/MultiQueryDialog";
 import { VariableSubstitutionDialog, extractVariables, substituteVariables, VariableValues } from "../ui/VariableSubstitutionDialog";
-import { PsqlWindow } from "../ui/PsqlWindow";
-import { LocalHistoryDialog } from "../ui/LocalHistoryDialog";
 import { useLocalHistory } from "../../store/localHistoryStore";
+
+// Lazy-loaded modal/conditional dialogs — none of these need to be in the
+// cold-start bundle. CompareDialog, DefinitionModal, and MultiQueryDialog
+// each pull in their own Monaco instance; AIAssistantDialog and
+// ActivityMonitor pull substantial sub-trees. They're only mounted when
+// their open flag flips true (see render block below).
+const CompareDialog = lazy(() => import("../tools/CompareDialog").then(m => ({ default: m.CompareDialog })));
+const AIAssistantDialog = lazy(() => import("../tools/AIAssistantDialog").then(m => ({ default: m.AIAssistantDialog })));
+const DefinitionModal = lazy(() => import("../tools/DefinitionModal").then(m => ({ default: m.DefinitionModal })));
+const CloneDialog = lazy(() => import("../tools/CloneDialog").then(m => ({ default: m.CloneDialog })));
+const ActivityMonitor = lazy(() => import("../tools/ActivityMonitor").then(m => ({ default: m.ActivityMonitor })));
+const MultiQueryDialog = lazy(() => import("../tools/MultiQueryDialog").then(m => ({ default: m.MultiQueryDialog })));
+const PsqlWindow = lazy(() => import("../ui/PsqlWindow").then(m => ({ default: m.PsqlWindow })));
+const LocalHistoryDialog = lazy(() => import("../ui/LocalHistoryDialog").then(m => ({ default: m.LocalHistoryDialog })));
 
 export interface QueryTab {
   id: string;
@@ -1445,22 +1451,24 @@ Download "${filename}" (~80MB)?`,
       }
     };
 
+    const handleShowLocalHistory = () => setShowLocalHistory(true);
+
     window.addEventListener("run-specific-query", handleRunSpecific);
     window.addEventListener("open-query-window", handleNewTabWrapper);
     window.addEventListener("open-query-window-psql", handleNewTabPsql);
     window.addEventListener("open-query-with-text", handleNewTabWithText);
     window.addEventListener("open-definition", handleOpenDefinition);
-    window.addEventListener("show-local-history", () => setShowLocalHistory(true));
+    window.addEventListener("show-local-history", handleShowLocalHistory);
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("tx-control", handleTxControl);
-    
+
     return () => {
       window.removeEventListener("run-specific-query", handleRunSpecific);
       window.removeEventListener("open-query-window", handleNewTabWrapper);
       window.removeEventListener("open-query-window-psql", handleNewTabPsql);
       window.removeEventListener("open-query-with-text", handleNewTabWithText);
       window.removeEventListener("open-definition", handleOpenDefinition);
-      window.removeEventListener("show-local-history", () => setShowLocalHistory(true));
+      window.removeEventListener("show-local-history", handleShowLocalHistory);
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("tx-control", handleTxControl);
     };
@@ -2336,29 +2344,31 @@ Download "${filename}" (~80MB)?`,
             activeTab.usePsql ? (
               <div className="h-full flex flex-col">
                 <div className="flex-1 min-h-0">
-                  <PsqlWindow
-                    entries={activeTab.psqlEntries || []}
-                    liveOutput={isExecuting ? psqlOutput : []}
-                    runningCommand={isExecuting ? (runningCmdRef.current || activeTab.query || "") : null}
-                    isExecuting={isExecuting}
-                    executionTime={executionTime}
-                    onRun={(q: string) => executeQuery(q)}
-                    onClear={() => {
-                      clearPsqlOutput();
-                      if (activeTabId) {
-                        updateTabState(activeTabId, { psqlOutput: [], psqlEntries: [] });
-                      }
-                    }}
-                    onRemoveLast={() => {
-                      if (activeTabId && activeTab?.psqlEntries && activeTab.psqlEntries.length > 0) {
-                        updateTabState(activeTabId, {
-                          psqlEntries: activeTab.psqlEntries.slice(0, -1)
-                        });
-                      }
-                    }}
-                    connectionName={activeTab.target?.connectionName || activeConnection?.name || undefined}
-                    databaseName={activeTab.target?.database || selectedDatabase || undefined}
-                  />
+                  <Suspense fallback={null}>
+                    <PsqlWindow
+                      entries={activeTab.psqlEntries || []}
+                      liveOutput={isExecuting ? psqlOutput : []}
+                      runningCommand={isExecuting ? (runningCmdRef.current || activeTab.query || "") : null}
+                      isExecuting={isExecuting}
+                      executionTime={executionTime}
+                      onRun={(q: string) => executeQuery(q)}
+                      onClear={() => {
+                        clearPsqlOutput();
+                        if (activeTabId) {
+                          updateTabState(activeTabId, { psqlOutput: [], psqlEntries: [] });
+                        }
+                      }}
+                      onRemoveLast={() => {
+                        if (activeTabId && activeTab?.psqlEntries && activeTab.psqlEntries.length > 0) {
+                          updateTabState(activeTabId, {
+                            psqlEntries: activeTab.psqlEntries.slice(0, -1)
+                          });
+                        }
+                      }}
+                      connectionName={activeTab.target?.connectionName || activeConnection?.name || undefined}
+                      databaseName={activeTab.target?.database || selectedDatabase || undefined}
+                    />
+                  </Suspense>
                 </div>
               </div>
             ) : (
@@ -2439,21 +2449,40 @@ Download "${filename}" (~80MB)?`,
         )}
       </PanelGroup>
 
-      <CompareDialog isOpen={showCompareDialog} onClose={() => setShowCompareDialog(false)} />
-      <CloneDialog isOpen={showCloneDialog} onClose={() => setShowCloneDialog(false)} />
-      <ActivityMonitor isOpen={showActivityMonitor} onClose={() => setShowActivityMonitor(false)} />
-      <MultiQueryDialog isOpen={showMultiQueryDialog} onClose={() => setShowMultiQueryDialog(false)} />
-      <AIAssistantDialog isOpen={showAIDialog} onClose={() => setShowAIDialog(false)} currentQuery={activeTab?.query || ""} onUpdateQuery={updateTabQuery} />
-      <DefinitionModal
-        isOpen={defModalState.isOpen}
-        tableName={defModalState.table}
-        onClose={() => setDefModalState({ isOpen: false, table: "" })}
-      />
-      <LocalHistoryDialog
-        isOpen={_showLocalHistory}
-        onClose={() => setShowLocalHistory(false)}
-        dirPath="saved-queries"
-      />
+      {/* Modal dialogs are gated by their open flag so React.lazy can keep
+          them out of the cold-start bundle. Each dialog's chunk only loads
+          when the user first opens it. */}
+      <Suspense fallback={null}>
+        {showCompareDialog && (
+          <CompareDialog isOpen={showCompareDialog} onClose={() => setShowCompareDialog(false)} />
+        )}
+        {showCloneDialog && (
+          <CloneDialog isOpen={showCloneDialog} onClose={() => setShowCloneDialog(false)} />
+        )}
+        {showActivityMonitor && (
+          <ActivityMonitor isOpen={showActivityMonitor} onClose={() => setShowActivityMonitor(false)} />
+        )}
+        {showMultiQueryDialog && (
+          <MultiQueryDialog isOpen={showMultiQueryDialog} onClose={() => setShowMultiQueryDialog(false)} />
+        )}
+        {showAIDialog && (
+          <AIAssistantDialog isOpen={showAIDialog} onClose={() => setShowAIDialog(false)} currentQuery={activeTab?.query || ""} onUpdateQuery={updateTabQuery} />
+        )}
+        {defModalState.isOpen && (
+          <DefinitionModal
+            isOpen={defModalState.isOpen}
+            tableName={defModalState.table}
+            onClose={() => setDefModalState({ isOpen: false, table: "" })}
+          />
+        )}
+        {_showLocalHistory && (
+          <LocalHistoryDialog
+            isOpen={_showLocalHistory}
+            onClose={() => setShowLocalHistory(false)}
+            dirPath="saved-queries"
+          />
+        )}
+      </Suspense>
     </div>
   );
 }
