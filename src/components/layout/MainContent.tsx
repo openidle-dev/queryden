@@ -16,6 +16,7 @@ import { Copy, FileText, BarChart2, Activity as ActivityIcon, Monitor, Zap, Cloc
 import { logger } from "../../utils/logger";
 import { getDefaultDatabaseName } from "../../config/app";
 import { formatSql } from "../../utils/SqlFormatter";
+import { splitStatements } from "../../utils/splitStatements";
 import { ActivityMonitor } from "../tools/ActivityMonitor";
 import { MultiQueryDialog } from "../tools/MultiQueryDialog";
 import { VariableSubstitutionDialog, extractVariables, substituteVariables, VariableValues } from "../ui/VariableSubstitutionDialog";
@@ -422,24 +423,33 @@ const extractSelectedOrCursorStatement = (fullText: string): string => {
       return;
     }
 
-    // Extract single statement from full query - handles multiple statements
-    // Only used when no specific query is provided (e.g., toolbar Run button)
+    // Extract single statement from full query — used when no specific query
+    // is provided (e.g. toolbar Run button without selection). Uses the
+    // context-aware splitter so a semicolon inside a string, dollar-quoted
+    // body, or comment is not treated as a statement terminator.
     const extractSingleStatement = (query: string): string => {
-      // Split by semicolon and get first non-empty statement
-      const statements = query.split(';').map(s => s.trim()).filter(s => s.length > 0);
-      return statements.length > 0 ? statements[0] : query;
+      const parts = splitStatements(query);
+      return parts.length > 0 ? parts[0].text : query;
     };
 
-    // Check if this is a "run all" request from Ctrl+Shift+Enter
-    const isRunAll = specificQuery && typeof specificQuery === 'object' && specificQuery.__runAll;
-    const statementsToRun = isRunAll ? specificQuery.statements : [];
-    const statementInfos = isRunAll ? specificQuery.statementInfos : (statementInfo ? [statementInfo] : []);
+    // Check if this is an explicit "run all" request from Ctrl+Shift+Enter.
+    // We may also *promote* a plain string selection to run-all below if it
+    // turns out to contain multiple top-level statements (issue #20).
+    let isRunAll = !!(specificQuery && typeof specificQuery === 'object' && specificQuery.__runAll);
+    let statementsToRun: string[] = isRunAll ? specificQuery.statements : [];
+    let statementInfos: { lineNumber: number; statementText: string }[] = isRunAll
+      ? specificQuery.statementInfos
+      : (statementInfo ? [statementInfo] : []);
 
     // Read from the provided specific text block, otherwise fallback to the global ref
     let finalQueryText = "";
     if (isRunAll) {
-      // For run all, we'll handle each statement sequentially
-      finalQueryText = "";
+      // Use the joined script as the "display" text — never sent to the
+      // server as one piece; the loop further down runs each statement
+      // individually. Keeping this non-empty satisfies the queryToRun
+      // guard below and gives downstream code (history snapshot, table
+      // name match) a meaningful string to inspect.
+      finalQueryText = statementsToRun.join(";\n");
     } else if (typeof specificQuery === "string" && specificQuery.trim() !== "") {
       // If specific query provided (from editor selection or cursor extraction), use it directly
       finalQueryText = specificQuery;
@@ -452,6 +462,21 @@ const extractSelectedOrCursorStatement = (fullText: string): string => {
     if (!queryToRun) {
       setError("Query is empty — type a SQL statement and try again");
       return;
+    }
+
+    // Issue #20: if a plain-string selection actually contains multiple
+    // top-level statements, promote it to the multi-statement loop.
+    // PostgreSQL's extended query protocol (which the Tauri SQL plugin uses)
+    // rejects multi-statement prepared queries with "cannot insert multiple
+    // commands into a prepared statement", and the libpq path further down
+    // sends one execute() per statement only when isRunAll is set.
+    if (!isRunAll && typeof specificQuery === "string") {
+      const parts = splitStatements(queryToRun);
+      if (parts.length > 1) {
+        isRunAll = true;
+        statementsToRun = parts.map(p => p.text);
+        statementInfos = parts.map(p => ({ lineNumber: p.lineNumber, statementText: p.text }));
+      }
     }
     runningCmdRef.current = queryToRun;
 
