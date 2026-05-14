@@ -4,6 +4,30 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 
 ## [Unreleased]
 
+## [1.0.12] - 2026-05-14
+
+Two long-standing SQL editor bugs fixed plus a cold-start performance pass. Selecting multiple statements in the editor and hitting Run no longer errors with "cannot insert multiple commands into a prepared statement" ([#20](https://github.com/openidle-dev/queryden/issues/20)). The Query Variables dialog stops popping up on `::cast` operators and inside dollar-quoted function bodies ([#19](https://github.com/openidle-dev/queryden/issues/19)). The entry JS bundle is ~17% smaller, and a couple of frontend memory leaks were resolved. A throwaway Postgres test database for contributors landed under `dev/test-db/`, along with the project's first Vitest pure-function suite (52 tests).
+
+### Fixed
+- **[#19](https://github.com/openidle-dev/queryden/issues/19) — Query Variables dialog now ignores `::cast`, string literals, dollar-quoted function bodies, and SQL comments.** The previous flat regex matched any colon-prefix identifier, so `value::jsonb` was prompting for a `:jsonb` variable, `CREATE FUNCTION ... $$ ... :NEW ... $$` was prompting for `:NEW`, and so on. Replaced with a small SQL-aware scanner shared by both `extractVariables` and `substituteVariables`.
+- **[#20](https://github.com/openidle-dev/queryden/issues/20) — Selecting multiple statements and running them no longer errors with "cannot insert multiple commands into a prepared statement".** PostgreSQL's extended query protocol (which `tauri-plugin-sql` uses) rejects multi-statement prepared calls. QueryDen now splits selections client-side via a context-aware `splitStatements()` utility and feeds each statement to the existing run-all loop with proper per-statement gutter glyphs.
+- `AppLayout` was eagerly importing `SettingsDialog` and `HelpDialog` alongside the lazy versions in `App.tsx`, pulling `react-markdown` and the settings tree into the cold-start chunk. Header buttons and search-popup CTAs now dispatch through the same window events the lazy boundary already listens for.
+- `show-local-history` event listener leak in `MainContent` — `addEventListener` and `removeEventListener` used two distinct inline arrows, so cleanup never matched the registration. Handlers accumulated on every re-render of an effect that depended on frequently-recreated callbacks.
+- Monaco SQL completion provider was holding the previous connection's full schema (up to 50k rows on wide DBs) past disconnect. The cache is now dropped via a `connection-disconnected` window event.
+
+### Changed
+- Cold-start bundle: eight modal dialogs (`Compare`, `Clone`, `ActivityMonitor`, `MultiQuery`, `AIAssistant`, `PsqlWindow`, `LocalHistoryDialog`, `DefinitionModal`) now load via `React.lazy` + `Suspense` and are only mounted when their open flag flips true. Three of them pull in their own Monaco instance — deferring those is the meaningful win. Entry chunk **1.01 MB → 838 KB raw (-17%), 271 KB → 234 KB gzipped (-13%)**.
+- Removed the **"Allow SQL Execution"** toggle from Settings → Permissions & Rules. The setting already defaulted to `true` and the engine's defense-in-depth checks (`MainContent.tsx`, `ConnectionContext.tsx`) stay in place — but exposing the toggle was a footgun. Users can no longer accidentally disable SQL execution from the UI.
+
+### Infrastructure
+- New `dev/test-db/` directory: Docker Compose Postgres setup, schema/seed/triggers, and copy-paste SQL scripts that exercise each of the bugs fixed in this release. Documented in `dev/test-db/README.md`.
+- First colocated Vitest suite under `src/`: `extractVariables` / `substituteVariables` (22 tests) and the new `splitStatements` utility (15 tests). Total frontend tests: 52. CI runs `npm test` on every PR.
+- Documented the testing convention in `CLAUDE.md`: every bug fix lands with the failing test that proves it (pinned via `it.fails` if the fix can't ride along in the same PR).
+
+### Known Issues
+- [#27](https://github.com/openidle-dev/queryden/issues/27) — Result deserializer errors on `INT4[]` columns ("unsupported datatype"). The patched `tauri-plugin-sql` supports several array types but `int[]` specifically is unmapped. Workaround: cast to text in the SELECT.
+- [#28](https://github.com/openidle-dev/queryden/issues/28) — Autocomplete suggestions vanish after typing `.` on a schema-qualified table name (e.g. `app.`). Monaco's filter treats the dot as a member-access trigger. Workaround: type the table name without the schema prefix.
+
 ## [1.0.11] - 2026-05-13
 
 App icon regenerated. `src-tauri/icons/icon.ico` (and most derived PNGs/icns) still held the default Tauri "WORLD" placeholder from initial scaffolding — the source `icon.png` was swapped to the QueryDen network-graph design at some point but the derived assets were never re-emitted, so the v1.0.10 installer ended up embedding the Tauri globe as its file-explorer icon.

@@ -3840,7 +3840,7 @@ dependencies = [
 
 [[package]]
 name = "queryden"
-version = "1.0.11"
+version = "1.0.12"
 dependencies = [
  "aes-gcm",
  "argon2",
