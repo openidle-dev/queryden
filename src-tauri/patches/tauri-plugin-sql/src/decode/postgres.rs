@@ -65,6 +65,32 @@ pub(crate) fn to_json(v: PgValueRef) -> Result<JsonValue, Error> {
                 JsonValue::Null
             }
         }
+        "INT2[]" => {
+            // Decode as Option<i16> so SQL NULL elements survive as JSON null.
+            if let Ok(v) = ValueRef::to_owned(&v).try_decode::<Vec<Option<i16>>>() {
+                JsonValue::Array(int_vec_to_json(v))
+            } else {
+                JsonValue::Null
+            }
+        }
+        "INT4[]" => {
+            if let Ok(v) = ValueRef::to_owned(&v).try_decode::<Vec<Option<i32>>>() {
+                JsonValue::Array(int_vec_to_json(v))
+            } else {
+                JsonValue::Null
+            }
+        }
+        "INT8[]" => {
+            // Mirror scalar INT8: emit each element as a JSON Number. Postgres
+            // BIGINT fits i64 by definition, so serde_json::Number::from(i64)
+            // always succeeds — JS consumers needing full 64-bit precision parse
+            // the result through their own bignum logic (same as the scalar arm).
+            if let Ok(v) = ValueRef::to_owned(&v).try_decode::<Vec<Option<i64>>>() {
+                JsonValue::Array(int_vec_to_json(v))
+            } else {
+                JsonValue::Null
+            }
+        }
         "BOOL" => {
             if let Ok(v) = ValueRef::to_owned(&v).try_decode() {
                 JsonValue::Bool(v)
@@ -194,4 +220,91 @@ pub(crate) fn to_json(v: PgValueRef) -> Result<JsonValue, Error> {
     };
 
     Ok(res)
+}
+
+/// Convert a `Vec<Option<T>>` of any integer that fits into `serde_json::Number`
+/// into a `Vec<JsonValue>` for use with `JsonValue::Array`.
+///
+/// All Postgres integer widths we support (INT2 → i16, INT4 → i32, INT8 → i64)
+/// implement `Into<serde_json::Number>` directly, so each element becomes a JSON
+/// number without lossy float conversion. SQL NULL elements are preserved as
+/// `JsonValue::Null`. Mirrors the behaviour of the scalar INT2/INT4/INT8 arms.
+fn int_vec_to_json<T>(values: Vec<Option<T>>) -> Vec<JsonValue>
+where
+    T: Into<serde_json::Number>,
+{
+    values
+        .into_iter()
+        .map(|opt| match opt {
+            Some(n) => JsonValue::Number(n.into()),
+            None => JsonValue::Null,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn some<T>(values: &[T]) -> Vec<Option<T>>
+    where
+        T: Copy,
+    {
+        values.iter().copied().map(Some).collect()
+    }
+
+    #[test]
+    fn int2_array_maps_each_element_to_json_number() {
+        let out = int_vec_to_json::<i16>(some(&[i16::MIN, -1, 0, 1, i16::MAX]));
+        assert_eq!(
+            out,
+            vec![
+                JsonValue::Number(i16::MIN.into()),
+                JsonValue::Number((-1i16).into()),
+                JsonValue::Number(0i16.into()),
+                JsonValue::Number(1i16.into()),
+                JsonValue::Number(i16::MAX.into()),
+            ],
+        );
+    }
+
+    #[test]
+    fn int4_array_maps_each_element_to_json_number() {
+        let out = int_vec_to_json::<i32>(some(&[i32::MIN, -1, 0, 1, i32::MAX]));
+        assert_eq!(out.len(), 5);
+        assert_eq!(out[0].as_i64(), Some(i32::MIN as i64));
+        assert_eq!(out[4].as_i64(), Some(i32::MAX as i64));
+        // Every element must serialise as a JSON number, not a string.
+        for v in &out {
+            assert!(v.is_number(), "expected JSON number, got {v:?}");
+        }
+    }
+
+    #[test]
+    fn int8_array_preserves_full_i64_range() {
+        // Includes a value beyond JS safe-integer range (2^53). serde_json::Number
+        // can hold the full i64 — this mirrors what the scalar INT8 arm does and
+        // matches how QueryDen consumers handle bignums for scalar INT8 today.
+        let big = 1_i64 << 60;
+        let out = int_vec_to_json::<i64>(some(&[i64::MIN, -1, 0, 1, big, i64::MAX]));
+        assert_eq!(out.len(), 6);
+        assert_eq!(out[0].as_i64(), Some(i64::MIN));
+        assert_eq!(out[4].as_i64(), Some(big));
+        assert_eq!(out[5].as_i64(), Some(i64::MAX));
+    }
+
+    #[test]
+    fn null_elements_become_json_null() {
+        let out = int_vec_to_json::<i32>(vec![Some(1), None, Some(3)]);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].as_i64(), Some(1));
+        assert!(out[1].is_null(), "expected JSON null, got {:?}", out[1]);
+        assert_eq!(out[2].as_i64(), Some(3));
+    }
+
+    #[test]
+    fn empty_array_produces_empty_json_array() {
+        let out: Vec<JsonValue> = int_vec_to_json::<i32>(vec![]);
+        assert!(out.is_empty());
+    }
 }

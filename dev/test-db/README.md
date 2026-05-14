@@ -53,6 +53,7 @@ Open each file in `test-scripts/` in QueryDen, follow the header comment.
 | `04-trigger-with-cast.sql`        | **Issue #19** — `$$ ... $$` dollar-quoted function bodies are opaque to the variable scanner, even when they contain `:`-like tokens |
 | `05-create-table-typed.sql`       | **Issue #19** — Alan's exact reported case: `CREATE TABLE ... DEFAULT '{}'::jsonb` |
 | `06-perf-smoke.sql`               | **PR #22** — checklist for the lazy-loaded dialogs, schema cache reset on disconnect, and Settings/Help header buttons |
+| `07-int-arrays.sql`               | **Issue #27** — INT2[]/INT4[]/INT8[] columns deserialize as JSON number arrays instead of crashing with "unsupported datatype" |
 
 ## Useful Docker commands
 
