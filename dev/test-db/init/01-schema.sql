@@ -15,7 +15,8 @@ CREATE TABLE app.users (
     updated_at   timestamptz NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX users_email_idx     ON app.users (email);
+-- Note: `email` is already UNIQUE above which auto-creates a btree index;
+-- only the GIN index on jsonb metadata needs an explicit definition.
 CREATE INDEX users_metadata_idx  ON app.users USING GIN (metadata);
 
 CREATE TABLE app.products (
@@ -29,7 +30,8 @@ CREATE TABLE app.products (
     created_at   timestamptz NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX products_sku_idx ON app.products (sku);
+-- `sku` is already UNIQUE which auto-creates a btree index — no explicit
+-- index needed.
 
 CREATE TYPE app.order_status AS ENUM (
     'pending', 'paid', 'shipped', 'delivered', 'cancelled', 'refunded'

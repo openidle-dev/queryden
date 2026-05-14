@@ -17,8 +17,9 @@
 --   statement with a ✓ or ✗, and the final SELECT returns three rows.
 -- ============================================================================
 
-DROP TABLE IF EXISTS app._t20_demo;
-
+-- CREATE TEMP TABLE places the table in pg_temp_* (session-local), so no
+-- DROP is needed — the table doesn't conflict with anything and disappears
+-- when the session ends.
 CREATE TEMP TABLE _t20_demo (
     id    serial PRIMARY KEY,
     label text NOT NULL,
