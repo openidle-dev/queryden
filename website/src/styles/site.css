@@ -353,6 +353,67 @@ section { position: relative; }
 .nav-github-stars svg { color: color-mix(in oklch, var(--accent) 70%, var(--ink-3)); }
 .nav-github:hover .nav-github-stars { border-color: var(--line-2); color: var(--ink-1); }
 
+/* Mobile nav: hidden by default; only takes over below the breakpoint. */
+.nav-toggle {
+  display: none;
+  width: 38px; height: 38px;
+  align-items: center; justify-content: center;
+  background: transparent;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-1);
+  cursor: pointer;
+  padding: 0;
+  position: relative;
+  flex-shrink: 0;
+}
+.nav-toggle:hover { border-color: var(--ink-3); background: var(--bg-1); }
+.nav-toggle-bar {
+  position: absolute;
+  left: 9px; right: 9px;
+  height: 1.5px;
+  background: var(--ink-1);
+  border-radius: 1px;
+  transition: transform var(--t-fast) var(--ease), opacity var(--t-fast) var(--ease), top var(--t-fast) var(--ease);
+}
+.nav-toggle-bar:nth-child(1) { top: 12px; }
+.nav-toggle-bar:nth-child(2) { top: 18px; }
+.nav-toggle-bar:nth-child(3) { top: 24px; }
+.nav-toggle[aria-expanded="true"] .nav-toggle-bar:nth-child(1) { top: 18px; transform: rotate(45deg); }
+.nav-toggle[aria-expanded="true"] .nav-toggle-bar:nth-child(2) { opacity: 0; }
+.nav-toggle[aria-expanded="true"] .nav-toggle-bar:nth-child(3) { top: 18px; transform: rotate(-45deg); }
+
+.nav-mobile-panel {
+  border-top: 1px solid var(--line-1);
+  background: color-mix(in oklch, var(--bg-0) 96%, transparent);
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+}
+/* The [hidden] attribute is what JS toggles; respect it above all rules. */
+.nav-mobile-panel[hidden] { display: none !important; }
+.nav-mobile-panel nav {
+  display: flex; flex-direction: column;
+  padding: var(--s-3) var(--gutter) var(--s-4);
+  max-width: var(--maxw);
+  margin: 0 auto;
+}
+.nav-mobile-panel a {
+  display: block;
+  padding: 14px 4px;
+  font-size: 16px;
+  color: var(--ink-1);
+  border-bottom: 1px solid color-mix(in oklch, var(--line-1) 50%, transparent);
+  transition: color var(--t-fast) var(--ease);
+}
+.nav-mobile-panel a:hover, .nav-mobile-panel a.active { color: var(--ink-0); }
+.nav-mobile-panel a.active { color: var(--accent); }
+.nav-mobile-panel a:last-child { border-bottom: 0; }
+.nav-mobile-external {
+  font-family: var(--mono);
+  font-size: 13px !important;
+  color: var(--ink-3) !important;
+  letter-spacing: 0.02em;
+}
+
 @media (max-width: 1024px) {
   .nav-status-date { display: none; }
 }
@@ -360,8 +421,21 @@ section { position: relative; }
   .nav-links { display: none; }
   .nav-version { display: none; }
   .nav-status { display: none; }
-  .nav-github-stars { display: none; }
+  .nav-github { display: none; }
+  .nav-toggle { display: inline-flex; }
+  /* Panel is shown only when [hidden] is removed by JS — the rule above
+     handles the hide case; the open case relies on the default block. */
+  /* Keep the bar uncluttered on phones. */
+  .nav { gap: var(--s-3); }
+  .nav-right { gap: var(--s-2); }
 }
+@media (max-width: 380px) {
+  /* Drop the Download button text on very narrow phones; the hamburger
+     menu still exposes it. Hide entirely rather than shrink — the menu
+     button is the primary entry point on tiny screens. */
+  .nav-right .btn-primary { padding: 0 12px; font-size: 12px; }
+}
+body.nav-mobile-open { overflow: hidden; }
 
 /* ---------- Footer ---------- */
 
