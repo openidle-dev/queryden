@@ -71,31 +71,67 @@ const canonicalUrl = `${SITE.homepage}${canonicalPath === '/' ? '' : canonicalPa
             </span>
           )}
         </a>
-        <a class="btn btn-sm btn-primary" href="/download">Download</a>
+        <a class="btn btn-sm btn-primary nav-download" href="/download">Download</a>
         <button
           type="button"
-          class="nav-toggle"
-          id="nav-toggle"
+          class="nav-burger"
           aria-label="Open menu"
           aria-expanded="false"
-          aria-controls="nav-mobile-panel"
+          aria-controls="mobile-nav"
         >
-          <span class="nav-toggle-bar" aria-hidden="true"></span>
-          <span class="nav-toggle-bar" aria-hidden="true"></span>
-          <span class="nav-toggle-bar" aria-hidden="true"></span>
+          <span class="nav-burger-bars" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </span>
         </button>
       </div>
     </div>
-    <div class="nav-mobile-panel" id="nav-mobile-panel" hidden>
-      <nav aria-label="Mobile primary">
-        {NAV.map((n) => (
-          <a href={n.href} class={active && n.label.toLowerCase().startsWith(active) ? 'active' : ''}>{n.label}</a>
-        ))}
-        <a href={SITE.repo} rel="noopener" class="nav-mobile-external">GitHub ↗</a>
-        <a href={`${SITE.repo}/releases/tag/${RELEASE.tag}`} rel="noopener" class="nav-mobile-external">Latest release · {RELEASE.tag}</a>
-      </nav>
-    </div>
   </header>
+
+  {/* Mobile nav must live outside <header> — the header has backdrop-filter,
+       which creates a containing block and would scope position: fixed to it
+       instead of the viewport. */}
+  <div class="nav-backdrop" data-nav-backdrop hidden></div>
+  <div
+    id="mobile-nav"
+    class="nav-sheet"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Site menu"
+    hidden
+  >
+    <div class="nav-sheet-head">
+      <a class="brand" href="/">
+        <img src="/logo.png" alt="" width="22" height="22" />
+        <span>{SITE.name}</span>
+      </a>
+      <button type="button" class="nav-sheet-close" aria-label="Close menu">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </div>
+    <nav class="nav-sheet-links" aria-label="Mobile primary">
+      {NAV.map((n, i) => (
+        <a
+          href={n.href}
+          style={`--i:${i}`}
+          class={active && n.label.toLowerCase().startsWith(active) ? 'active' : ''}
+        >
+          <span class="nav-sheet-label">{n.label}</span>
+          <svg class="nav-sheet-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+        </a>
+      ))}
+    </nav>
+    <div class="nav-sheet-foot">
+      <a class="nav-sheet-status" href={`${SITE.repo}/releases/tag/${RELEASE.tag}`} rel="noopener">
+        <span class="nav-status-dot" aria-hidden="true"></span>
+        <span>{RELEASE.tag}</span>
+        <span class="nav-sheet-status-date">{RELEASE.publishedAt}</span>
+      </a>
+      <a class="btn btn-sm btn-ghost nav-sheet-github" href={SITE.repo} rel="noopener">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.5 2 2 6.6 2 12.2c0 4.5 2.9 8.3 6.8 9.6.5.1.7-.2.7-.5v-1.8c-2.8.6-3.4-1.2-3.4-1.2-.4-1-1.1-1.3-1.1-1.3-.9-.6.1-.6.1-.6 1 .1 1.6 1 1.6 1 .9 1.6 2.4 1.1 3 .9.1-.7.4-1.2.6-1.4-2.2-.3-4.6-1.1-4.6-5 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.7 1 .8-.2 1.6-.3 2.5-.3.8 0 1.7.1 2.5.3 1.9-1.3 2.7-1 2.7-1 .5 1.4.2 2.4.1 2.7.6.7 1 1.6 1 2.7 0 3.9-2.3 4.7-4.6 5 .4.3.7.9.7 1.9v2.8c0 .3.2.6.7.5 4-1.3 6.8-5.1 6.8-9.6C22 6.6 17.5 2 12 2z"/></svg>
+        <span>GitHub{stars !== null ? ` · ${formatStars(stars)}` : ''}</span>
+      </a>
+    </div>
+  </div>
 
   <main>
     <slot />
@@ -164,36 +200,47 @@ const canonicalUrl = `${SITE.homepage}${canonicalPath === '/' ? '' : canonicalPa
   </footer>
 
   <script>
-    // Mobile nav toggle. Pure JS (no client framework). Closes on link click,
-    // Escape, viewport resize past the breakpoint, and outside click.
-    const toggle = document.getElementById('nav-toggle');
-    const panel = document.getElementById('nav-mobile-panel');
-    if (toggle && panel) {
-      const setOpen = (open: boolean) => {
-        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-        toggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
-        if (open) {
-          panel.removeAttribute('hidden');
-          document.body.classList.add('nav-mobile-open');
-        } else {
-          panel.setAttribute('hidden', '');
-          document.body.classList.remove('nav-mobile-open');
-        }
-      };
-      toggle.addEventListener('click', () => {
-        const open = toggle.getAttribute('aria-expanded') === 'true';
-        setOpen(!open);
-      });
-      panel.addEventListener('click', (e) => {
-        const tgt = e.target as HTMLElement;
-        if (tgt.tagName === 'A') setOpen(false);
-      });
-      document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && toggle.getAttribute('aria-expanded') === 'true') setOpen(false);
-      });
-      window.addEventListener('resize', () => {
-        if (window.innerWidth > 800 && toggle.getAttribute('aria-expanded') === 'true') setOpen(false);
-      });
+    // Mobile nav sheet — open/close with focus + scroll lock + Esc.
+    {
+      const burger   = document.querySelector<HTMLButtonElement>('.nav-burger');
+      const sheet    = document.getElementById('mobile-nav');
+      const backdrop = document.querySelector<HTMLElement>('[data-nav-backdrop]');
+      const closeBtn = document.querySelector<HTMLButtonElement>('.nav-sheet-close');
+      if (burger && sheet && backdrop) {
+        let lastFocus: HTMLElement | null = null;
+        const open = () => {
+          lastFocus = document.activeElement as HTMLElement | null;
+          sheet.hidden = false; backdrop.hidden = false;
+          // next frame so the transition runs
+          requestAnimationFrame(() => {
+            document.body.classList.add('nav-open');
+            burger.setAttribute('aria-expanded', 'true');
+          });
+          (sheet.querySelector('a, button') as HTMLElement | null)?.focus();
+        };
+        const close = () => {
+          document.body.classList.remove('nav-open');
+          burger.setAttribute('aria-expanded', 'false');
+          // wait for transition before hiding for AT
+          const onEnd = () => {
+            sheet.hidden = true; backdrop.hidden = true;
+            sheet.removeEventListener('transitionend', onEnd);
+          };
+          sheet.addEventListener('transitionend', onEnd);
+          // fallback if transitions are off (reduced motion)
+          setTimeout(() => { if (!document.body.classList.contains('nav-open')) { sheet.hidden = true; backdrop.hidden = true; } }, 400);
+          lastFocus?.focus();
+        };
+        burger.addEventListener('click', () => {
+          document.body.classList.contains('nav-open') ? close() : open();
+        });
+        backdrop.addEventListener('click', close);
+        closeBtn?.addEventListener('click', close);
+        sheet.querySelectorAll('a').forEach((a) => a.addEventListener('click', close));
+        document.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape' && document.body.classList.contains('nav-open')) close();
+        });
+      }
     }
 
     // Reveal-on-scroll — single observer for the whole document.
