@@ -280,6 +280,7 @@ export interface IpcCommands {
       username: string;
       password: string;
       majorVersion: number;
+      expandedDisplay: boolean;
     };
     result: CliQueryResult;
   };

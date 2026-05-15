@@ -937,6 +937,7 @@ pub async fn cli_execute_query(
     username: String,
     password: String,
     major_version: u32,
+    expanded_display: bool,
     manager: tauri::State<'_, CliManager>,
 ) -> Result<serde_json::Value, String> {
     let kind = match tool_kind.as_str() {
@@ -965,11 +966,13 @@ pub async fn cli_execute_query(
             cmd.arg("-p").arg(port.to_string());
             cmd.arg("-d").arg(&database);
             cmd.arg("-U").arg(&username);
-            cmd.arg("-t");            // tuples only
-            cmd.arg("-A");           // unaligned
-            cmd.arg("-F").arg("|");  // pipe separator
-            cmd.arg("-w");           // never prompt
-            cmd.arg("-c").arg(&query);
+            
+            if expanded_display {
+                cmd.arg("-x");
+            } else {
+                cmd.arg("-F").arg("|");
+            }
+            cmd.arg("-w");
         }
         ToolKind::MySql => {
             cmd.arg("-h").arg(&host);
@@ -1000,9 +1003,18 @@ pub async fn cli_execute_query(
 
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
+    cmd.stdin(Stdio::piped());
 
     let start = std::time::Instant::now();
     let mut child = cmd.spawn().map_err(|e| format!("Spawn failed: {}", e))?;
+
+    // Write query to stdin
+    if let Some(mut stdin) = child.stdin.take() {
+        use tokio::io::AsyncWriteExt;
+        stdin.write_all(query.as_bytes()).await.ok();
+        stdin.flush().await.ok();
+        drop(stdin);
+    }
 
     let stdout = child.stdout.take().ok_or("No stdout")?;
     let mut reader = BufReader::new(stdout).lines();
@@ -1028,8 +1040,11 @@ pub async fn cli_execute_query(
     }
 
     // Parse stdout into columns + rows if this looks like a SELECT result
-    // SELECT results have a header line and data lines, separated by "rows" footer
-    let (columns, rows): (Vec<String>, Vec<Vec<String>>) = parse_psql_output(&stdout_lines);
+    let (columns, rows): (Vec<String>, Vec<Vec<String>>) = if expanded_display {
+        (Vec::new(), Vec::new())
+    } else {
+        parse_psql_output(&stdout_lines)
+    };
 
     Ok(serde_json::json!({
         "columns": columns,
