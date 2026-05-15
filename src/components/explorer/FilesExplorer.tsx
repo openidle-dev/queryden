@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { Suspense, lazy, useState } from "react";
 import { useSavedQueries } from "../../store/savedQueryStore";
 import { Folder, FileCode, Play, Trash2, Code2, Loader2, Clock } from "lucide-react";
-import { LocalHistoryDialog } from "../ui/LocalHistoryDialog";
+
+const LocalHistoryDialog = lazy(() => import("../ui/LocalHistoryDialog").then((m) => ({ default: m.LocalHistoryDialog })));
 
 export function FilesExplorer() {
   const { queries, removeQuery, isLoading } = useSavedQueries();
@@ -80,10 +81,14 @@ export function FilesExplorer() {
         )}
       </div>
 
-      <LocalHistoryDialog
-        isOpen={showLocalHistory}
-        onClose={() => setShowLocalHistory(false)}
-      />
+      {showLocalHistory && (
+        <Suspense fallback={null}>
+          <LocalHistoryDialog
+            isOpen={showLocalHistory}
+            onClose={() => setShowLocalHistory(false)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }
