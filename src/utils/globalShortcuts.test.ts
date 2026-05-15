@@ -40,6 +40,23 @@ describe("matchGlobalShortcut", () => {
     ).toEqual({ type: "open-settings" });
   });
 
+  // Regression test for issue #12:
+  // Ctrl+Shift+F used to be double-bound — Monaco's editor swallowed it for
+  // format-document while AppLayout also wanted it for global search. We
+  // dropped the Monaco binding so the keystroke bubbles to AppLayout. This
+  // test pins down that `matchGlobalShortcut` does NOT claim Ctrl+Shift+F
+  // as a format-sql action — Ctrl+Shift+L is the canonical formatter, and
+  // Ctrl+Shift+F is reserved for AppLayout's global search handler.
+  it("does not claim Ctrl+Shift+F (reserved for global search; regression: #12)", () => {
+    const action = matchGlobalShortcut({
+      ctrlKey: true,
+      shiftKey: true,
+      altKey: false,
+      key: "F",
+    });
+    expect(action).toBeNull();
+  });
+
   it("returns null for unrelated keys", () => {
     expect(
       matchGlobalShortcut({
