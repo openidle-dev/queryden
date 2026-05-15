@@ -1,0 +1,315 @@
+---
+import Layout from '../layouts/Layout.astro';
+import SignatureMesh from '../components/SignatureMesh.astro';
+import { SITE, RELEASE } from '../lib/site';
+
+// TODO: fill these in. The structure is informed by Zed ("Currently / Next"),
+// Warp ("team committed / community-eligible"), and Astro (issues are the
+// source of truth — the website is a thin curated view). Each item should
+// link to a GitHub issue when one exists; the issue is what's real, this page
+// is a summary.
+//
+// Status rule (keep it minimal): only "in progress" items get a badge.
+// Everything else is implicitly planned. Don't invent dates or version pins.
+
+type Status = 'in-progress' | 'planned' | 'exploring';
+
+interface Item {
+  title: string;
+  body: string;       // one or two sentences; plain text or simple inline HTML
+  issue?: number;     // GitHub issue number; renders as #N → repo link
+  status?: Status;    // omit for "planned" in Now/Next; use 'exploring' for Later
+}
+
+interface Horizon {
+  id: 'now' | 'next' | 'later';
+  label: string;
+  lede: string;
+  items: Item[];
+}
+
+const HORIZONS: Horizon[] = [
+  {
+    id: 'now',
+    label: 'Now',
+    lede: 'Active focus — the work most likely to land in the next release.',
+    items: [
+      {
+        title: 'Vault crypto hardening',
+        body: 'Per-vault random salt and explicit Argon2 m_cost / t_cost / p_cost — replacing the hardcoded salt and default parameters in the encrypted credential store.',
+        issue: 14,
+        status: 'in-progress',
+      },
+      {
+        title: 'macOS in-app updater',
+        body: 'pick_asset misses the .dmg and install_update has no darwin branch — Mac users are stuck on whatever they first installed. Fixing the asset selection and install path.',
+        issue: 8,
+        status: 'in-progress',
+      },
+      {
+        title: 'Connection dialog cleanup',
+        body: 'Surface all required settings clearly and collapse the "coming soon" provider list behind a Show all toggle, so the dialog stops looking like every backend is half-finished.',
+        issue: 44,
+      },
+    ],
+  },
+  {
+    id: 'next',
+    label: 'Next',
+    lede: 'Queued for after the current batch. Order is approximate; scope may move.',
+    items: [
+      {
+        title: 'SSH tunnel reliability',
+        body: 'A reproducible "tunnel won\'t connect" report. Needs a deeper look at the ssh2-based tunnel registry and clearer error surfacing.',
+        issue: 46,
+      },
+      {
+        title: 'Import connections from pgAdmin / DBeaver',
+        body: 'Read existing connection exports so new users don\'t have to retype every host, port, and database to try QueryDen.',
+        issue: 53,
+      },
+      {
+        title: 'psql console correctness',
+        body: 'Auto-appended LIMIT after a trailing semicolon produces a syntax error; the Extended-display shortcut (\\x) doesn\'t fire. Two small fixes that make the embedded psql usable.',
+        issue: 38,
+      },
+      {
+        title: 'Type-correct grid rendering',
+        body: 'BIGINT precision past JS safe-integer range, and date / timestamp detection by column type instead of column name.',
+        issue: 41,
+      },
+      {
+        title: 'CLI tools management',
+        body: 'PostgreSQL CLI auto-download is broken end-to-end; users have no UI to inspect, switch, or repair downloaded CLIs.',
+        issue: 40,
+      },
+      {
+        title: 'Keymap audit',
+        body: 'Ctrl+Shift+F and Ctrl+D are double-bound, and ~14 shortcuts in the DataGrip preset are advertised but never wired.',
+        issue: 11,
+      },
+    ],
+  },
+  {
+    id: 'later',
+    label: 'Later',
+    lede: 'Direction, not commitment — these are problems we want to solve, not specs we\'ve written.',
+    items: [
+      {
+        title: 'Schema-aware row editor',
+        body: 'FK dropdowns, NOT NULL enforcement, and type-aware widgets so editing a row feels like editing a form, not a JSON blob.',
+        issue: 50,
+        status: 'exploring',
+      },
+      {
+        title: 'Inline add-row in the grid',
+        body: 'New rows added at the bottom of the grid alongside (or instead of) the AddRowModal — fewer modal hops for bulk inserts.',
+        issue: 49,
+        status: 'exploring',
+      },
+      {
+        title: 'Image columns as thumbnails',
+        body: 'Render bytea / base64 image columns as inline previews with click-to-zoom, so picture-heavy tables are actually browsable.',
+        issue: 52,
+        status: 'exploring',
+      },
+      {
+        title: 'AI assistant — for real this time',
+        body: 'Today AIAssistantDialog is a setTimeout stub. Wire it to a real provider with proper streaming, prompt scoping, and a user-supplied API key.',
+        issue: 10,
+        status: 'exploring',
+      },
+      {
+        title: 'Universal macOS build',
+        body: 'Ship universal-apple-darwin so the same DMG runs on Intel and Apple Silicon Macs.',
+        issue: 7,
+        status: 'exploring',
+      },
+    ],
+  },
+];
+
+const STATUS_LABEL: Record<Status, string> = {
+  'in-progress': 'In progress',
+  'planned':     'Planned',
+  'exploring':   'Exploring',
+};
+
+const issueUrl = (n: number) => `${SITE.repo}/issues/${n}`;
+---
+<Layout title="Roadmap · QueryDen" active="roadmap">
+
+  <header class="page-hero">
+    <SignatureMesh intensity="subtle" maskFalloff="hard" />
+    <div class="wrap" style="position: relative; z-index: 1;">
+      <div class="eyebrow">Where QueryDen is going</div>
+      <h1 style="margin-top: 22px;">A direction, not a promise.</h1>
+      <p class="lede">
+        QueryDen is built by a small team in the open. This page is the
+        shortest honest answer to "what are you working on?" — grouped by
+        how confident we are, not by ship date.
+      </p>
+      <p class="rm-note">
+        The source of truth is <a href={`${SITE.repo}/issues`} class="rm-src" rel="noopener">GitHub Issues</a> — every item below links back to one. Priorities shift; we'd rather move things around in public than pretend the plan never changed. Shipped work is logged in the <a href="/changelog" class="rm-src">changelog</a>.
+      </p>
+    </div>
+  </header>
+
+  <section class="sec-pad" id="horizons">
+    <div class="wrap">
+
+      {HORIZONS.map((h) => (
+        <section class="rm-horizon" id={h.id} aria-labelledby={`h-${h.id}`}>
+          <header class="rm-horizon-head">
+            <h2 class="rm-horizon-title" id={`h-${h.id}`}>{h.label}</h2>
+            <p class="rm-horizon-lede">{h.lede}</p>
+          </header>
+
+          <ol class="rm-list">
+            {h.items.map((it) => (
+              <li class="rm-item">
+                <div class="rm-meta">
+                  {it.status && (
+                    <span class={`rm-status rm-status-${it.status}`}>{STATUS_LABEL[it.status]}</span>
+                  )}
+                  {it.issue !== undefined && (
+                    <a class="rm-issue" href={issueUrl(it.issue)} rel="noopener" aria-label={`GitHub issue #${it.issue}`}>#{it.issue}</a>
+                  )}
+                </div>
+                <div class="rm-body">
+                  <h3 class="rm-title">{it.title}</h3>
+                  <p class="rm-desc" set:html={it.body} />
+                </div>
+              </li>
+            ))}
+          </ol>
+        </section>
+      ))}
+
+    </div>
+  </section>
+
+  <section class="sec-pad rm-tail">
+    <div class="wrap">
+      <div class="rm-tail-grid">
+        <div>
+          <h2 class="rm-tail-title">Recently shipped</h2>
+          <p class="rm-tail-lede">
+            Latest release: <a href={`${SITE.repo}/releases/tag/${RELEASE.tag}`} class="rm-src" rel="noopener">{RELEASE.tag}</a>{' '}
+            on {RELEASE.publishedAt}. The <a href="/changelog" class="rm-src">changelog</a> has the version-by-version history.
+          </p>
+        </div>
+        <div>
+          <h2 class="rm-tail-title">Disagree with the priorities?</h2>
+          <p class="rm-tail-lede">
+            File an <a href={`${SITE.repo}/issues/new/choose`} class="rm-src" rel="noopener">issue</a>, vote on existing ones, or start a thread in{' '}
+            <a href={`${SITE.repo}/discussions`} class="rm-src" rel="noopener">Discussions</a>. We move things up the list when people ask.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</Layout>
+
+<style>
+  .rm-src { color: var(--ink-2); border-bottom: 1px solid var(--line-2); }
+  .rm-src:hover { color: var(--ink); }
+
+  .rm-note {
+    margin-top: 28px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-3);
+    max-width: 64ch;
+    line-height: 1.65;
+  }
+
+  /* Horizon section */
+  .rm-horizon { padding: 36px 0; border-bottom: 1px solid var(--line); }
+  .rm-horizon:first-child { padding-top: 0; }
+  .rm-horizon:last-child  { border-bottom: 0; }
+
+  .rm-horizon-head { margin-bottom: 28px; }
+  .rm-horizon-title {
+    margin: 0 0 8px;
+    font-size: 28px; font-weight: 500; letter-spacing: -0.02em; color: var(--ink);
+  }
+  .rm-horizon-lede {
+    margin: 0; color: var(--ink-2); font-size: 14.5px; line-height: 1.6;
+    max-width: 56ch;
+  }
+
+  .rm-list { list-style: none; padding: 0; margin: 0; }
+
+  .rm-item {
+    display: grid; grid-template-columns: 200px 1fr; gap: 40px;
+    padding: 22px 0; border-top: 1px solid var(--line-1); align-items: start;
+  }
+  .rm-item:first-child { border-top: 0; padding-top: 8px; }
+  @media (max-width: 800px) {
+    .rm-item { grid-template-columns: 1fr; gap: 10px; }
+  }
+
+  .rm-meta {
+    display: flex; flex-direction: column; gap: 8px; align-items: flex-start;
+    font-family: var(--mono); font-size: 12px;
+  }
+  @media (max-width: 800px) {
+    .rm-meta { flex-direction: row; gap: 12px; align-items: baseline; }
+  }
+
+  .rm-status {
+    font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 999px;
+    border: 1px solid color-mix(in oklch, currentColor 30%, transparent);
+    background:        color-mix(in oklch, currentColor 10%, transparent);
+  }
+  .rm-status-in-progress { color: var(--accent); }
+  .rm-status-exploring   { color: var(--ink-3); }
+  .rm-status-planned     { color: oklch(0.78 0.12 240); }
+
+  .rm-issue {
+    color: var(--ink-3);
+    border-bottom: 1px solid var(--line-1);
+    padding-bottom: 1px;
+    transition: color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+  }
+  .rm-issue:hover { color: var(--ink-1); border-bottom-color: var(--line-2); }
+
+  .rm-title {
+    margin: 0 0 6px;
+    font-size: 17px; font-weight: 500; letter-spacing: -0.01em; color: var(--ink);
+  }
+  .rm-desc {
+    margin: 0; color: var(--ink-2); font-size: 14.5px; line-height: 1.6;
+    max-width: 64ch;
+  }
+  .rm-desc code {
+    font-family: var(--mono); font-size: 0.88em;
+    background: var(--bg-1); border: 1px solid var(--line-1);
+    border-radius: 4px; padding: 1px 5px; color: var(--ink-1);
+  }
+  .rm-desc a {
+    color: var(--ink-1); border-bottom: 1px solid var(--line-2);
+    transition: color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+  }
+  .rm-desc a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* Tail callouts */
+  .rm-tail { border-top: 1px solid var(--line); }
+  .rm-tail-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 56px;
+  }
+  @media (max-width: 800px) {
+    .rm-tail-grid { grid-template-columns: 1fr; gap: 32px; }
+  }
+  .rm-tail-title {
+    margin: 0 0 10px;
+    font-size: 18px; font-weight: 500; letter-spacing: -0.01em; color: var(--ink);
+  }
+  .rm-tail-lede {
+    margin: 0; color: var(--ink-2); font-size: 14.5px; line-height: 1.65;
+    max-width: 56ch;
+  }
+</style>
