@@ -6,6 +6,7 @@ import { useConfirmDialog } from "../ui/ConfirmDialog";
 
 import { PROVIDERS } from "../../config/providers";
 import { getDefaultDatabaseName } from "../../config/app";
+import { filterProviders, getComingSoonCount } from "./filterProviders";
 
 export function ConnectionDialog({ connection, onClose }: { connection?: DatabaseConnection; onClose: () => void }) {
   const { addConnection, updateConnection, removeConnection, vaultCredentials } = useConnections();
@@ -13,6 +14,7 @@ export function ConnectionDialog({ connection, onClose }: { connection?: Databas
   const [searchFilter, setSearchFilter] = useState("");
   const [driverCategory, setDriverCategory] = useState("All");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [showAll, setShowAll] = useState(false);
   const [activeTab, setActiveTab] = useState<"general" | "ssh">("general");
 
   const [formData, setFormData] = useState({
@@ -214,11 +216,12 @@ export function ConnectionDialog({ connection, onClose }: { connection?: Databas
   };
 
   const categories = ["All", "Popular", "RDBMS", "NoSQL", "Cloud", "Embedded"];
-  const filteredProviders = PROVIDERS.filter(p => {
-    if (searchFilter && !p.name.toLowerCase().includes(searchFilter.toLowerCase())) return false;
-    if (driverCategory !== "All" && driverCategory !== "Popular" && p.type !== driverCategory) return false;
-    return true;
+  const filteredProviders = filterProviders(PROVIDERS, {
+    showAll,
+    search: searchFilter,
+    category: driverCategory,
   });
+  const comingSoonCount = getComingSoonCount(PROVIDERS);
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[200] backdrop-blur-[1px]">
@@ -258,6 +261,15 @@ export function ConnectionDialog({ connection, onClose }: { connection?: Databas
                   className="w-full pl-9 pr-3 py-1.5 text-xs rounded bg-[#111111] border border-[var(--border)] outline-none focus:border-[var(--color-accent)] text-white"
                 />
               </div>
+              <label className="text-[10px] text-[var(--text-secondary)] flex items-center gap-1.5 mr-3 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={showAll}
+                  onChange={(e) => setShowAll(e.target.checked)}
+                  className="w-3 h-3 accent-[var(--color-accent)] cursor-pointer"
+                />
+                <span>Show all ({comingSoonCount})</span>
+              </label>
               <div className="text-[10px] text-[var(--text-secondary)] flex items-center gap-1.5 mr-2">
                 <span>View:</span>
                 <button 
