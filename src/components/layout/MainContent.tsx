@@ -792,14 +792,14 @@ Download "${filename}" (~80MB)?`,
           const trimmed = stmt.trim();
           
           // \c (connect)
-          const connectMatch = trimmed.match(/^\\(?:c|connect)\s+([\w"$.]+)/i);
+          const connectMatch = trimmed.match(/^\\(?:c|connect)\s+([\w"$.]+)\s*$/i);
           if (connectMatch) {
             const newDb = connectMatch[1].replace(/"/g, '');
-            
+
             // Verify connection before switching
             try {
               await cliStore.testConnection("postgresql", cliHost, port, newDb, username, password, majorVersion);
-              
+
               currentCliDatabase = newDb;
               logger.debug("[CLI Path] Statement level \\c:", newDb);
               if (currentTabId) {
@@ -814,14 +814,14 @@ Download "${filename}" (~80MB)?`,
               appendPsqlOutput([`You are now connected to database "${newDb}" as user "${username}".`]);
             } catch (err: any) {
               const errMsg = err.message || String(err);
-              appendPsqlOutput([`psql: error: connection to server at "${cliHost}", port ${port} failed: FATAL: database "${newDb}" does not exist`]);
+              appendPsqlOutput([`psql: error: \\connect: ${errMsg}`]);
               logger.error("[CLI Path] \\c failed:", errMsg);
             }
             return true;
           }
 
           // \x (expanded)
-          const expandedMatch = trimmed.match(/^\\x(?:\s+(on|off))?/i);
+          const expandedMatch = trimmed.match(/^\\x(?:\s+(on|off))?\s*$/i);
           if (expandedMatch) {
             const mode = expandedMatch[1]?.toLowerCase();
             if (mode === "on") currentPsqlExpanded = true;
@@ -844,11 +844,9 @@ Download "${filename}" (~80MB)?`,
             if (cancelFlagRef.current) break;
             const stmt = statementsToRun[i];
 
-            // Handle meta-commands first
+            // Handle meta-commands (\c, \x) entirely in the frontend; don't pass to psql.
             if (await handlePsqlMetaCommand(stmt)) {
-              if (stmt.trim().startsWith("\\") && stmt.trim().split(/\s+/).length <= 2) {
-                continue;
-              }
+              continue;
             }
 
             const stmtInfo = statementInfos[i];
@@ -948,28 +946,26 @@ Download "${filename}" (~80MB)?`,
           }
 
           try {
+            // Handle \c, \x entirely in the frontend; flush confirmation message and exit.
             if (await handlePsqlMetaCommand(queryToRun)) {
-              if (queryToRun.trim().startsWith("\\") && queryToRun.trim().split(/\s+/).length <= 2) {
-                // Flush the confirmation message to the console history
-                if (currentTabId) {
-                  const currentOutput = psqlOutputRef.current;
-                  const newEntry: PsqlConsoleEntry = {
-                    id: crypto.randomUUID(),
-                    command: runningCmdRef.current || queryToRun,
-                    outputLines: [...currentOutput],
-                    hasErrors: false,
-                    executionTime: Date.now() - startTime,
-                  };
-                  updateTabState(currentTabId, {
-                    psqlEntries: [...(currentTab?.psqlEntries || []), newEntry],
-                    psqlOutput: [],
-                  });
-                  clearPsqlOutput();
-                }
-                setIsExecuting(false);
-                isExecutingRef.current = false;
-                return;
+              if (currentTabId) {
+                const currentOutput = psqlOutputRef.current;
+                const newEntry: PsqlConsoleEntry = {
+                  id: crypto.randomUUID(),
+                  command: runningCmdRef.current || queryToRun,
+                  outputLines: [...currentOutput],
+                  hasErrors: currentOutput.some(l => l.startsWith("psql: error:")),
+                  executionTime: Date.now() - startTime,
+                };
+                updateTabState(currentTabId, {
+                  psqlEntries: [...(currentTab?.psqlEntries || []), newEntry],
+                  psqlOutput: [],
+                });
+                clearPsqlOutput();
               }
+              setIsExecuting(false);
+              isExecutingRef.current = false;
+              return;
             }
 
             if (isSelect) {

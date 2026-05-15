@@ -966,13 +966,15 @@ pub async fn cli_execute_query(
             cmd.arg("-p").arg(port.to_string());
             cmd.arg("-d").arg(&database);
             cmd.arg("-U").arg(&username);
-            
+            cmd.arg("-w");           // never prompt
             if expanded_display {
-                cmd.arg("-x");
+                cmd.arg("-x");       // expanded display — frontend renders raw stdout
             } else {
+                cmd.arg("-t");       // tuples only (no header/footer)
+                cmd.arg("-A");       // unaligned
                 cmd.arg("-F").arg("|");
             }
-            cmd.arg("-w");
+            cmd.arg("-c").arg(&query);
         }
         ToolKind::MySql => {
             cmd.arg("-h").arg(&host);
@@ -1003,18 +1005,9 @@ pub async fn cli_execute_query(
 
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
-    cmd.stdin(Stdio::piped());
 
     let start = std::time::Instant::now();
     let mut child = cmd.spawn().map_err(|e| format!("Spawn failed: {}", e))?;
-
-    // Write query to stdin
-    if let Some(mut stdin) = child.stdin.take() {
-        use tokio::io::AsyncWriteExt;
-        stdin.write_all(query.as_bytes()).await.ok();
-        stdin.flush().await.ok();
-        drop(stdin);
-    }
 
     let stdout = child.stdout.take().ok_or("No stdout")?;
     let mut reader = BufReader::new(stdout).lines();
