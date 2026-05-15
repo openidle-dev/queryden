@@ -18,9 +18,7 @@
 // and rendered with the `note` kind chip. The [Unreleased] section
 // is intentionally skipped.
 
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import CHANGELOG_RAW from '../../../CHANGELOG.md?raw';
 
 export type Kind = 'added' | 'changed' | 'fixed' | 'security' | 'note';
 
@@ -164,9 +162,4 @@ function parseChangelog(md: string): ChangelogEntry[] {
   return entries;
 }
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const CHANGELOG_PATH = resolve(__dirname, '../../../CHANGELOG.md');
-
-export const CHANGELOG: ChangelogEntry[] = parseChangelog(
-  readFileSync(CHANGELOG_PATH, 'utf8')
-);
+export const CHANGELOG: ChangelogEntry[] = parseChangelog(CHANGELOG_RAW);
