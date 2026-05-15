@@ -46,7 +46,7 @@ Or build from source — see [Building](#building) below.
 
 | | |
 |---|---|
-| **Multi-engine** | Postgres · MySQL · MariaDB · SQLite · CockroachDB · Supabase |
+| **Multi-engine** | Postgres · MySQL/MariaDB · SQLite · CockroachDB · Supabase. MariaDB uses the MySQL wire protocol; CockroachDB and Supabase use the PostgreSQL wire protocol (same driver as PG, with a connection-string helper for Supabase). |
 | **SQL editor** | Monaco-powered with autocomplete, syntax highlighting, FK-aware JOIN suggestions, intention actions (Alt+Enter), and live templates |
 | **Schema explorer** | Tree-view browser for schemas, tables, columns, indexes, triggers, and foreign keys |
 | **Visual EXPLAIN** | EXPLAIN ANALYZE visualization for query performance tuning |

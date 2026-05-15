@@ -13,10 +13,10 @@ updated: 2026-05-13
 | Engine | Notes |
 |--------|-------|
 | PostgreSQL | Native driver. Patched `tauri-plugin-sql` adds support for `INTERVAL`, `OID`, and array types. |
-| MySQL / MariaDB | Native driver. Standard types + JSON. |
+| MySQL / MariaDB | One driver. MariaDB is supported through the MySQL wire protocol — the same driver as MySQL. Standard types + JSON. |
 | SQLite | File-path connection. Multiple DB files per project. |
-| CockroachDB | Uses the Postgres wire protocol — same driver as PG. |
-| Supabase | Postgres driver + helper UI for the Supabase connection format. |
+| CockroachDB | Supported through the PostgreSQL wire protocol — connect with the PostgreSQL driver. No separate backend. |
+| Supabase | PostgreSQL plus a connection-string helper for Supabase's hosted format. Under the hood it uses the PostgreSQL driver. |
 
 ## 2. Open a tab
 
