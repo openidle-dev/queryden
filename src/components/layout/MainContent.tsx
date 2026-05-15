@@ -10,7 +10,6 @@ import { useConfirmDialog } from "../ui/ConfirmDialog";
 import { Copy, FileText, BarChart2, Activity as ActivityIcon, Monitor, Zap, Clock, HardDrive, ShieldCheck, Layers } from "lucide-react";
 import { logger } from "../../utils/logger";
 import { getDefaultDatabaseName } from "../../config/app";
-import { formatSql } from "../../utils/SqlFormatter";
 import { splitStatements } from "../../utils/splitStatements";
 import { VariableSubstitutionDialog, extractVariables, substituteVariables, VariableValues } from "../ui/VariableSubstitutionDialog";
 import { useLocalHistory } from "../../store/localHistoryStore";
@@ -1848,9 +1847,8 @@ Download "${filename}" (~80MB)?`,
   }, [activeTableName, activeConnection, executeQuery, confirmDialog, lastColumns, results]);
 
   const handleFormatSql = useCallback(() => {
-    const formatted = formatSql(currentQueryRef.current || "");
-    updateTabQuery(formatted);
-  }, [updateTabQuery]);
+    window.dispatchEvent(new CustomEvent("format-sql"));
+  }, []);
 
   const handleExplainPlan = useCallback(async () => {
     if (!activeConnection) {
