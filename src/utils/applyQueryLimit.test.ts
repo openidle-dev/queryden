@@ -25,6 +25,40 @@ describe("applyQueryLimit", () => {
         "SELECT 1 WHERE x = 1 LIMIT 1000"
       );
     });
+
+    // Without this, `SELECT 1; -- foo` would become `SELECT 1; -- foo LIMIT 1000`,
+    // and the `--` comment would extend through `LIMIT 1000`, silently bypassing
+    // the safety limit — a worse outcome than the original syntax error.
+    // Flagged by CodeRabbit's review on PR #58.
+    it("strips a trailing line comment after the semicolon", () => {
+      expect(applyQueryLimit("SELECT 1; -- comment", 1000)).toBe(
+        "SELECT 1 LIMIT 1000"
+      );
+    });
+
+    it("strips a trailing block comment after the semicolon", () => {
+      expect(applyQueryLimit("SELECT 1; /* comment */", 1000)).toBe(
+        "SELECT 1 LIMIT 1000"
+      );
+    });
+
+    it("strips a trailing line comment when there's no semicolon", () => {
+      expect(applyQueryLimit("SELECT 1 -- comment", 1000)).toBe(
+        "SELECT 1 LIMIT 1000"
+      );
+    });
+
+    it("strips a multi-line trailing block comment", () => {
+      expect(
+        applyQueryLimit("SELECT 1; /* line1\nline2 */", 1000)
+      ).toBe("SELECT 1 LIMIT 1000");
+    });
+
+    it("preserves inline comments mid-query", () => {
+      expect(
+        applyQueryLimit("SELECT col1, -- pk\n       col2 FROM t;", 1000)
+      ).toBe("SELECT col1, -- pk\n       col2 FROM t LIMIT 1000");
+    });
   });
 
   describe("skip cases", () => {

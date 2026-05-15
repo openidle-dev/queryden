@@ -44,8 +44,21 @@ export function applyQueryLimit(query: string, maxRows: number): string {
     return query; // Don't modify complex queries
   }
 
-  // Strip a trailing `;` (with optional surrounding whitespace) before
-  // appending LIMIT — see #38.
-  const trimmed = query.trim().replace(/;\s*$/, "");
+  // Iteratively strip trailing whitespace, semicolons, and SQL comments
+  // (-- or /* */) so the appended LIMIT isn't placed inside a comment.
+  // Surgical: only strips at the tail, so inline comments mid-query are
+  // preserved. See #38; the comment-trailing case was a follow-up regression
+  // (e.g. `SELECT 1; -- foo` would otherwise become
+  // `SELECT 1; -- foo LIMIT 1000`, where `--` comments out the LIMIT).
+  let trimmed = query;
+  let prev;
+  do {
+    prev = trimmed;
+    trimmed = trimmed
+      .replace(/\s+$/, "")               // trailing whitespace
+      .replace(/;$/, "")                  // trailing semicolon
+      .replace(/--[^\n]*$/, "")          // trailing line comment
+      .replace(/\/\*[\s\S]*?\*\/$/, ""); // trailing block comment
+  } while (trimmed !== prev);
   return `${trimmed} LIMIT ${maxRows}`;
 }
