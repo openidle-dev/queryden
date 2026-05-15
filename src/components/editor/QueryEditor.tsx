@@ -659,9 +659,10 @@ export const QueryEditor = memo(function QueryEditor({
       if (domNode) domNode.removeEventListener("contextmenu", handleContextMenu);
     });
 
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF, () => {
-      editor.getAction('editor.action.formatDocument')?.run();
-    });
+    // NOTE: Ctrl+Shift+F is intentionally NOT bound to formatDocument here.
+    // Ctrl+Shift+L is the canonical formatter shortcut (see #34 / globalShortcuts.ts);
+    // Ctrl+Shift+F is owned by the app-level global search in AppLayout.tsx (#12).
+    // Binding it here would swallow the keystroke before global search could see it.
 
     // Alt+Enter - Intention Actions
     editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.Enter, () => {
@@ -1152,7 +1153,7 @@ const isInJoinContext = /(\b|^)(JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|INNER\s+JOIN|CROSS
           </div>
           
           {/* Keyboard shortcuts hint */}
-          <span className="text-[9px] text-[var(--text-secondary)] opacity-50 ml-2 hidden sm:inline">Ctrl+Enter: run at cursor • Ctrl+Shift+Enter: run all • Ctrl+Shift+F: format</span>
+          <span className="text-[9px] text-[var(--text-secondary)] opacity-50 ml-2 hidden sm:inline">Ctrl+Enter: run at cursor • Ctrl+Shift+Enter: run all • Ctrl+Shift+L: format</span>
         </div>
         <div className="flex items-center gap-2">
            <button 
