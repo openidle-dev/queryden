@@ -2478,9 +2478,7 @@ Download "${filename}" (~80MB)?`,
             onRefresh={lastSelectQueryRef.current ? () => executeQuery(lastSelectQueryRef.current) : undefined}
             onSave={handleSave}
             onDiscard={() => {
-              if (lastSelectQueryRef.current) {
-                executeQuery(lastSelectQueryRef.current);
-              }
+              setResults(prev => prev.filter(r => !r._isNew).map(({ _isNew, _isModified, ...rest }) => rest));
             }}
             optimizerData={optimizerData}
             isReadOnly={!!optimizerData}
