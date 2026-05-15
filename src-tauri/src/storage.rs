@@ -17,6 +17,7 @@ use argon2::{
 };
 use keyring::Entry;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
@@ -28,10 +29,35 @@ static LOCKOUT_UNTIL: AtomicU64 = AtomicU64::new(0);
 // part of the key seed — removing it would brick those users' data.
 const FALLBACK_MACHINE_ID: &str = "default-machine-id";
 
+// Process-wide cache for the platform machine ID. Detection on Windows shells
+// out to PowerShell + WMI which can take seconds (and on slow / EDR-scanned
+// machines, tens of seconds). Startup fires ~6 storage loads in parallel and
+// each one historically re-ran detection 1–2 times, stacking PowerShell spawns
+// until the WebView hung with "Not Responding". Cache the first successful
+// result so the cost is paid once per process.
+static MACHINE_ID_CACHE: OnceLock<String> = OnceLock::new();
+
 // Returns the platform machine ID, or `FALLBACK_MACHINE_ID` if detection fails.
 // Use `try_get_machine_id()` for new encryption — it errors instead of weakening
 // the key with a globally-known sentinel.
 fn get_machine_id() -> String {
+    if let Some(cached) = MACHINE_ID_CACHE.get() {
+        return cached.clone();
+    }
+
+    let id = detect_machine_id();
+
+    // Only memoize real IDs. A transient detection failure (e.g. PowerShell
+    // missing from PATH momentarily) must not lock the process into the
+    // fallback sentinel — that would silently weaken every subsequent key.
+    if id != FALLBACK_MACHINE_ID {
+        let _ = MACHINE_ID_CACHE.set(id.clone());
+    }
+
+    id
+}
+
+fn detect_machine_id() -> String {
     #[cfg(target_os = "linux")]
     {
         if let Ok(id) = fs::read_to_string("/etc/machine-id") {

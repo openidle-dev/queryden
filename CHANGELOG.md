@@ -6,6 +6,7 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 
 ### Fixed
 - **[#13](https://github.com/openidle-dev/queryden/issues/13) — Database Explorer toggle moved from `Ctrl+D` to `Ctrl+\`.** `Ctrl+D` shadowed Monaco's built-in "add selection to next occurrence" (multi-cursor) when focus was inside the SQL editor — costly muscle memory for anyone used to VS Code / JetBrains. The new binding matches the VS Code / DataGrip sidebar-toggle convention and doesn't collide with any Monaco default. The `databaseExplorer` entry in the default keymap preset (which previously advertised `Ctrl+Alt+S`, itself a collision with Settings) is now in sync.
+- **Windows startup hang / "Not Responding".** On Windows, `get_machine_id()` shells out to `powershell.exe` + WMI (`Get-CimInstance Win32_ComputerSystemProduct`) to derive the encryption key and fingerprint. The result was never memoized, so every storage load (connections, vault, settings, query history, saved queries, local history) and every key-derivation pass re-spawned PowerShell — ~8–15 concurrent invocations during cold start. On machines with slow WMI, aggressive EDR/AV, or a bloated WMI repo, that compounded into multi-second hangs and the OS marking the window unresponsive. Cached in a process-wide `OnceLock<String>` so PowerShell runs at most once per session; only real values are memoized so a transient detection failure can't poison key derivation.
 
 ## [1.0.13] - 2026-05-14
 
