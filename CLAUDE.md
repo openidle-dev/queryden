@@ -21,7 +21,7 @@ node scripts/bump-version.js  # bump patch version in package.json, Cargo.toml, 
 
 ## Testing
 
-- **Frontend**: Vitest is configured (`vitest.config.ts`) with `environment: "node"` for pure-function tests. Test files live next to source as `*.test.ts` / `*.test.tsx` (current examples: `src/utils/sqlSecurity.test.ts`, `src/utils/SqlFormatter.test.ts`, `src/utils/logger.test.ts`, `src/components/ui/VariableSubstitutionDialog.test.ts`). **No jsdom / React Testing Library yet** — component tests aren't set up. Adding them is tracked in [#24](https://github.com/openidle-dev/queryden/issues/24).
+- **Frontend**: Vitest is configured (`vitest.config.ts`) with `environment: "node"` for pure-function tests. Test files live next to source as `*.test.ts` / `*.test.tsx` (current examples: `src/utils/sqlSecurity.test.ts`, `src/utils/logger.test.ts`, `src/components/ui/VariableSubstitutionDialog.test.ts`). **No jsdom / React Testing Library yet** — component tests aren't set up. Adding them is tracked in [#24](https://github.com/openidle-dev/queryden/issues/24).
 - **Backend**: `cargo test` is wired in `.github/workflows/ci.yml` (`src-tauri/` Rust job) but there are no tests in `src-tauri/src/` yet. The encryption/lockout logic in `storage.rs` is the highest-priority surface to backfill — also tracked in [#24](https://github.com/openidle-dev/queryden/issues/24).
 - **E2E**: none. Playwright is a transitive dev dep but no Playwright tests are configured. A Playwright + Tauri-IPC-mock setup is in the roadmap.
 - **No lint config or formatter** is configured — typecheck (`npx tsc --noEmit`) is the only static-analysis gate today, and `cargo clippy -- -D warnings` for Rust.
@@ -60,7 +60,8 @@ Entry: `src/main.tsx` → `src/App.tsx`. App wraps everything in `QueryClientPro
 - `contexts/ConnectionContext.tsx` + `useConnections.ts` — current connection state and CRUD; this is the connection lifecycle hub.
 - `contexts/ThemeContext.tsx` — theme provider.
 - `store/` — Zustand stores, one per concern: `aiStore`, `cliStore`, `keymapStore`, `localHistoryStore`, `queryHistoryStore`, `savedQueryStore`, `settingsStore`, `updateStore`, `vaultStore`. Stores typically persist via Tauri storage commands. **`vaultStore` is a thin wrapper that proxies to `settingsStore`** — don't add separate persistence there. **`updateStore` is a thin wrapper around `@tauri-apps/plugin-updater` + `plugin-process`** — the heavy lifting (HTTP, signature verification, install, relaunch) lives in the plugins; the store just holds UI phase state.
-- `utils/SqlFormatter.ts`, `utils/sqlSecurity.ts` — SQL formatting (via `sql-formatter`) and statement safety checks.
+- `utils/sqlSecurity.ts` — statement safety checks.
+- SQL formatting lives in `components/editor/QueryEditor.tsx`: it registers a Monaco `DocumentFormattingEditProvider` backed by the `sql-formatter` npm package (around line 672). Both `Ctrl+Shift+L` (global shortcut → `format-sql` `CustomEvent` → editor) and the toolbar **Format SQL** button route through that provider, so there is exactly one formatting code path.
 
 The version string is injected at build time via Vite's `define`: `__APP_VERSION__` is read from `package.json`. Vite manualChunks splits monaco, glide grid, and the react/zustand vendor bundle.
 
