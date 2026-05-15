@@ -12,6 +12,7 @@ import { logger } from "../../utils/logger";
 import { getDefaultDatabaseName } from "../../config/app";
 import { formatSql } from "../../utils/SqlFormatter";
 import { splitStatements } from "../../utils/splitStatements";
+import { applyQueryLimit } from "../../utils/applyQueryLimit";
 import { VariableSubstitutionDialog, extractVariables, substituteVariables, VariableValues } from "../ui/VariableSubstitutionDialog";
 import { useLocalHistory } from "../../store/localHistoryStore";
 
@@ -384,39 +385,7 @@ const extractSelectedOrCursorStatement = (fullText: string): string => {
   return statements.length > 0 ? statements[0] : fullText;
 };
 
-// Apply automatic LIMIT to SELECT queries to prevent large result sets from freezing the UI
-  // Only applies to simple SELECT queries, skips complex queries (CTEs, subqueries, UNION, etc.)
-  const applyQueryLimit = (query: string, maxRows: number): string => {
-    // Skip if not a SELECT-like query (strip comments first for accurate detection)
-    const cleanQuery = query.replace(/--.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "").trim().toUpperCase();
-    
-    if (!cleanQuery.startsWith("SELECT") && !cleanQuery.includes("RETURNING") && 
-        !cleanQuery.startsWith("SHOW") && !cleanQuery.startsWith("EXPLAIN")) {
-      return query;
-    }
-    
-    // Skip if already has LIMIT (case insensitive)
-    if (/\bLIMIT\s+\d+/i.test(query)) {
-      return query;
-    }
-    
-    // Skip complex queries - CTEs, subqueries, UNION, etc.
-    const isComplexQuery = 
-      /\bWITH\s+\w+\s+AS\s*\(/i.test(query) ||  // CTE: WITH xx AS (...)
-      /\(\s*SELECT\b/i.test(query) ||           // Subquery: (SELECT ...)
-      /\bUNION\s+(ALL\s+)?/i.test(query) ||    // UNION / UNION ALL
-      /\bINTERSECT\b/i.test(query) ||          // INTERSECT
-      /\bEXCEPT\b/i.test(query);            // EXCEPT
-    
-    if (isComplexQuery) {
-      return query;  // Don't modify complex queries
-    }
-    
-    // Only apply LIMIT to simple SELECT queries
-    return `${query.trim()} LIMIT ${maxRows}`;
-  };
-
-  const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { lineNumber: number; statementText: string }) => {
+const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { lineNumber: number; statementText: string }) => {
     // Use refs for latest values to avoid stale closures
     const currentTab = activeTabRef.current;
     const currentTabId = activeTabIdRef.current;
