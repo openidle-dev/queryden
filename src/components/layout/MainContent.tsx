@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback, Suspense, lazy } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { QueryEditor } from "../editor/QueryEditor";
 import { ResultsPanel } from "../results/ResultsPanel";
 import { useConnections } from "../../contexts/useConnections";
 import { useQueryHistory } from "../../store/queryHistoryStore";
@@ -15,6 +14,12 @@ import { formatSql } from "../../utils/SqlFormatter";
 import { splitStatements } from "../../utils/splitStatements";
 import { VariableSubstitutionDialog, extractVariables, substituteVariables, VariableValues } from "../ui/VariableSubstitutionDialog";
 import { useLocalHistory } from "../../store/localHistoryStore";
+
+// Lazy-loaded editor — Monaco (core + SQL contribution) is the single
+// heaviest dependency in the app. Pulling QueryEditor out of the cold-start
+// bundle lets the rest of the shell paint immediately; the editor pane
+// shows a brief placeholder, then fills in once Monaco is parsed.
+const QueryEditor = lazy(() => import("../editor/QueryEditor").then(m => ({ default: m.QueryEditor })));
 
 // Lazy-loaded modal/conditional dialogs — none of these need to be in the
 // cold-start bundle. CompareDialog, DefinitionModal, and MultiQueryDialog
@@ -2372,20 +2377,26 @@ Download "${filename}" (~80MB)?`,
                 </div>
               </div>
             ) : (
-              <QueryEditor
-                key={activeTabId!}
-                value={activeTab!.query}
-                onChange={updateTabQuery}
-                onRun={(q: string) => executeQuery(q)}
-                connectionName={activeTab?.target?.connectionName || activeConnection?.name || undefined}
-                databaseName={activeTab?.target?.database || selectedDatabase || undefined}
-                tabId={activeTabId!}
-                tabName={activeTab?.name}
-                isExecuting={isExecuting}
-                hasError={!!error}
-                hasSuccess={!!success}
-                statementResults={activeTab?.statementResults}
-              />
+              <Suspense
+                fallback={
+                  <div className="h-full w-full bg-[var(--background)]" aria-hidden="true" />
+                }
+              >
+                <QueryEditor
+                  key={activeTabId!}
+                  value={activeTab!.query}
+                  onChange={updateTabQuery}
+                  onRun={(q: string) => executeQuery(q)}
+                  connectionName={activeTab?.target?.connectionName || activeConnection?.name || undefined}
+                  databaseName={activeTab?.target?.database || selectedDatabase || undefined}
+                  tabId={activeTabId!}
+                  tabName={activeTab?.name}
+                  isExecuting={isExecuting}
+                  hasError={!!error}
+                  hasSuccess={!!success}
+                  statementResults={activeTab?.statementResults}
+                />
+              </Suspense>
             )
           ) : (
             <div className="h-full flex flex-col items-center justify-center bg-[var(--background)] p-6 overflow-y-auto">
