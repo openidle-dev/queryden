@@ -75,8 +75,12 @@ export function AppLayout() {
   // Handle keyboard shortcuts (Ctrl+Alt+S is owned by App.tsx)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ctrl+D - Database Explorer toggle
-      if (e.ctrlKey && e.key === "d") {
+      // Ctrl+\ - Database Explorer toggle.
+      // Issue #13: previously Ctrl+D, which collided with Monaco's built-in
+      // "add selection to next occurrence" (multi-cursor) when focus was in
+      // the editor. Ctrl+\ matches the VS Code / DataGrip sidebar-toggle
+      // convention and doesn't shadow any Monaco default binding.
+      if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key === "\\") {
         e.preventDefault();
         setShowExplorer((prev) => !prev);
       }
@@ -108,7 +112,7 @@ export function AppLayout() {
                 ? "bg-[var(--color-accent)]/20 text-[var(--color-accent)]" 
                 : "hover:bg-[var(--border)]"
             }`}
-            title="Database Explorer (Ctrl+D)"
+            title="Database Explorer (Ctrl+\)"
           >
             <Database className="w-4 h-4" />
             Database Explorer
