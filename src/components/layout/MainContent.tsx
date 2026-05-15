@@ -60,6 +60,8 @@ export interface QueryTab {
   psqlOutput?: string[];
   /** Completed psql console entries (command + output pairs) */
   psqlEntries?: PsqlConsoleEntry[];
+  /** Whether extended display (\x) is enabled for this tab's PSQL console */
+  psqlExpanded?: boolean;
 }
 
 export interface PsqlConsoleEntry {
@@ -578,25 +580,9 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         clearPsqlOutput(); // Clear terminal at start of CLI execution
         const cliStore = await import("../../store/cliStore").then(m => m.useCliStore.getState());
 
-        const actualDatabase = targetConn ? targetConn.database : selectedDatabase;
-        let cliDatabase = actualDatabase;
-
-        // Check for \c (connect) meta-command
-        const connectMatch = queryToRun.trim().match(/^\\(?:c|connect)\s+([\w"$.]+)/i);
-        if (connectMatch) {
-          const newDb = connectMatch[1].replace(/"/g, '');
-          cliDatabase = newDb;
-          logger.debug("[CLI Path] Detected \\c command, switching target to:", newDb);
-          if (currentTabId) {
-             updateTabState(currentTabId, {
-                target: { 
-                  connectionId: actualConnection.id, 
-                  connectionName: actualConnection.name || "", 
-                  database: newDb 
-                }
-             });
-          }
-        }
+        const initialDatabase = targetConn ? targetConn.database : selectedDatabase;
+        let currentCliDatabase = initialDatabase || "";
+        let currentPsqlExpanded = currentTab?.psqlExpanded ?? false;
         
         // Resolve major version from three sources (most reliable first):
         // 1. Stale-check: re-detect from live libpq connection if currentDb is available
@@ -679,14 +665,14 @@ Download "${filename}" (~80MB)?`,
         }
         
         const cliHost = actualConnection.host || "localhost";
-        // cliDatabase is already defined above, potentially updated by \c command
-        logger.debug("[CLI Path] Using database for execution:", cliDatabase);
+        // currentCliDatabase is already defined above, potentially updated by \c command
+        logger.debug("[CLI Path] Using database for execution:", currentCliDatabase);
         
         // Helper: execute a single statement via CLI and return normalized rows/columns + stdout
-        const cliExecStmt = async (stmt: string, wantRows: boolean) => {
-          logger.debug("[cliExecStmt] Executing:", stmt);
+        const cliExecStmt = async (stmt: string, wantRows: boolean, isExpanded: boolean, dbName: string) => {
+          logger.debug("[cliExecStmt] Executing:", stmt, "Expanded:", isExpanded, "DB:", dbName);
           const result = await cliStore.executeQuery(
-            "postgresql", stmt, cliHost, port, cliDatabase as string, username, password, majorVersion
+            "postgresql", stmt, cliHost, port, dbName, username, password, majorVersion, isExpanded
           );
           logger.debug("[cliExecStmt] Result received from cliStore:", { 
             hasError: !!result.error, 
@@ -770,10 +756,67 @@ Download "${filename}" (~80MB)?`,
         };
 
         // ── Run all statements via CLI ────────────────────────────────────────
+        const handlePsqlMetaCommand = async (stmt: string): Promise<boolean> => {
+          const trimmed = stmt.trim();
+          
+          // \c (connect)
+          const connectMatch = trimmed.match(/^\\(?:c|connect)\s+([\w"$.]+)\s*$/i);
+          if (connectMatch) {
+            const newDb = connectMatch[1].replace(/"/g, '');
+
+            // Verify connection before switching
+            try {
+              await cliStore.testConnection("postgresql", cliHost, port, newDb, username, password, majorVersion);
+
+              currentCliDatabase = newDb;
+              logger.debug("[CLI Path] Statement level \\c:", newDb);
+              if (currentTabId) {
+                updateTabState(currentTabId, {
+                  target: {
+                    connectionId: actualConnection.id,
+                    connectionName: actualConnection.name || "",
+                    database: newDb
+                  }
+                });
+              }
+              appendPsqlOutput([`You are now connected to database "${newDb}" as user "${username}".`]);
+            } catch (err: any) {
+              const errMsg = err.message || String(err);
+              appendPsqlOutput([`psql: error: \\connect: ${errMsg}`]);
+              logger.error("[CLI Path] \\c failed:", errMsg);
+            }
+            return true;
+          }
+
+          // \x (expanded)
+          const expandedMatch = trimmed.match(/^\\x(?:\s+(on|off))?\s*$/i);
+          if (expandedMatch) {
+            const mode = expandedMatch[1]?.toLowerCase();
+            if (mode === "on") currentPsqlExpanded = true;
+            else if (mode === "off") currentPsqlExpanded = false;
+            else currentPsqlExpanded = !currentPsqlExpanded;
+
+            logger.info("[CLI Path] Statement level \\x:", currentPsqlExpanded);
+            if (currentTabId) {
+              updateTabState(currentTabId, { psqlExpanded: currentPsqlExpanded });
+            }
+            appendPsqlOutput([`Expanded display is ${currentPsqlExpanded ? 'on' : 'off'}.`]);
+            return true;
+          }
+
+          return false;
+        };
+
         if (isRunAll && statementsToRun.length > 0) {
           for (let i = 0; i < statementsToRun.length; i++) {
             if (cancelFlagRef.current) break;
             const stmt = statementsToRun[i];
+
+            // Handle meta-commands (\c, \x) entirely in the frontend; don't pass to psql.
+            if (await handlePsqlMetaCommand(stmt)) {
+              continue;
+            }
+
             const stmtInfo = statementInfos[i];
             const lineNumber = stmtInfo?.lineNumber || 1;
             const stmtUpper = stmt.toUpperCase().trim();
@@ -788,12 +831,12 @@ Download "${filename}" (~80MB)?`,
               const stmtStartTime = Date.now();
               if (isStmtSelect) {
                 const limitedStmt = applyQueryLimit(stmt, settings.maxRowsToDisplay);
-                const { rows: stmtRows, columns: stmtCols } = await cliExecStmt(limitedStmt, true);
+                const { rows: stmtRows, columns: stmtCols } = await cliExecStmt(limitedStmt, true, currentPsqlExpanded, currentCliDatabase);
                 const safeRows = stmtRows ?? [];
                 multiResults.push({ query: stmt, rows: safeRows, columns: stmtCols, rowsAffected: safeRows.length, lineNumber });
                 statementResults.push({ lineNumber, status: 'success', rowCount: safeRows.length, executionTime: Date.now() - stmtStartTime });
               } else {
-                const { rowsAffected: affected } = await cliExecStmt(stmt, false);
+                const { rowsAffected: affected } = await cliExecStmt(stmt, false, currentPsqlExpanded, currentCliDatabase);
                 multiResults.push({ query: stmt, rowsAffected: affected, lineNumber });
                 statementResults.push({ lineNumber, status: 'success', rowsAffected: affected, executionTime: Date.now() - stmtStartTime });
               }
@@ -851,7 +894,7 @@ Download "${filename}" (~80MB)?`,
             while (!cancelFlagRef.current && isExecutingRef.current) {
               try {
                 // psql \watch typically shows the grid output repeatedly
-                await cliExecStmt(queryToWatch, true);
+                await cliExecStmt(queryToWatch, true, currentPsqlExpanded, currentCliDatabase);
               } catch (err: any) {
                 appendPsqlOutput([`ERROR in watch: ${err.message || String(err)}`]);
                 break;
@@ -871,9 +914,31 @@ Download "${filename}" (~80MB)?`,
           }
 
           try {
+            // Handle \c, \x entirely in the frontend; flush confirmation message and exit.
+            if (await handlePsqlMetaCommand(queryToRun)) {
+              if (currentTabId) {
+                const currentOutput = psqlOutputRef.current;
+                const newEntry: PsqlConsoleEntry = {
+                  id: crypto.randomUUID(),
+                  command: runningCmdRef.current || queryToRun,
+                  outputLines: [...currentOutput],
+                  hasErrors: currentOutput.some(l => l.startsWith("psql: error:")),
+                  executionTime: Date.now() - startTime,
+                };
+                updateTabState(currentTabId, {
+                  psqlEntries: [...(currentTab?.psqlEntries || []), newEntry],
+                  psqlOutput: [],
+                });
+                clearPsqlOutput();
+              }
+              setIsExecuting(false);
+              isExecutingRef.current = false;
+              return;
+            }
+
             if (isSelect) {
               const limitedQuery = applyQueryLimit(queryToRun, settings.maxRowsToDisplay);
-              const { rows: cliRows, columns: cliCols } = await cliExecStmt(limitedQuery, true);
+              const { rows: cliRows, columns: cliCols } = await cliExecStmt(limitedQuery, true, currentPsqlExpanded, currentCliDatabase || "");
               rows = cliRows ?? [];
               rowsAffected = rows.length;
               statementResults.push({ lineNumber: stmtInfo.lineNumber, status: 'success', rowCount: rowsAffected, executionTime: Date.now() - stmtStartTime });
@@ -881,7 +946,7 @@ Download "${filename}" (~80MB)?`,
               if (currentTabId) updateTabState(currentTabId, { statementResults, columns: cliCols ?? [] });
               setLastColumns(cliCols ?? []);
             } else {
-              const { rowsAffected: affected } = await cliExecStmt(queryToRun, false);
+              const { rowsAffected: affected } = await cliExecStmt(queryToRun, false, currentPsqlExpanded, currentCliDatabase || "");
               rowsAffected = affected ?? 0;
               setSuccess(`Query executed successfully. ${rowsAffected} rows affected.`);
               rows = [];
