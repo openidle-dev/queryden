@@ -32,32 +32,99 @@ const HORIZONS: Horizon[] = [
   {
     id: 'now',
     label: 'Now',
-    lede: 'Active work — landing in the next release or two.',
+    lede: 'Active focus — the work most likely to land in the next release.',
     items: [
-      // TODO: replace with real in-flight items.
-      { title: 'TODO — in-flight item',     body: 'One-sentence description of what changes for the user.', status: 'in-progress' },
-      { title: 'TODO — in-flight item',     body: 'One-sentence description of what changes for the user.', status: 'in-progress', issue: 24 },
+      {
+        title: 'Vault crypto hardening',
+        body: 'Per-vault random salt and explicit Argon2 m_cost / t_cost / p_cost — replacing the hardcoded salt and default parameters in the encrypted credential store.',
+        issue: 14,
+        status: 'in-progress',
+      },
+      {
+        title: 'macOS in-app updater',
+        body: 'pick_asset misses the .dmg and install_update has no darwin branch — Mac users are stuck on whatever they first installed. Fixing the asset selection and install path.',
+        issue: 8,
+        status: 'in-progress',
+      },
+      {
+        title: 'Connection dialog cleanup',
+        body: 'Surface all required settings clearly and collapse the "coming soon" provider list behind a Show all toggle, so the dialog stops looking like every backend is half-finished.',
+        issue: 44,
+      },
     ],
   },
   {
     id: 'next',
     label: 'Next',
-    lede: 'Queued up after Now. Order is approximate; scope may move.',
+    lede: 'Queued for after the current batch. Order is approximate; scope may move.',
     items: [
-      // TODO: replace with real planned items.
-      { title: 'TODO — planned item', body: 'One-sentence description of what changes for the user.', issue: 33 },
-      { title: 'TODO — planned item', body: 'One-sentence description of what changes for the user.', issue: 7  },
-      { title: 'TODO — planned item', body: 'One-sentence description of what changes for the user.' },
+      {
+        title: 'SSH tunnel reliability',
+        body: 'A reproducible "tunnel won\'t connect" report. Needs a deeper look at the ssh2-based tunnel registry and clearer error surfacing.',
+        issue: 46,
+      },
+      {
+        title: 'Import connections from pgAdmin / DBeaver',
+        body: 'Read existing connection exports so new users don\'t have to retype every host, port, and database to try QueryDen.',
+        issue: 53,
+      },
+      {
+        title: 'psql console correctness',
+        body: 'Auto-appended LIMIT after a trailing semicolon produces a syntax error; the Extended-display shortcut (\\x) doesn\'t fire. Two small fixes that make the embedded psql usable.',
+        issue: 38,
+      },
+      {
+        title: 'Type-correct grid rendering',
+        body: 'BIGINT precision past JS safe-integer range, and date / timestamp detection by column type instead of column name.',
+        issue: 41,
+      },
+      {
+        title: 'CLI tools management',
+        body: 'PostgreSQL CLI auto-download is broken end-to-end; users have no UI to inspect, switch, or repair downloaded CLIs.',
+        issue: 40,
+      },
+      {
+        title: 'Keymap audit',
+        body: 'Ctrl+Shift+F and Ctrl+D are double-bound, and ~14 shortcuts in the DataGrip preset are advertised but never wired.',
+        issue: 11,
+      },
     ],
   },
   {
     id: 'later',
     label: 'Later',
-    lede: 'Direction we want to head. Specs, RFCs, and ideas — nothing committed.',
+    lede: 'Direction, not commitment — these are problems we want to solve, not specs we\'ve written.',
     items: [
-      // TODO: replace with real exploratory items.
-      { title: 'TODO — exploring',    body: 'One-sentence description of the direction or open question.', status: 'exploring' },
-      { title: 'TODO — exploring',    body: 'One-sentence description of the direction or open question.', status: 'exploring' },
+      {
+        title: 'Schema-aware row editor',
+        body: 'FK dropdowns, NOT NULL enforcement, and type-aware widgets so editing a row feels like editing a form, not a JSON blob.',
+        issue: 50,
+        status: 'exploring',
+      },
+      {
+        title: 'Inline add-row in the grid',
+        body: 'New rows added at the bottom of the grid alongside (or instead of) the AddRowModal — fewer modal hops for bulk inserts.',
+        issue: 49,
+        status: 'exploring',
+      },
+      {
+        title: 'Image columns as thumbnails',
+        body: 'Render bytea / base64 image columns as inline previews with click-to-zoom, so picture-heavy tables are actually browsable.',
+        issue: 52,
+        status: 'exploring',
+      },
+      {
+        title: 'AI assistant — for real this time',
+        body: 'Today AIAssistantDialog is a setTimeout stub. Wire it to a real provider with proper streaming, prompt scoping, and a user-supplied API key.',
+        issue: 10,
+        status: 'exploring',
+      },
+      {
+        title: 'Universal macOS build',
+        body: 'Ship universal-apple-darwin so the same DMG runs on Intel and Apple Silicon Macs.',
+        issue: 7,
+        status: 'exploring',
+      },
     ],
   },
 ];
