@@ -27,18 +27,28 @@ export function revealAppWindow(): void {
   if (!isTauri()) return;
 
   let done = false;
+  let inFlight = false;
   const reveal = () => {
-    if (done) return;
-    done = true;
-    void show().catch((err) => {
-      console.error("Failed to reveal app window:", err);
-    });
+    if (done || inFlight) return;
+    inFlight = true;
+    void show()
+      .then(() => {
+        done = true;
+      })
+      .catch((err) => {
+        console.error("Failed to reveal app window:", err);
+      })
+      .finally(() => {
+        inFlight = false;
+      });
   };
 
   // Wait two animation frames so the first paint has actually flushed
   // before we unhide the OS window — avoids a flash of empty chrome.
   requestAnimationFrame(() => requestAnimationFrame(reveal));
 
-  // Failsafe: never let a render error keep the window hidden.
+  // Failsafe: never let a render error keep the window hidden. If the RAF
+  // attempt failed (e.g. transient IPC error), this also retries because
+  // `done` only flips true after a successful `show()`.
   setTimeout(reveal, FAILSAFE_MS);
 }
