@@ -716,10 +716,19 @@ const FOOTPRINT = [
     display: flex; flex-direction: column; align-items: center;
     text-align: center;
   }
-  .hero-pill { margin-bottom: 28px; }
+  .hero-pill {
+    margin-bottom: 28px;
+    max-width: calc(100% - 8px);
+  }
   .hero-pill-link {
     text-decoration: none;
     transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+  }
+  /* On narrow viewports keep the pill on a single, readable line. */
+  @media (max-width: 560px) {
+    .hero-pill { height: auto; padding: 4px 12px; }
+    .hero-pill-sep,
+    .hero-pill-detail { display: none; }
   }
   .hero-pill-link:hover {
     border-color: color-mix(in oklch, var(--accent) 55%, var(--line-2));
@@ -1821,6 +1830,11 @@ const FOOTPRINT = [
   .jp-item.is-active .jp-name { color: var(--ink-0); }
   .jp-tag { font-size: 10px; color: var(--ink-4); letter-spacing: 0.04em; }
   .jp-item.is-active .jp-tag { color: var(--accent); }
+  @media (max-width: 500px) {
+    /* Stack name and FK tag on narrow screens — they collide otherwise. */
+    .jp-item { flex-direction: column; align-items: flex-start; gap: 2px; }
+    .jp-name, .jp-tag { word-break: break-all; }
+  }
 
   /* compare pane */
   .cmp-grid {
