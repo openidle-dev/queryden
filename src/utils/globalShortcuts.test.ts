@@ -75,4 +75,31 @@ describe("matchGlobalShortcut", () => {
       })
     ).toBeNull();
   });
+
+  // Regression test for issue #13:
+  // Ctrl+D used to toggle the Database Explorer (wired locally in
+  // AppLayout.tsx), but it shadowed Monaco's "add selection to next
+  // occurrence" multi-cursor binding inside the SQL editor. The explorer
+  // toggle now lives on Ctrl+\ (handled in AppLayout). This test pins down
+  // the contract that no global shortcut handler reclaims Ctrl+D — if a
+  // future change wires it back into the global table, this test should
+  // flip red so the regression is caught before merge.
+  it("does NOT map Ctrl+D to any global action (regression: #13)", () => {
+    expect(
+      matchGlobalShortcut({
+        ctrlKey: true,
+        shiftKey: false,
+        altKey: false,
+        key: "d",
+      })
+    ).toBeNull();
+    expect(
+      matchGlobalShortcut({
+        ctrlKey: true,
+        shiftKey: false,
+        altKey: false,
+        key: "D",
+      })
+    ).toBeNull();
+  });
 });
