@@ -21,7 +21,10 @@ The standard PG connection fields apply:
 
 ## Cockroach + Supabase
 
-Both speak the Postgres wire protocol and use the same driver. The Supabase connection helper UI generates the right host/port/SSL fields from a Supabase project URL — that's the only delta.
+Neither is a separate backend in QueryDen — both speak the PostgreSQL wire protocol and connect through the same driver as Postgres.
+
+- **CockroachDB** — supported through the PostgreSQL wire protocol. Pick the PostgreSQL engine when adding the connection; CockroachDB-specific behaviours (e.g. its dialect quirks) are handled by the server, not by a separate client driver.
+- **Supabase** — PostgreSQL plus a connection-string helper UI for Supabase's hosted format. The helper generates the right host/port/SSL fields from a Supabase project URL; the driver underneath is the PostgreSQL one.
 
 ## Coming soon
 
