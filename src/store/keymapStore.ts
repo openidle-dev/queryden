@@ -34,7 +34,7 @@ const defaultKeymaps: KeymapPreset[] = [
       "format": "Ctrl+Shift+L",
       "newConsole": "",
       "openConsole": "F4",
-      "databaseExplorer": "Ctrl+Alt+S",
+      "databaseExplorer": "Ctrl+\\",
       "settings": "Ctrl+Alt+S",
       "find": "Ctrl+F",
       "findInFiles": "Ctrl+Shift+F",

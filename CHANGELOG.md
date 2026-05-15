@@ -4,6 +4,9 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 
 ## [Unreleased]
 
+### Fixed
+- **[#13](https://github.com/openidle-dev/queryden/issues/13) — Database Explorer toggle moved from `Ctrl+D` to `Ctrl+\`.** `Ctrl+D` shadowed Monaco's built-in "add selection to next occurrence" (multi-cursor) when focus was inside the SQL editor — costly muscle memory for anyone used to VS Code / JetBrains. The new binding matches the VS Code / DataGrip sidebar-toggle convention and doesn't collide with any Monaco default. The `databaseExplorer` entry in the default keymap preset (which previously advertised `Ctrl+Alt+S`, itself a collision with Settings) is now in sync.
+
 ## [1.0.13] - 2026-05-14
 
 Three SQL editor bugs fixed plus two big size cuts. Schema-qualified autocomplete (`SELECT * FROM app.`) and alias-column completion (`u.` after a multi-dot line) no longer collapse to empty ([#28](https://github.com/openidle-dev/queryden/issues/28)). `INT2[]` / `INT4[]` / `INT8[]` result columns no longer crash the deserializer ([#27](https://github.com/openidle-dev/queryden/issues/27)). `Ctrl+Shift+L` now actually formats the active SQL editor ([#9](https://github.com/openidle-dev/queryden/issues/9)). Monaco's unused languages and workers are stripped from the build — `dist/assets/*.js` drops from 14.99 MB raw / 3.59 MB gzip to **5.29 MB / 1.39 MB** (-65% / -61%). The Rust release profile is tightened (`lto = "fat"`, `codegen-units = 1`) and `reqwest` swapped to `rustls-tls`, shrinking the Windows binary from 16.21 MB to **13.03 MB** (-19.6%).
