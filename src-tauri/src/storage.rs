@@ -16,8 +16,9 @@ use argon2::{
     Argon2,
 };
 use keyring::Entry;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
@@ -36,6 +37,48 @@ const FALLBACK_MACHINE_ID: &str = "default-machine-id";
 // until the WebView hung with "Not Responding". Cache the first successful
 // result so the cost is paid once per process.
 static MACHINE_ID_CACHE: OnceLock<String> = OnceLock::new();
+
+// Process-wide cache for the *derived* 32-byte encryption key.
+//
+// `get_encryption_key()` runs Argon2id on every call. With OWASP defaults
+// (m=19 MiB, t=2, p=1) one derivation is ~100–250 ms on Windows. Startup fires
+// 8 parallel `load_*` IPC calls — and `load_connections` adds one more per
+// encrypted field per connection — so we historically paid 2–4 s of CPU work
+// before any decrypt even began. Every one of those derivations produces the
+// same 32 bytes for the same `(use_machine_id, vault_password)` tuple, so the
+// fix is to memoize.
+//
+// `DERIVED_KEY_NO_VAULT_MACHINE` covers the only path the frontend hits at
+// startup (no vault password, machine-locked). `DERIVED_KEY_NO_VAULT_LEGACY`
+// covers the legacy non-machine-locked decrypt path. Vault-password keys are
+// kept in a separate map keyed by a hash of the password bytes so a user with
+// multiple vault profiles in one session doesn't have to repay Argon2 each
+// time they switch.
+type VaultKeyCache = Mutex<HashMap<(bool, [u8; 32]), [u8; 32]>>;
+
+static DERIVED_KEY_NO_VAULT_MACHINE: OnceLock<[u8; 32]> = OnceLock::new();
+static DERIVED_KEY_NO_VAULT_LEGACY: OnceLock<[u8; 32]> = OnceLock::new();
+static DERIVED_KEY_VAULT_CACHE: OnceLock<VaultKeyCache> = OnceLock::new();
+
+/// Clear the vault-password key cache. Call when the user changes their vault
+/// password so the old derived key can't be replayed against new ciphertext.
+/// The non-vault cache stays intact — its inputs (machine ID, master key,
+/// salt) didn't change.
+#[allow(dead_code)] // Reserved for the future change-vault-password command.
+pub fn invalidate_vault_key_cache() {
+    if let Some(cache) = DERIVED_KEY_VAULT_CACHE.get() {
+        if let Ok(mut map) = cache.lock() {
+            map.clear();
+        }
+    }
+}
+
+fn vault_password_fingerprint(pwd: &str) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"queryden-vault-pwd-fp-v1");
+    hasher.update(pwd.as_bytes());
+    hasher.finalize().into()
+}
 
 // Returns the platform machine ID, or `FALLBACK_MACHINE_ID` if detection fails.
 // Use `try_get_machine_id()` for new encryption — it errors instead of weakening
@@ -159,6 +202,57 @@ fn get_master_app_key(app_dir: &Path) -> Result<String, String> {
 }
 
 fn get_encryption_key(vault_password: Option<&str>, use_machine_id: bool, app_dir: &Path) -> Result<[u8; 32], String> {
+    // Fast path: serve from the derived-key cache. See the static declarations
+    // at the top of the file for why this matters (~2 s startup win).
+    match vault_password {
+        None if use_machine_id => {
+            if let Some(cached) = DERIVED_KEY_NO_VAULT_MACHINE.get() {
+                return Ok(*cached);
+            }
+        }
+        None => {
+            if let Some(cached) = DERIVED_KEY_NO_VAULT_LEGACY.get() {
+                return Ok(*cached);
+            }
+        }
+        Some(pwd) => {
+            let cache = DERIVED_KEY_VAULT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+            let cache_key = (use_machine_id, vault_password_fingerprint(pwd));
+            if let Ok(map) = cache.lock() {
+                if let Some(cached) = map.get(&cache_key) {
+                    return Ok(*cached);
+                }
+            }
+        }
+    }
+
+    let key = derive_encryption_key_uncached(vault_password, use_machine_id, app_dir)?;
+
+    // Populate the cache for future callers.
+    match vault_password {
+        None if use_machine_id => {
+            let _ = DERIVED_KEY_NO_VAULT_MACHINE.set(key);
+        }
+        None => {
+            let _ = DERIVED_KEY_NO_VAULT_LEGACY.set(key);
+        }
+        Some(pwd) => {
+            let cache = DERIVED_KEY_VAULT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+            let cache_key = (use_machine_id, vault_password_fingerprint(pwd));
+            if let Ok(mut map) = cache.lock() {
+                map.insert(cache_key, key);
+            }
+        }
+    }
+
+    Ok(key)
+}
+
+fn derive_encryption_key_uncached(
+    vault_password: Option<&str>,
+    use_machine_id: bool,
+    app_dir: &Path,
+) -> Result<[u8; 32], String> {
     let mut key = [0u8; 32];
 
     let machine_id = if use_machine_id {

@@ -87,28 +87,6 @@ pub fn run() {
         ])
         .setup(|app| {
             info!("QueryDen application setup complete");
-            // Backend failsafe: the window is created with `visible: false` so
-            // the frontend can reveal it after first paint (see
-            // `src/lib/revealAppWindow.ts`). If the JS bundle fails to load
-            // entirely — parse error, missing asset, etc. — the frontend
-            // failsafe never schedules and the window would stay hidden
-            // forever. Force-reveal after a generous timeout so the user can
-            // at least see the broken state and quit the app.
-            if let Some(window) = app.get_webview_window("main") {
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_secs(8)).await;
-                    match window.is_visible() {
-                        Ok(true) => {}
-                        _ => {
-                            tracing::warn!(
-                                "Frontend never revealed main window within 8s; forcing show()"
-                            );
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
-                    }
-                });
-            }
             // Register the CLI manager as app state so commands can access it
             let cli = cli::CliManager::new(app.handle());
             app.manage(cli);
