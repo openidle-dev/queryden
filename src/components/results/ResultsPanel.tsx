@@ -64,6 +64,7 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
   const [isProductionMode, setIsProductionMode] = useState(false);
   const [showColumnDropdown, setShowColumnDropdown] = useState(false);
   const [columnDropdownSearch, setColumnDropdownSearch] = useState("");
+  const [columnDropdownIndex, setColumnDropdownIndex] = useState(0);
   const [showExportDropdown, setShowExportDropdown] = useState(false);
   const [sortCol, setSortCol] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc" | null>(null);
@@ -88,20 +89,34 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
   const exportDropdownRef = useRef<HTMLDivElement>(null);
   const confirmDialog = useConfirmDialog();
 
-  // Close dropdowns on outside click
+  // Close dropdowns on outside click or Escape
   useEffect(() => {
     if (!showColumnDropdown && !showExportDropdown) return;
-    const handler = (e: MouseEvent) => {
+    const mouseHandler = (e: MouseEvent) => {
       if (showColumnDropdown && columnDropdownRef.current && !columnDropdownRef.current.contains(e.target as Node)) {
         setShowColumnDropdown(false);
         setColumnDropdownSearch("");
+        setColumnDropdownIndex(0);
       }
       if (showExportDropdown && exportDropdownRef.current && !exportDropdownRef.current.contains(e.target as Node)) {
         setShowExportDropdown(false);
       }
     };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    // The column dropdown's own input also handles Escape so the input
+    // doesn't have to refocus, but the Export dropdown has no focusable
+    // child — this is the only way to close it via keyboard.
+    const keyHandler = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (showExportDropdown) {
+        setShowExportDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", mouseHandler);
+    document.addEventListener("keydown", keyHandler);
+    return () => {
+      document.removeEventListener("mousedown", mouseHandler);
+      document.removeEventListener("keydown", keyHandler);
+    };
   }, [showColumnDropdown, showExportDropdown]);
 
   // Debounce column filters
@@ -404,7 +419,7 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
           </button>
           <div className="relative" ref={columnDropdownRef}>
             <button 
-              onClick={() => { setShowColumnDropdown(!showColumnDropdown); setColumnDropdownSearch(""); }}
+              onClick={() => { setShowColumnDropdown(!showColumnDropdown); setColumnDropdownSearch(""); setColumnDropdownIndex(0); }}
               className="flex items-center gap-1 px-2 py-1 rounded border border-[var(--border)] bg-[var(--background)] text-[10px] hover:border-indigo-400 transition-colors"
               title="Jump to column"
             >
@@ -412,55 +427,86 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
               <span className="max-w-[100px] truncate">Jump to column</span>
               <ChevronDown className="w-3 h-3 opacity-50" />
             </button>
-            {showColumnDropdown && (
+            {showColumnDropdown && (() => {
+              const filteredColumns = columns.filter(c =>
+                c.toLowerCase().includes(columnDropdownSearch.toLowerCase())
+              );
+              const clampedIndex = Math.min(columnDropdownIndex, Math.max(filteredColumns.length - 1, 0));
+              const jumpTo = (name: string) => {
+                const idx = columns.indexOf(name);
+                if (idx < 0) return;
+                setGridSelection({
+                  columns: CompactSelection.empty(),
+                  rows: CompactSelection.empty(),
+                  current: { cell: [idx, 0], range: { x: idx, y: 0, width: 1, height: 1 }, rangeStack: [] }
+                });
+                setTimeout(() => { gridRef.current?.scrollToColumn(idx); gridRef.current?.focus(); }, 10);
+                setShowColumnDropdown(false);
+                setColumnDropdownSearch("");
+                setColumnDropdownIndex(0);
+              };
+              return (
               <div className="absolute right-0 top-full mt-1 w-56 bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-2xl z-50 overflow-hidden">
                 <div className="flex items-center gap-1 px-2 py-1.5 border-b border-[var(--border)]">
                   <Search className="w-3 h-3 opacity-40 shrink-0" />
-                  <input 
-                    type="text" 
-                    placeholder="Filter columns..." 
+                  <input
+                    type="text"
+                    placeholder="Filter columns..."
                     value={columnDropdownSearch}
-                    onChange={(e) => setColumnDropdownSearch(e.target.value)}
+                    onChange={(e) => { setColumnDropdownSearch(e.target.value); setColumnDropdownIndex(0); }}
                     onKeyDown={(e) => {
-                      if (e.key === "Escape") { setShowColumnDropdown(false); setColumnDropdownSearch(""); }
+                      if (e.key === "Escape") {
+                        setShowColumnDropdown(false);
+                        setColumnDropdownSearch("");
+                        setColumnDropdownIndex(0);
+                      } else if (e.key === "ArrowDown") {
+                        e.preventDefault();
+                        setColumnDropdownIndex(i => Math.min(i + 1, filteredColumns.length - 1));
+                      } else if (e.key === "ArrowUp") {
+                        e.preventDefault();
+                        setColumnDropdownIndex(i => Math.max(i - 1, 0));
+                      } else if (e.key === "Enter" && filteredColumns[clampedIndex]) {
+                        e.preventDefault();
+                        jumpTo(filteredColumns[clampedIndex]);
+                      }
                     }}
                     className="flex-1 bg-transparent border-none outline-none text-xs"
                     autoFocus
                   />
                   {columnDropdownSearch && (
-                    <button onClick={() => setColumnDropdownSearch("")} className="opacity-50 hover:opacity-100">
+                    <button onClick={() => { setColumnDropdownSearch(""); setColumnDropdownIndex(0); }} className="opacity-50 hover:opacity-100">
                       <X className="w-3 h-3" />
                     </button>
                   )}
                 </div>
                 <div className="max-h-60 overflow-y-auto">
-                  {columns
-                    .filter(c => c.toLowerCase().includes(columnDropdownSearch.toLowerCase()))
-                    .map((c) => (
-                      <button
-                        key={c}
-                        onClick={() => {
-                          const idx = columns.indexOf(c);
-                          setGridSelection({
-                            columns: CompactSelection.empty(),
-                            rows: CompactSelection.empty(),
-                            current: { cell: [idx, 0], range: { x: idx, y: 0, width: 1, height: 1 }, rangeStack: [] }
-                          });
-                          setTimeout(() => { gridRef.current?.scrollToColumn(idx); gridRef.current?.focus(); }, 10);
-                          setShowColumnDropdown(false);
-                          setColumnDropdownSearch("");
-                        }}
-                        className="w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--color-accent)]/10 transition-colors truncate"
-                      >
-                        {c}
-                      </button>
-                    ))}
-                  {columns.filter(c => c.toLowerCase().includes(columnDropdownSearch.toLowerCase())).length === 0 && (
+                  {filteredColumns.map((c, i) => (
+                    <button
+                      key={c}
+                      ref={el => {
+                        if (i === clampedIndex && el) {
+                          el.scrollIntoView({ block: "nearest" });
+                        }
+                      }}
+                      onMouseEnter={() => setColumnDropdownIndex(i)}
+                      onClick={() => jumpTo(c)}
+                      className={clsx(
+                        "w-full px-3 py-1.5 text-left text-xs transition-colors truncate",
+                        i === clampedIndex
+                          ? "bg-[var(--color-accent)]/15 text-[var(--text-primary)]"
+                          : "hover:bg-[var(--color-accent)]/10"
+                      )}
+                    >
+                      {c}
+                    </button>
+                  ))}
+                  {filteredColumns.length === 0 && (
                     <div className="px-3 py-2 text-xs opacity-40 text-center">No matching columns</div>
                   )}
                 </div>
               </div>
-            )}
+              );
+            })()}
           </div>
           {onRefresh && <button onClick={onRefresh} className="p-1 px-2 rounded border hover:text-[var(--color-accent)] flex items-center gap-1.5"><RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} /><span className="text-[8px] font-bold">REFRESH</span></button>}
           <div className="flex items-center gap-1 ml-1 border-l border-[var(--border)] pl-1">
@@ -502,14 +548,19 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
             >
               <Trash2 className="w-3.5 h-3.5" />
             </button>
-             <button 
+             <button
               className={clsx(
-                "p-1.5 rounded border transition-colors",
+                "relative p-1.5 rounded border transition-colors",
                 results.some(r => r._isNew || r._isModified)
                   ? "border-emerald-500 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 shadow-[0_0_8px_rgba(16,185,129,0.3)]"
                   : "border-blue-500/50 text-blue-400 hover:bg-blue-500/10"
               )}
-              title="Save All Pending Changes (Ctrl+S)"
+              title={(() => {
+                const n = results.filter(r => r._isNew || r._isModified).length;
+                return n > 0
+                  ? `Save ${n} pending change${n === 1 ? "" : "s"} (Ctrl+S)`
+                  : "Save All Pending Changes (Ctrl+S)";
+              })()}
               onClick={async () => {
                  if (onSave) {
                     await onSave(results);
@@ -519,6 +570,15 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
               }}
             >
               <CheckCircle className={clsx("w-3.5 h-3.5", results.some(r => r._isNew || r._isModified) && "animate-pulse")} />
+              {(() => {
+                const n = results.filter(r => r._isNew || r._isModified).length;
+                if (n === 0) return null;
+                return (
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-emerald-500 text-[9px] font-bold text-[#0b0f17] flex items-center justify-center leading-none">
+                    {n > 99 ? "99+" : n}
+                  </span>
+                );
+              })()}
             </button>
             {results.some(r => r._isNew || r._isModified) && (
               <button 
