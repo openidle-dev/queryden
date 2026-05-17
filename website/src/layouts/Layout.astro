@@ -42,6 +42,12 @@ const canonicalUrl = `${SITE.homepage}${canonicalPath === '/' ? '' : canonicalPa
     rel="stylesheet"
   />
   <slot name="head" />
+  <script
+    is:inline
+    defer
+    src="https://analytics.openidle.com/script.js"
+    data-website-id="3cba47ee-7c97-40fa-b27e-362f95ded04e"
+  ></script>
 </head>
 <body>
   <header class="nav-outer">
@@ -155,7 +161,7 @@ const canonicalUrl = `${SITE.homepage}${canonicalPath === '/' ? '' : canonicalPa
       <div class="row">
         <div>
           <a class="brand" href="/"><img src="/logo.png" alt="" /> <span>{SITE.name}</span></a>
-          <p class="blurb">The database manager that isn't an Electron app. Native binaries, MIT licensed, zero telemetry.</p>
+          <p class="blurb">The database manager that isn't an Electron app. Native binaries, MIT licensed, the app sends zero telemetry.</p>
         </div>
         <div>
           <h5>Product</h5>
@@ -195,7 +201,7 @@ const canonicalUrl = `${SITE.homepage}${canonicalPath === '/' ? '' : canonicalPa
       </div>
       <div class="legal">
         <span>© 2025–2026 QueryDen contributors · MIT licensed</span>
-        <span>{version} · {RELEASE.tag} published {RELEASE.publishedAt} · zero telemetry</span>
+        <span>{version} · {RELEASE.tag} published {RELEASE.publishedAt} · app sends zero telemetry</span>
       </div>
     </div>
   </footer>
