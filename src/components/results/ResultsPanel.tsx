@@ -428,12 +428,16 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
               <ChevronDown className="w-3 h-3 opacity-50" />
             </button>
             {showColumnDropdown && (() => {
-              const filteredColumns = columns.filter(c =>
+              // Must use the same active column list the grid renders with —
+              // in multi-result mode `displayColumns` and `columns` diverge,
+              // and indexing into the wrong array jumps to the wrong column.
+              const activeColumns = displayColumns || columns;
+              const filteredColumns = activeColumns.filter(c =>
                 c.toLowerCase().includes(columnDropdownSearch.toLowerCase())
               );
               const clampedIndex = Math.min(columnDropdownIndex, Math.max(filteredColumns.length - 1, 0));
               const jumpTo = (name: string) => {
-                const idx = columns.indexOf(name);
+                const idx = activeColumns.indexOf(name);
                 if (idx < 0) return;
                 setGridSelection({
                   columns: CompactSelection.empty(),
@@ -585,7 +589,7 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
                 type="button"
                 onClick={async (e) => { 
                   e.stopPropagation();
-                  const confirmed = await confirmDialog.confirm({ title: "Discard Changes", message: "Discard all local changes and reload from database?", type: "warning" });
+                  const confirmed = await confirmDialog.confirm({ title: "Discard Changes", message: "Discard all unsaved local changes? This cannot be undone.", type: "warning" });
                   if (confirmed && onDiscard) await onDiscard();
                 }}
                 className="p-1.5 rounded border border-rose-500/50 text-rose-400 hover:bg-rose-500/10 transition-colors"
