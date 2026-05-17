@@ -41,7 +41,18 @@ export function DatabaseExplorer() {
   const [searchTerm, setSearchTerm] = useState("");
   const [schemaTree, setSchemaTree] = useState<TreeNode[]>([]);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; connectionId: string } | null>(null);
-  const [isConnecting, setIsConnecting] = useState(false);
+  const [connectingConnectionIds, setConnectingConnectionIds] = useState<Set<string>>(new Set());
+  const isConnecting = connectingConnectionIds.size > 0;
+  const beginConnect = (id: string) => setConnectingConnectionIds(prev => {
+    const next = new Set(prev);
+    next.add(id);
+    return next;
+  });
+  const endConnect = (id: string) => setConnectingConnectionIds(prev => {
+    const next = new Set(prev);
+    next.delete(id);
+    return next;
+  });
   const [loadingDatabases, setLoadingDatabases] = useState<Set<string>>(new Set());
   const [schemaContextMenu, setSchemaContextMenu] = useState<{ x: number; y: number; node: TreeNode } | null>(null);
   const [activeSubmenu, setActiveSubmenu] = useState<string | null>(null);
@@ -522,7 +533,7 @@ export function DatabaseExplorer() {
   const handleConnect = async (conn: DatabaseConnection) => {
     // If we have a vaultCredentialId already, just connect
     if (conn.vaultCredentialId) {
-      setIsConnecting(true);
+      beginConnect(conn.id);
       try {
         await connectToDatabase(conn.id);
         // Automatically open a query window and focus it
@@ -539,7 +550,7 @@ export function DatabaseExplorer() {
           type: "danger"
         });
       } finally {
-        setIsConnecting(false);
+        endConnect(conn.id);
       }
       return;
     }
@@ -565,21 +576,21 @@ export function DatabaseExplorer() {
         updateConnection(conn.id, { vaultCredentialId: selectedProfileId || undefined, isVault: true });
         
         // Connect with the selected vault credential directly (not relying on state update)
-        setIsConnecting(true);
+        beginConnect(conn.id);
         try {
           await connectToDatabase(conn.id, undefined, selectedVaultCred);
         } catch (error: any) {
           console.error("Connection failed:", error);
           confirmDialog.dialog({ title: "Connection Failed", message: String(error), confirmLabel: "OK", type: "danger" });
         } finally {
-          setIsConnecting(false);
+          endConnect(conn.id);
         }
       }
       return;
     }
 
     // Default connection (no vault profile available or chosen)
-    setIsConnecting(true);
+    beginConnect(conn.id);
     try {
       await connectToDatabase(conn.id);
     } catch (error: any) {
@@ -591,7 +602,7 @@ export function DatabaseExplorer() {
         type: "danger"
       });
     } finally {
-      setIsConnecting(false);
+      endConnect(conn.id);
     }
   };
 
@@ -1099,6 +1110,7 @@ export function DatabaseExplorer() {
       const isLeaf = isLeafSchemaItem(node.icon);
       const isFolder = isFolderNode(node.icon);
       const isDbLoading = node.icon === "database" && loadingDatabases.has(node.id);
+      const isServerConnecting = node.icon === "server" && !!node.contextMenuId && connectingConnectionIds.has(node.contextMenuId);
       const isSchemaLoading = node.icon === "database" && selectedDatabase === node.name && isLoadingSchema;
       const isSchemasLoading = node.id.startsWith("schemas-root-") && isLoadingSchema;
       const tableDetailId = node.id.replace(/^(cols|idxs|trigs|fks|cons|deps|refs|parts|ruls|polic)-/, "");
@@ -1176,7 +1188,7 @@ export function DatabaseExplorer() {
             ) : (
               <span className="w-3" />
             )}
-            {isDbLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--text-secondary)]" /> : getIcon(node.icon, isExpanded, node.providerType)}
+            {isDbLoading || isServerConnecting ? <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--color-accent)]" /> : getIcon(node.icon, isExpanded, node.providerType)}
             <span className={`truncate ${node.icon === 'server' ? 'text-[var(--text-primary)] font-bold' : node.icon === 'database' ? 'text-[var(--text-secondary)] font-semibold' : 'text-[var(--text-primary)] opacity-90'}`}>
               {node.name}
               {node.icon === 'server' && activeConnection?.id === node.contextMenuId && <span className="ml-2 inline-block w-1.5 h-1.5 bg-[var(--color-success)] rounded-full" title="Connected" />}
@@ -1354,13 +1366,6 @@ export function DatabaseExplorer() {
     }
   };
 
-  const hasSchemaData = schemaItems && (
-    schemaItems.tables.length > 0 || 
-    schemaItems.views.length > 0 || 
-    schemaItems.functions.length > 0 ||
-    schemaItems.indexes.length > 0
-  );
-  
   const isLoading = isLoadingSchema || loadingDatabases.size > 0 || loadingTableDetails.size > 0 || isConnecting;
 
   return (
@@ -1536,11 +1541,27 @@ Note: "version" must be a number (e.g. 2), not a string like "0.1.0".`
           </div>
           <div className="px-2 py-1.5 bg-[var(--surface)] border-t border-[var(--border)] text-[10px] flex items-center gap-2">
             <Loader2 className="w-3 h-3 animate-spin text-[var(--color-accent)]" />
-            {loadingDatabases.size > 0 && <span>Connecting{loadingDatabases.size > 1 ? ` (${loadingDatabases.size})` : ""}...</span>}
-            {isLoadingSchema && <span>Loading {schemaProgress.phase}: {schemaProgress.current}/5...</span>}
-            {loadingTableDetails.size > 0 && <span>Table details ({loadingTableDetails.size})...</span>}
-            {!selectedDatabase && <span>Select a database...</span>}
-            {selectedDatabase && !hasSchemaData && isLoadingSchema && <span>Fetching schema from {selectedDatabase}...</span>}
+            <span>{(() => {
+              if (connectingConnectionIds.size > 0) {
+                const names = Array.from(connectingConnectionIds)
+                  .map(id => connections.find(c => c.id === id)?.name)
+                  .filter(Boolean) as string[];
+                if (names.length === 1) return `Connecting to ${names[0]}...`;
+                if (names.length > 1) return `Connecting to ${names.length} connections...`;
+                return "Connecting...";
+              }
+              if (loadingDatabases.size > 0) {
+                return `Loading database${loadingDatabases.size > 1 ? `s (${loadingDatabases.size})` : ""}...`;
+              }
+              if (isLoadingSchema) {
+                const target = selectedDatabase ? ` from ${selectedDatabase}` : "";
+                return `Loading schema${target} (${schemaProgress.phase} ${schemaProgress.current}/${schemaProgress.total})...`;
+              }
+              if (loadingTableDetails.size > 0) {
+                return `Loading table details (${loadingTableDetails.size})...`;
+              }
+              return "Working...";
+            })()}</span>
           </div>
         </div>
       )}

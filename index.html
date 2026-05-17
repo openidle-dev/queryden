@@ -2,15 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/tauri.svg" />
+    <link rel="icon" type="image/png" href="/img/icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>QueryDen</title>
     <style>
-      /* Splash painted by WebView2 *before* the JS bundle parses. Without it
-         the user sees a blank window for the duration of bundle parse +
-         React mount + initial IPC roundtrips. React replaces #root contents
-         on mount, removing the splash automatically. Theme tokens are
-         hardcoded here because globals.css hasn't loaded yet. */
+      /* Dark-only by design — the app boots into dark by default and the
+         native window backgroundColor (see tauri.conf.json) is already #0b0f17.
+         No prefers-color-scheme rule on purpose: that previously caused a
+         light/dark mismatch flash when the OS reported light but React mounted
+         in dark. */
       html,
       body {
         margin: 0;
@@ -32,64 +32,84 @@
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 18px;
-        background: #0b0f17;
+        gap: 22px;
+        background: radial-gradient(
+            ellipse 60% 40% at 50% 50%,
+            rgba(6, 182, 212, 0.08) 0%,
+            transparent 70%
+          ),
+          #0b0f17;
+        z-index: 9999;
+        transition: opacity 320ms ease-out;
+        pointer-events: none;
+        opacity: 1;
+        animation: qd-splash-in 220ms ease-out both;
       }
-      .qd-splash__mark {
-        width: 48px;
-        height: 48px;
-        border-radius: 12px;
-        background: linear-gradient(135deg, #06b6d4 0%, #8b5cf6 100%);
-        position: relative;
-        animation: qd-pulse 1.4s ease-in-out infinite;
+      .qd-splash--fade {
+        opacity: 0;
       }
-      .qd-splash__title {
-        font-size: 15px;
+      .qd-splash__logo {
+        width: 84px;
+        height: 84px;
+        image-rendering: -webkit-optimize-contrast;
+        filter: drop-shadow(0 8px 24px rgba(6, 182, 212, 0.25));
+        animation: qd-float 3s ease-in-out infinite;
+      }
+      .qd-splash__wordmark {
+        display: flex;
+        align-items: baseline;
+        gap: 1px;
+        font-size: 30px;
         font-weight: 600;
-        letter-spacing: 0.01em;
-        color: #cbd5e1;
+        letter-spacing: -0.01em;
+        line-height: 1;
       }
-      .qd-splash__hint {
+      .qd-splash__wordmark-q {
+        color: #e2e8f0;
+      }
+      .qd-splash__wordmark-d {
+        background: linear-gradient(135deg, #06b6d4 0%, #8b5cf6 100%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+        color: transparent;
+      }
+      .qd-splash__tagline {
         font-size: 12px;
-        color: #64748b;
-        letter-spacing: 0.02em;
+        font-weight: 400;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #475569;
       }
-      @keyframes qd-pulse {
-        0%, 100% {
-          transform: scale(1);
-          opacity: 0.9;
+      @keyframes qd-splash-in {
+        from {
+          opacity: 0;
         }
-        50% {
-          transform: scale(1.06);
+        to {
           opacity: 1;
         }
       }
-      @media (prefers-color-scheme: light) {
-        html,
-        body,
-        .qd-splash {
-          background: #f8fafc;
-          color: #0f172a;
+      @keyframes qd-float {
+        0%, 100% {
+          transform: translateY(0);
         }
-        .qd-splash__title {
-          color: #1e293b;
-        }
-        .qd-splash__hint {
-          color: #64748b;
+        50% {
+          transform: translateY(-4px);
         }
       }
     </style>
   </head>
 
   <body>
-    <div id="root">
-      <div class="qd-splash" aria-hidden="true">
-        <div class="qd-splash__mark"></div>
-        <div class="qd-splash__title">QueryDen</div>
-        <div class="qd-splash__hint">Loading…</div>
-      </div>
-    </div>
+    <div id="root"></div>
     <div id="portal"></div>
+    <div id="qd-splash" class="qd-splash" aria-hidden="true">
+      <img class="qd-splash__logo" src="/img/icon.png" alt="" />
+      <div class="qd-splash__wordmark">
+        <span class="qd-splash__wordmark-q">Query</span><span class="qd-splash__wordmark-d">Den</span>
+      </div>
+      <div class="qd-splash__tagline">A modern database manager</div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
