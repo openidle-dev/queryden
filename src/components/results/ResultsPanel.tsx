@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect, memo, useRef } from "react";
 import { 
   AlertCircle, Table2, Hash, Type, Calendar, Binary, Code as CodeIcon, 
   Filter, Shield, Download, FileJson, XCircle, Search, Copy, 
-  Trash2, Maximize2, Plus, RefreshCw, Zap, CheckCircle, Clock, ChevronRight,
+  Trash2, Maximize2, Plus, RefreshCw, Zap, CheckCircle, Clock, ChevronRight, ChevronDown, X,
   FileCode, Globe, Database, History as HistoryIcon
 } from "lucide-react";
 import { useQueryHistory } from "../../store/queryHistoryStore";
@@ -62,7 +62,10 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
   const [showColumnFilters, setShowColumnFilters] = useState(false);
   const [showAddRowModal, setShowAddRowModal] = useState(false);
   const [isProductionMode, setIsProductionMode] = useState(false);
-  const [columnSearch, setColumnSearch] = useState("");
+  const [showColumnDropdown, setShowColumnDropdown] = useState(false);
+  const [columnDropdownSearch, setColumnDropdownSearch] = useState("");
+  const [columnDropdownIndex, setColumnDropdownIndex] = useState(0);
+  const [showExportDropdown, setShowExportDropdown] = useState(false);
   const [sortCol, setSortCol] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc" | null>(null);
   const [columnOrder, setColumnOrder] = useState<string[]>([]);
@@ -78,12 +81,43 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
   const [isEditingRow, setIsEditingRow] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
-  const [selectedJumpCol, setSelectedJumpCol] = useState("");
   const [toastMessage, setToastMessage] = useState("Copied to clipboard");
   const [selectedMultiResultIdx, setSelectedMultiResultIdx] = useState<number>(0);
   
   const gridRef = useRef<GridViewRef>(null);
+  const columnDropdownRef = useRef<HTMLDivElement>(null);
+  const exportDropdownRef = useRef<HTMLDivElement>(null);
   const confirmDialog = useConfirmDialog();
+
+  // Close dropdowns on outside click or Escape
+  useEffect(() => {
+    if (!showColumnDropdown && !showExportDropdown) return;
+    const mouseHandler = (e: MouseEvent) => {
+      if (showColumnDropdown && columnDropdownRef.current && !columnDropdownRef.current.contains(e.target as Node)) {
+        setShowColumnDropdown(false);
+        setColumnDropdownSearch("");
+        setColumnDropdownIndex(0);
+      }
+      if (showExportDropdown && exportDropdownRef.current && !exportDropdownRef.current.contains(e.target as Node)) {
+        setShowExportDropdown(false);
+      }
+    };
+    // The column dropdown's own input also handles Escape so the input
+    // doesn't have to refocus, but the Export dropdown has no focusable
+    // child — this is the only way to close it via keyboard.
+    const keyHandler = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (showExportDropdown) {
+        setShowExportDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", mouseHandler);
+    document.addEventListener("keydown", keyHandler);
+    return () => {
+      document.removeEventListener("mousedown", mouseHandler);
+      document.removeEventListener("keydown", keyHandler);
+    };
+  }, [showColumnDropdown, showExportDropdown]);
 
   // Debounce column filters
   useEffect(() => {
@@ -172,16 +206,6 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
       setColumnOrder([]);
     }
   }, [results]);
-
-  // Find column logic
-  useEffect(() => {
-    if (columnSearch && columns.length > 0) {
-      const idx = columns.findIndex(c => c.toLowerCase().includes(columnSearch.toLowerCase()));
-      if (idx >= 0) {
-        gridRef.current?.scrollToColumn(idx);
-      }
-    }
-  }, [columnSearch, columns]);
 
   const sortedResults = useMemo(() => {
     let finalData = displayResults.length > 0 ? displayResults : results;
@@ -386,91 +410,117 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
       )}
       <div className="flex-1" />
       {activeTab === "result" && results.length > 0 && (
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1">
           <button onClick={() => setIsProductionMode(!isProductionMode)} className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-[10px] font-bold border ${isProductionMode ? "bg-red-500/10 border-red-500/30 text-red-400" : "bg-blue-500/10 border-blue-500/30 text-blue-400"}`}>
             <Shield className="w-3 h-3" /> {isProductionMode ? "MASK ON" : "MASK OFF"}
           </button>
           <button onClick={() => setShowColumnFilters(!showColumnFilters)} className={`flex items-center gap-1 px-1.5 py-0.5 rounded border ${showColumnFilters ? "bg-[var(--color-accent)]/20 text-[var(--color-accent)]" : "text-[var(--text-secondary)] hover:bg-[var(--border)]"}`}>
              <Filter className="w-3.5 h-3.5" /> <span className="text-[8px] font-bold">FILTER</span>
           </button>
-          <div className="flex items-center bg-[var(--background)] border border-[var(--border)] rounded px-1.5 py-1">
-            <Search className="w-3 h-3 text-[var(--text-secondary)] mr-1" />
-            <input 
-              type="text" 
-              placeholder="Jump to col..." 
-              list="column-list"
-              value={columnSearch} 
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  const idx = columns.findIndex(c => c.toLowerCase() === columnSearch.toLowerCase());
-                  if (idx >= 0) {
-                    setGridSelection({
-                      columns: CompactSelection.empty(),
-                      rows: CompactSelection.empty(),
-                      current: { cell: [idx, 0], range: { x: idx, y: 0, width: 1, height: 1 }, rangeStack: [] }
-                    });
-                    setTimeout(() => { gridRef.current?.scrollToColumn(idx); gridRef.current?.focus(); }, 10);
-                  }
-                }
-              }}
-              onChange={(e) => {
-                const val = e.target.value;
-                setColumnSearch(val);
-                // Only jump automatically if it's an exact match from the list
-                if (columns.includes(val)) {
-                  const idx = columns.indexOf(val);
-                  setGridSelection({
-                    columns: CompactSelection.empty(),
-                    rows: CompactSelection.empty(),
-                    current: { cell: [idx, 0], range: { x: idx, y: 0, width: 1, height: 1 }, rangeStack: [] }
-                  });
-                  setTimeout(() => { gridRef.current?.scrollToColumn(idx); gridRef.current?.focus(); }, 10);
-                }
-              }} 
-              className="bg-transparent border-none outline-none text-xs w-32" 
-            />
-            <datalist id="column-list">
-              {columns.map(c => <option key={c} value={c} />)}
-            </datalist>
-          </div>
-          <select 
-            value={selectedJumpCol} 
-            onChange={(e) => { 
-              const val = e.target.value;
-              setSelectedJumpCol(val);
-              const idx = parseInt(val); 
-              if (!isNaN(idx)) {
-                // Update selection for visual feedback
+          <div className="relative" ref={columnDropdownRef}>
+            <button 
+              onClick={() => { setShowColumnDropdown(!showColumnDropdown); setColumnDropdownSearch(""); setColumnDropdownIndex(0); }}
+              className="flex items-center gap-1 px-2 py-1 rounded border border-[var(--border)] bg-[var(--background)] text-[10px] hover:border-indigo-400 transition-colors"
+              title="Jump to column"
+            >
+              <Search className="w-3 h-3 opacity-50" />
+              <span className="max-w-[100px] truncate">Jump to column</span>
+              <ChevronDown className="w-3 h-3 opacity-50" />
+            </button>
+            {showColumnDropdown && (() => {
+              // Must use the same active column list the grid renders with —
+              // in multi-result mode `displayColumns` and `columns` diverge,
+              // and indexing into the wrong array jumps to the wrong column.
+              const activeColumns = displayColumns || columns;
+              const filteredColumns = activeColumns.filter(c =>
+                c.toLowerCase().includes(columnDropdownSearch.toLowerCase())
+              );
+              const clampedIndex = Math.min(columnDropdownIndex, Math.max(filteredColumns.length - 1, 0));
+              const jumpTo = (name: string) => {
+                const idx = activeColumns.indexOf(name);
+                if (idx < 0) return;
                 setGridSelection({
                   columns: CompactSelection.empty(),
                   rows: CompactSelection.empty(),
-                  current: {
-                    cell: [idx, 0],
-                    range: { x: idx, y: 0, width: 1, height: 1 },
-                    rangeStack: []
-                  }
+                  current: { cell: [idx, 0], range: { x: idx, y: 0, width: 1, height: 1 }, rangeStack: [] }
                 });
-                // Scroll to it
-                setTimeout(() => {
-                  gridRef.current?.scrollToColumn(idx);
-                  gridRef.current?.focus();
-                }, 10);
-              }
-            }} 
-            className="bg-[var(--background)] border border-[var(--border)] rounded text-[8px] px-1 py-0.5 outline-none max-w-[80px] shadow-sm cursor-pointer hover:border-indigo-400"
-          >
-            <option value="" disabled>Jump To Column...</option>
-            {columns.map((c, i) => <option key={c} value={i.toString()}>{c}</option>)}
-          </select>
+                setTimeout(() => { gridRef.current?.scrollToColumn(idx); gridRef.current?.focus(); }, 10);
+                setShowColumnDropdown(false);
+                setColumnDropdownSearch("");
+                setColumnDropdownIndex(0);
+              };
+              return (
+              <div className="absolute right-0 top-full mt-1 w-56 bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-2xl z-50 overflow-hidden">
+                <div className="flex items-center gap-1 px-2 py-1.5 border-b border-[var(--border)]">
+                  <Search className="w-3 h-3 opacity-40 shrink-0" />
+                  <input
+                    type="text"
+                    placeholder="Filter columns..."
+                    value={columnDropdownSearch}
+                    onChange={(e) => { setColumnDropdownSearch(e.target.value); setColumnDropdownIndex(0); }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") {
+                        setShowColumnDropdown(false);
+                        setColumnDropdownSearch("");
+                        setColumnDropdownIndex(0);
+                      } else if (e.key === "ArrowDown") {
+                        e.preventDefault();
+                        setColumnDropdownIndex(i => Math.min(i + 1, filteredColumns.length - 1));
+                      } else if (e.key === "ArrowUp") {
+                        e.preventDefault();
+                        setColumnDropdownIndex(i => Math.max(i - 1, 0));
+                      } else if (e.key === "Enter" && filteredColumns[clampedIndex]) {
+                        e.preventDefault();
+                        jumpTo(filteredColumns[clampedIndex]);
+                      }
+                    }}
+                    className="flex-1 bg-transparent border-none outline-none text-xs"
+                    autoFocus
+                  />
+                  {columnDropdownSearch && (
+                    <button onClick={() => { setColumnDropdownSearch(""); setColumnDropdownIndex(0); }} className="opacity-50 hover:opacity-100">
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+                <div className="max-h-60 overflow-y-auto">
+                  {filteredColumns.map((c, i) => (
+                    <button
+                      key={c}
+                      ref={el => {
+                        if (i === clampedIndex && el) {
+                          el.scrollIntoView({ block: "nearest" });
+                        }
+                      }}
+                      onMouseEnter={() => setColumnDropdownIndex(i)}
+                      onClick={() => jumpTo(c)}
+                      className={clsx(
+                        "w-full px-3 py-1.5 text-left text-xs transition-colors truncate",
+                        i === clampedIndex
+                          ? "bg-[var(--color-accent)]/15 text-[var(--text-primary)]"
+                          : "hover:bg-[var(--color-accent)]/10"
+                      )}
+                    >
+                      {c}
+                    </button>
+                  ))}
+                  {filteredColumns.length === 0 && (
+                    <div className="px-3 py-2 text-xs opacity-40 text-center">No matching columns</div>
+                  )}
+                </div>
+              </div>
+              );
+            })()}
+          </div>
           {onRefresh && <button onClick={onRefresh} className="p-1 px-2 rounded border hover:text-[var(--color-accent)] flex items-center gap-1.5"><RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} /><span className="text-[8px] font-bold">REFRESH</span></button>}
-          <div className="flex items-center gap-1.5 ml-1 border-l border-[var(--border)] pl-1.5">
+          <div className="flex items-center gap-1 ml-1 border-l border-[var(--border)] pl-1">
              <button 
               onClick={() => onAddRow && onAddRow({}, true)} 
               disabled={results.some(r => r._isNew || r._isModified)}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-emerald-500/50 text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-30 transition-colors disabled:border-gray-500/30 disabled:text-gray-500" 
+              className="p-1.5 rounded border border-emerald-500/50 text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-30 transition-colors disabled:border-gray-500/30 disabled:text-gray-500" 
               title="Add New Local Blank Row (Save later)"
             >
-              <Plus className="w-3.5 h-3.5" /><span className="text-[8px] font-bold">ADD</span>
+              <Plus className="w-3.5 h-3.5" />
             </button>
             <button 
               disabled={(selectedIndex < 0 && gridSelection.rows.length === 0) || results.some(r => r._isNew || r._isModified)} 
@@ -483,10 +533,10 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
                   }
                 } 
               }} 
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-indigo-500/50 text-indigo-400 hover:bg-indigo-500/10 disabled:opacity-30 transition-colors disabled:border-gray-500/30 disabled:text-gray-500" 
+              className="p-1.5 rounded border border-indigo-500/50 text-indigo-400 hover:bg-indigo-500/10 disabled:opacity-30 transition-colors disabled:border-gray-500/30 disabled:text-gray-500" 
               title="Duplicate Row Locally (Save later)"
             >
-              <Copy className="w-3.5 h-3.5" /><span className="text-[8px] font-bold">DUP</span>
+              <Copy className="w-3.5 h-3.5" />
             </button>
             <button 
               disabled={selectedIndex < 0 && gridSelection.rows.length === 0} 
@@ -497,19 +547,24 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
                   if (confirmed) await onDeleteRow(sortedResults[rowIdx]); 
                 } 
               }} 
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-rose-500/50 text-rose-400 hover:bg-rose-500/10 disabled:opacity-30 transition-colors" 
+              className="p-1.5 rounded border border-rose-500/50 text-rose-400 hover:bg-rose-500/10 disabled:opacity-30 transition-colors" 
               title="Remove Row"
             >
-              <Trash2 className="w-3.5 h-3.5" /><span className="text-[8px] font-bold">REMOVE</span>
+              <Trash2 className="w-3.5 h-3.5" />
             </button>
-             <button 
+             <button
               className={clsx(
-                "flex items-center gap-1 px-1.5 py-0.5 rounded border transition-colors",
+                "relative p-1.5 rounded border transition-colors",
                 results.some(r => r._isNew || r._isModified)
                   ? "border-emerald-500 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 shadow-[0_0_8px_rgba(16,185,129,0.3)]"
                   : "border-blue-500/50 text-blue-400 hover:bg-blue-500/10"
               )}
-              title="Save All Pending Changes (Ctrl+S)"
+              title={(() => {
+                const n = results.filter(r => r._isNew || r._isModified).length;
+                return n > 0
+                  ? `Save ${n} pending change${n === 1 ? "" : "s"} (Ctrl+S)`
+                  : "Save All Pending Changes (Ctrl+S)";
+              })()}
               onClick={async () => {
                  if (onSave) {
                     await onSave(results);
@@ -519,35 +574,68 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
               }}
             >
               <CheckCircle className={clsx("w-3.5 h-3.5", results.some(r => r._isNew || r._isModified) && "animate-pulse")} />
-              <span className="text-[8px] font-bold">
-                SAVE{results.filter(r => r._isNew || r._isModified).length > 0 ? ` (${results.filter(r => r._isNew || r._isModified).length})` : ""}
-              </span>
+              {(() => {
+                const n = results.filter(r => r._isNew || r._isModified).length;
+                if (n === 0) return null;
+                return (
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-emerald-500 text-[9px] font-bold text-[#0b0f17] flex items-center justify-center leading-none">
+                    {n > 99 ? "99+" : n}
+                  </span>
+                );
+              })()}
             </button>
             {results.some(r => r._isNew || r._isModified) && (
               <button 
-                onClick={() => onDiscard && onDiscard()}
-                className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-rose-500/50 text-rose-400 hover:bg-rose-500/10 transition-colors"
+                type="button"
+                onClick={async (e) => { 
+                  e.stopPropagation();
+                  const confirmed = await confirmDialog.confirm({ title: "Discard Changes", message: "Discard all unsaved local changes? This cannot be undone.", type: "warning" });
+                  if (confirmed && onDiscard) await onDiscard();
+                }}
+                className="p-1.5 rounded border border-rose-500/50 text-rose-400 hover:bg-rose-500/10 transition-colors"
                 title="Discard all local changes"
               >
-                <XCircle className="w-3.5 h-3.5" /><span className="text-[8px] font-bold">DISCARD</span>
+                <XCircle className="w-3.5 h-3.5" />
               </button>
             )}
           </div>
-          <div className="flex items-center gap-1 ml-1 border-l border-[var(--border)] pl-1 sticky right-0 bg-[var(--surface)]">
-            {settings.enabledExportFormats.includes("csv") && (
-              <button onClick={() => handleExport("csv")} className="p-1.5 hover:text-emerald-400 opacity-70 hover:opacity-100 transition-opacity" title="Export CSV"><Download className="w-3.5 h-3.5" /></button>
-            )}
-            {settings.enabledExportFormats.includes("json") && (
-              <button onClick={() => handleExport("json")} className="p-1.5 hover:text-amber-400 opacity-70 hover:opacity-100 transition-opacity" title="Export JSON"><FileJson className="w-3.5 h-3.5" /></button>
-            )}
-            {settings.enabledExportFormats.includes("xml") && (
-              <button onClick={() => handleExport("xml")} className="p-1.5 hover:text-blue-400 opacity-70 hover:opacity-100 transition-opacity" title="Export XML"><FileCode className="w-3.5 h-3.5" /></button>
-            )}
-            {settings.enabledExportFormats.includes("html") && (
-              <button onClick={() => handleExport("html")} className="p-1.5 hover:text-orange-400 opacity-70 hover:opacity-100 transition-opacity" title="Export HTML"><Globe className="w-3.5 h-3.5" /></button>
-            )}
-            {settings.enabledExportFormats.includes("sql") && (
-              <button onClick={() => handleExport("sql")} className="p-1.5 hover:text-cyan-400 opacity-70 hover:opacity-100 transition-opacity" title="Export SQL Insert"><Database className="w-3.5 h-3.5" /></button>
+          <div className="relative ml-1 border-l border-[var(--border)] pl-1" ref={exportDropdownRef}>
+            <button 
+              onClick={() => setShowExportDropdown(!showExportDropdown)}
+              className="p-1.5 rounded hover:text-[var(--color-accent)] opacity-70 hover:opacity-100 transition-opacity" 
+              title="Export data"
+            >
+              <Download className="w-3.5 h-3.5" />
+            </button>
+            {showExportDropdown && (
+              <div className="absolute right-0 top-full mt-1 w-44 bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-2xl z-50 overflow-hidden">
+                <div className="px-3 py-1.5 text-[9px] uppercase font-bold text-[var(--text-secondary)] tracking-widest border-b border-[var(--border)]">Export As</div>
+                {settings.enabledExportFormats.includes("csv") && (
+                  <button onClick={() => { handleExport("csv"); setShowExportDropdown(false); }} className="w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--color-accent)]/10 flex items-center gap-2 transition-colors">
+                    <Download className="w-3.5 h-3.5 text-emerald-400" /> CSV
+                  </button>
+                )}
+                {settings.enabledExportFormats.includes("json") && (
+                  <button onClick={() => { handleExport("json"); setShowExportDropdown(false); }} className="w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--color-accent)]/10 flex items-center gap-2 transition-colors">
+                    <FileJson className="w-3.5 h-3.5 text-amber-400" /> JSON
+                  </button>
+                )}
+                {settings.enabledExportFormats.includes("xml") && (
+                  <button onClick={() => { handleExport("xml"); setShowExportDropdown(false); }} className="w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--color-accent)]/10 flex items-center gap-2 transition-colors">
+                    <FileCode className="w-3.5 h-3.5 text-blue-400" /> XML
+                  </button>
+                )}
+                {settings.enabledExportFormats.includes("html") && (
+                  <button onClick={() => { handleExport("html"); setShowExportDropdown(false); }} className="w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--color-accent)]/10 flex items-center gap-2 transition-colors">
+                    <Globe className="w-3.5 h-3.5 text-orange-400" /> HTML
+                  </button>
+                )}
+                {settings.enabledExportFormats.includes("sql") && (
+                  <button onClick={() => { handleExport("sql"); setShowExportDropdown(false); }} className="w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--color-accent)]/10 flex items-center gap-2 transition-colors">
+                    <Database className="w-3.5 h-3.5 text-cyan-400" /> SQL INSERT
+                  </button>
+                )}
+              </div>
             )}
           </div>
         </div>

@@ -2478,8 +2478,20 @@ Download "${filename}" (~80MB)?`,
             onRefresh={lastSelectQueryRef.current ? () => executeQuery(lastSelectQueryRef.current) : undefined}
             onSave={handleSave}
             onDiscard={() => {
-              if (lastSelectQueryRef.current) {
+              // Modified existing rows need server data to revert — nothing in
+              // the codebase preserves pre-edit values, so the only way to undo
+              // a cell edit is to re-fetch. New rows are pure-client state and
+              // can be filtered out without a roundtrip, which is the common
+              // case (user added rows, changed their mind).
+              const hasModifications = results.some(r => r._isModified && !r._isNew);
+              if (hasModifications && lastSelectQueryRef.current) {
                 executeQuery(lastSelectQueryRef.current);
+              } else {
+                setResults(prev =>
+                  prev
+                    .filter(r => !r._isNew)
+                    .map(({ _isNew, _isModified, ...rest }) => rest)
+                );
               }
             }}
             optimizerData={optimizerData}
