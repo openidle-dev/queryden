@@ -10,7 +10,7 @@ interface Props {
 
 const { title, description, active } = Astro.props;
 const version = `v${SITE.version}`;
-const desc = description ?? "A native, open-source SQL client for Postgres, MySQL, SQLite, CockroachDB and Supabase. 8 MB installer. Built in Rust.";
+const desc = description ?? "A native, open-source SQL client for Postgres, MySQL, SQLite, CockroachDB and Supabase. ~11 MB installer. Built in Rust.";
 const stars = STARS;
 const canonicalPath = Astro.url.pathname.replace(/\/$/, '') || '/';
 const canonicalUrl = `${SITE.homepage}${canonicalPath === '/' ? '' : canonicalPath}`;
