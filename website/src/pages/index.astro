@@ -49,7 +49,7 @@ const softwareJsonLd = {
   downloadUrl: `${SITE.homepage}/download`,
   softwareVersion: SITE.version,
   license: 'https://opensource.org/licenses/MIT',
-  description: "A native, open-source SQL client for Postgres, MySQL, SQLite, CockroachDB and Supabase. ~11 MB installer. Built in Rust. Zero telemetry.",
+  description: "A native, open-source SQL client for Postgres, MySQL, SQLite, CockroachDB and Supabase. ~11 MB installer. Built in Rust. Zero app telemetry.",
   offers: {
     '@type': 'Offer',
     price: '0',
@@ -87,7 +87,7 @@ const FOOTPRINT = [
 ---
 <Layout
   title="QueryDen — The database manager that isn't an Electron app."
-  description="A native, open-source SQL client for Postgres, MySQL, SQLite, CockroachDB and Supabase. 8 MB installer. Built in Rust. Zero telemetry."
+  description="A native, open-source SQL client for Postgres, MySQL, SQLite, CockroachDB and Supabase. ~11 MB installer. Built in Rust. Zero app telemetry."
   active="product"
 >
   <script slot="head" type="application/ld+json" set:html={JSON.stringify(softwareJsonLd)}></script>
@@ -177,7 +177,7 @@ const FOOTPRINT = [
       </div>
 
       <p class="reveal hero-foot mono">
-        Apple Silicon · Windows x86_64 · Linux x86_64 &nbsp;·&nbsp; MIT licensed &nbsp;·&nbsp; zero telemetry
+        Apple Silicon · Windows x86_64 · Linux x86_64 &nbsp;·&nbsp; MIT licensed &nbsp;·&nbsp; zero app telemetry
       </p>
     </div>
   </section>
@@ -660,7 +660,7 @@ const FOOTPRINT = [
             </li>
             <li>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4.5 4.5L19 7"/></svg>
-              Zero telemetry by default
+              Zero app telemetry by default
             </li>
           </ul>
           <div class="compare-mobile-vs">
@@ -684,7 +684,7 @@ const FOOTPRINT = [
         <div class="eyebrow" style="justify-content: center;">Ship the small one</div>
         <h2 class="cta-title display">Stop waiting for a database client to start.</h2>
         <p class="lede-lg cta-lede">
-          An 11&nbsp;MB installer. Native binaries on macOS, Windows, and Linux. MIT licensed. Zero telemetry.
+          An 11&nbsp;MB installer. Native binaries on macOS, Windows, and Linux. MIT licensed. Zero app telemetry.
         </p>
         <div class="cta-buttons">
           <a class="btn btn-lg btn-accent" href="/download">
