@@ -22,7 +22,8 @@
         "resizable": true,
         "fullscreen": false,
         "maximized": true,
-        "visible": true
+        "visible": true,
+        "backgroundColor": [11, 15, 23]
       }
     ],
     "security": {
