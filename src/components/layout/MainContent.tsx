@@ -2388,7 +2388,9 @@ Download "${filename}" (~80MB)?`,
       <PanelGroup direction="vertical" className="flex-1 min-h-0">
         {/* Top panel: Editor or Dashboard — must be a Panel for PanelGroup to work */}
         <Panel minSize={20} maxSize={80}>
-          {activeTab ? (
+          {!isDatabaseReady ? (
+            <EmptyStateLauncher />
+          ) : activeTab ? (
             activeTab.usePsql ? (
               <div className="h-full flex flex-col">
                 <div className="flex-1 min-h-0">
@@ -2441,8 +2443,6 @@ Download "${filename}" (~80MB)?`,
                 />
               </Suspense>
             )
-          ) : !isDatabaseReady ? (
-            <EmptyStateLauncher />
           ) : (
             <div className="h-full flex flex-col items-center justify-center bg-[var(--background)] p-6 text-center">
               <p className="text-sm text-[var(--text-secondary)]">

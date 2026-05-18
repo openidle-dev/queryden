@@ -372,7 +372,14 @@ export function AppLayout() {
                 order={1}
               >
                 <div className="h-full bg-[var(--surface)] border-r border-[var(--border)]">
-                  {showExplorer && <DatabaseExplorer />}
+                  {/* DatabaseExplorer stays mounted whenever the sidebar is visible
+                      (even when Files is the active panel) so its window-event
+                      listeners — notably `open-new-connection` from the empty-state
+                      launcher (#84) — survive sidebar switches. Hidden via CSS,
+                      not unmounted. */}
+                  <div className={showExplorer ? "h-full" : "hidden"}>
+                    <DatabaseExplorer />
+                  </div>
                   {showFiles && <FilesExplorer />}
                 </div>
               </Panel>
