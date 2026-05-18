@@ -43,6 +43,8 @@ export function ConnectionDialog({ connection, onClose }: { connection?: Databas
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [isTestingSsh, setIsTestingSsh] = useState(false);
+  const [sshTestResult, setSshTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const confirmDialog = useConfirmDialog();
 
   // Focus effect when switching steps
@@ -231,6 +233,38 @@ export function ConnectionDialog({ connection, onClose }: { connection?: Databas
     onClose();
   };
 
+  const handleTestSsh = async () => {
+    setIsTestingSsh(true);
+    setSshTestResult(null);
+    try {
+      const isTauri = typeof window !== 'undefined' && (
+        !!(window as any).__TAURI_INTERNALS__ ||
+        !!(window as any).__TAURI__
+      );
+      if (!isTauri) {
+        setSshTestResult({ success: false, message: "SSH tests only work in the desktop app." });
+        return;
+      }
+      if (!formData.sshHost || !formData.sshUsername) {
+        setSshTestResult({ success: false, message: "SSH host and username are required." });
+        return;
+      }
+      await invokeCmd("test_ssh_connection", {
+        sshHost: formData.sshHost,
+        sshPort: parseInt(formData.sshPort, 10) || 22,
+        sshUsername: formData.sshUsername,
+        sshPassword: formData.sshAuthMethod === "password" ? (formData.sshPassword || null) : null,
+        sshKeyPath: formData.sshAuthMethod === "key" ? (formData.sshKeyPath || null) : null,
+        sshKeyPassphrase: formData.sshAuthMethod === "key" ? (formData.sshKeyPassphrase || null) : null,
+      });
+      setSshTestResult({ success: true, message: "SSH authentication succeeded." });
+    } catch (err: any) {
+      setSshTestResult({ success: false, message: err?.message || err?.toString() || "SSH test failed." });
+    } finally {
+      setIsTestingSsh(false);
+    }
+  };
+
   const handleTestOnly = async (e: React.FormEvent) => {
     e.preventDefault();
     const result = await testConnection();
@@ -250,7 +284,7 @@ export function ConnectionDialog({ connection, onClose }: { connection?: Databas
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[200] backdrop-blur-[1px]">
-      <div className="bg-[var(--surface)] rounded-xl shadow-2xl w-[900px] h-[650px] flex flex-col overflow-hidden border border-[var(--border)] animate-in fade-in zoom-in duration-100">
+      <div className="bg-[var(--surface)] rounded-xl shadow-2xl w-[900px] max-w-[95vw] h-[640px] max-h-[90vh] flex flex-col overflow-hidden border border-[var(--border)] animate-in fade-in zoom-in duration-100">
         
         {/* Header */}
         <div className="p-4 border-b border-[var(--border)] flex items-center justify-between bg-gradient-to-r from-[var(--surface-raised)] to-[var(--surface)]">
@@ -420,25 +454,25 @@ export function ConnectionDialog({ connection, onClose }: { connection?: Databas
           <div className="flex-1 flex flex-col min-h-0">
             <div className="flex flex-1 min-h-0">
               {/* Left Sidebar - Summary */}
-              <div className="w-64 bg-[#1e1e1e] border-r border-[var(--border)] p-6 flex flex-col items-center border-t border-[var(--surface-raised)]">
+              <div className="w-56 bg-[#1e1e1e] border-r border-[var(--border)] p-4 flex flex-col items-center border-t border-[var(--surface-raised)]">
                 {(() => {
                   const p = PROVIDERS.find(p => p.id === formData.type);
                   const Icon = p?.icon || Database;
                   return (
                     <>
-                      <div className={`p-6 rounded-2xl ${p?.bg || 'bg-gray-800'} ${p?.color || 'text-white'} border border-white/10 mb-4 shadow-xl`}>
-                        <Icon className="w-16 h-16 drop-shadow-lg" />
+                      <div className={`p-4 rounded-2xl ${p?.bg || 'bg-gray-800'} ${p?.color || 'text-white'} border border-white/10 mb-3 shadow-xl`}>
+                        <Icon className="w-12 h-12 drop-shadow-lg" />
                       </div>
-                      <h2 className="text-lg font-bold text-white mb-1">{p?.name}</h2>
+                      <h2 className="text-base font-bold text-white mb-0.5">{p?.name}</h2>
                       <p className="text-[10px] uppercase tracking-widest text-[var(--text-secondary)] font-bold">Standard Connection</p>
-                      <div className="mt-8 w-full space-y-2">
-                        <div className="p-3 bg-[#2d2d2d] rounded-lg border border-[#3c3c3c] text-xs">
+                      <div className="mt-4 w-full space-y-1.5">
+                        <div className="p-2 bg-[#2d2d2d] rounded border border-[#3c3c3c] text-[11px]">
                           <span className="text-[var(--text-secondary)]">Driver: </span> <span className="font-mono text-[var(--color-accent)]">Native (Tauri)</span>
                         </div>
-                        <div className="p-3 bg-[#2d2d2d] rounded-lg border border-[#3c3c3c] text-xs">
-                          <span className="text-[var(--text-secondary)]">Status: </span> 
-                          <span className={`font-bold ${testResult ? (testResult.success ? 'text-green-400' : 'text-red-400') : (connection ? 'text-sky-400' : 'text-amber-400')}`}>
-                            {testResult ? (testResult.success ? 'Verified' : 'Error') : (connection ? 'Saved / Ready' : 'Pending')}
+                        <div className="p-2 bg-[#2d2d2d] rounded border border-[#3c3c3c] text-[11px]">
+                          <span className="text-[var(--text-secondary)]">Last test: </span>
+                          <span className={`font-bold ${testResult ? (testResult.success ? 'text-green-400' : 'text-red-400') : 'text-[var(--text-secondary)]'}`}>
+                            {testResult ? (testResult.success ? 'Passed' : 'Failed') : 'Not run'}
                           </span>
                         </div>
                       </div>
@@ -481,28 +515,28 @@ export function ConnectionDialog({ connection, onClose }: { connection?: Databas
                 )}
 
                 {/* Tab Content */}
-                <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                <div className="flex-1 overflow-y-auto p-4 space-y-3">
                   {activeTab === "general" && (
                     <>
                       {/* General Settings */}
-                      <div className="space-y-4">
-                        <h4 className="text-xs font-bold uppercase tracking-wider text-[var(--text-secondary)] pb-2 border-b border-[var(--border)]">General Settings</h4>
+                      <div className="space-y-2.5">
+                        <h4 className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] pb-1.5 border-b border-[var(--border)]">General Settings</h4>
                         
                         <div>
-                          <label className="block text-xs font-bold mb-1.5 text-[var(--text-primary)]">Connection Name</label>
+                          <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Connection Name</label>
                           <input
                             type="text"
                             value={formData.name}
                             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                            className="w-full px-4 py-2.5 text-sm rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-medium shadow-inner"
+                            className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-medium shadow-inner"
                             placeholder="Production Database"
                             required
                           />
                         </div>
 
                         {/* Connection Color */}
-                        <div className="flex items-center gap-3">
-                          <label className="text-xs font-bold text-[var(--text-primary)] shrink-0">Color</label>
+                        <div className="flex items-center gap-2">
+                          <label className="text-[11px] font-bold text-[var(--text-primary)] shrink-0">Color</label>
                           <input
                             type="color"
                             value={formData.color}
@@ -529,47 +563,47 @@ export function ConnectionDialog({ connection, onClose }: { connection?: Databas
                         
                         {formData.type === "sqlite" ? (
                           <div>
-                            <label className="block text-xs font-bold mb-1.5 text-[var(--text-primary)]">File Path (Absolute)</label>
+                            <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">File Path (Absolute)</label>
                             <input
                               type="text"
                               value={formData.filepath}
                               onChange={(e) => setFormData({ ...formData, filepath: e.target.value })}
-                              className="w-full px-4 py-2.5 text-sm rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono text-cyan-300"
+                              className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono text-cyan-300"
                               placeholder="/absolute/path/to/database.db"
                             />
                           </div>
                         ) : (
                           <>
-                            <div className="grid grid-cols-3 gap-4">
+                            <div className="grid grid-cols-3 gap-2.5">
                               <div className="col-span-2">
-                                <label className="block text-xs font-bold mb-1.5 text-[var(--text-primary)]">Host / Server</label>
+                                <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Host / Server</label>
                                 <input
                                   type="text"
                                   value={formData.host}
                                   onChange={(e) => setFormData({ ...formData, host: e.target.value })}
-                                  className="w-full px-4 py-2.5 text-sm rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono"
+                                  className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono"
                                   placeholder="localhost"
                                 />
                               </div>
                               <div>
-                                <label className="block text-xs font-bold mb-1.5 text-[var(--text-primary)]">Port</label>
+                                <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Port</label>
                                 <input
                                   type="text"
                                   value={formData.port}
                                   onChange={(e) => setFormData({ ...formData, port: e.target.value })}
-                                  className="w-full px-4 py-2.5 text-sm rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono text-amber-300"
+                                  className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono text-amber-300"
                                   placeholder={formData.type === "postgres" ? "5432" : "3306"}
                                 />
                               </div>
                             </div>
                             
                             <div>
-                              <label className="block text-xs font-bold mb-1.5 text-[var(--text-primary)]">Target Database</label>
+                              <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Target Database</label>
                               <input
                                 type="text"
                                 value={formData.database}
                                 onChange={(e) => setFormData({ ...formData, database: e.target.value })}
-                                className="w-full px-4 py-2.5 text-sm rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono text-purple-300"
+                                className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono text-purple-300"
                                 placeholder="database_name"
                                 required
                               />
@@ -580,12 +614,12 @@ export function ConnectionDialog({ connection, onClose }: { connection?: Databas
 
                       {/* Authentication - ONLY IF NOT SQLITE */}
                       {formData.type !== "sqlite" && (
-                        <div className="space-y-4 pt-2">
-                          <h4 className="text-xs font-bold uppercase tracking-wider text-[var(--text-secondary)] pb-2 border-b border-[var(--border)]">Authentication</h4>
-                          
+                        <div className="space-y-2.5 pt-1">
+                          <h4 className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] pb-1.5 border-b border-[var(--border)]">Authentication</h4>
+
                           {vaultCredentials.length > 0 && (
-                            <div className="mb-2">
-                              <label className="block text-[10px] font-bold mb-1 text-[var(--text-primary)]">Vault Profile</label>
+                            <div>
+                              <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Vault Profile</label>
                               <select
                                 value={formData.vaultCredentialId}
                                 onChange={(e) => setFormData({ ...formData, vaultCredentialId: e.target.value })}
@@ -600,25 +634,25 @@ export function ConnectionDialog({ connection, onClose }: { connection?: Databas
                           )}
 
                           {!formData.vaultCredentialId && (
-                            <div className="grid grid-cols-2 gap-4 animate-in fade-in slide-in-from-top-1 duration-200">
+                            <div className="grid grid-cols-2 gap-2.5 animate-in fade-in slide-in-from-top-1 duration-200">
                               <div>
-                                <label className="block text-xs font-bold mb-1.5 text-[var(--text-primary)]">Username</label>
+                                <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Username</label>
                                 <input
                                   type="text"
                                   value={formData.username}
                                   onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                                  className="w-full px-4 py-2.5 text-sm rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono text-green-300 shadow-inner"
+                                  className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono text-green-300 shadow-inner"
                                   placeholder={formData.type === "postgres" ? "postgres" : "root"}
                                 />
                               </div>
                               
                               <div>
-                                <label className="block text-xs font-bold mb-1.5 text-[var(--text-primary)]">Password</label>
+                                <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Password</label>
                                 <input
                                   type="password"
                                   value={formData.password}
                                   onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                                  className="w-full px-4 py-2.5 text-sm rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono shadow-inner"
+                                  className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono shadow-inner"
                                   placeholder="••••••••••"
                                 />
                               </div>
@@ -630,9 +664,9 @@ export function ConnectionDialog({ connection, onClose }: { connection?: Databas
                   )}
 
                   {activeTab === "ssh" && formData.type !== "sqlite" && (
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between pb-2 border-b border-[var(--border)]">
-                        <h4 className="text-xs font-bold uppercase tracking-wider text-[var(--text-secondary)]">SSH Tunnel</h4>
+                    <div className="space-y-2.5">
+                      <div className="flex items-center justify-between pb-1.5 border-b border-[var(--border)]">
+                        <h4 className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)]">SSH Tunnel</h4>
                         <label className="flex items-center gap-2 cursor-pointer">
                           <input
                             type="checkbox"
@@ -645,75 +679,76 @@ export function ConnectionDialog({ connection, onClose }: { connection?: Databas
                       </div>
 
                       {formData.sshEnabled ? (
-                        <div className="space-y-4 animate-in fade-in slide-in-from-top-1 duration-200">
-                          <div className="grid grid-cols-3 gap-4">
+                        <div className="space-y-2.5 animate-in fade-in slide-in-from-top-1 duration-200">
+                          <div className="grid grid-cols-3 gap-2.5">
                             <div className="col-span-2">
-                              <label className="block text-xs font-bold mb-1.5 text-[var(--text-primary)]">SSH Host</label>
+                              <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">SSH Host</label>
                               <input
                                 type="text"
                                 value={formData.sshHost}
                                 onChange={(e) => setFormData({ ...formData, sshHost: e.target.value })}
-                                className="w-full px-4 py-2.5 text-sm rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono"
+                                className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono"
                                 placeholder="bastion.example.com"
                               />
                             </div>
                             <div>
-                              <label className="block text-xs font-bold mb-1.5 text-[var(--text-primary)]">SSH Port</label>
+                              <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">SSH Port</label>
                               <input
                                 type="text"
                                 value={formData.sshPort}
                                 onChange={(e) => setFormData({ ...formData, sshPort: e.target.value })}
-                                className="w-full px-4 py-2.5 text-sm rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono text-amber-300"
+                                className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono text-amber-300"
                                 placeholder="22"
                               />
                             </div>
                           </div>
 
-                          <div>
-                            <label className="block text-xs font-bold mb-1.5 text-[var(--text-primary)]">SSH Username</label>
-                            <input
-                              type="text"
-                              value={formData.sshUsername}
-                              onChange={(e) => setFormData({ ...formData, sshUsername: e.target.value })}
-                              className="w-full px-4 py-2.5 text-sm rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono text-green-300"
-                              placeholder="deploy"
-                            />
-                          </div>
-
-                          <div>
-                            <label className="block text-xs font-bold mb-1.5 text-[var(--text-primary)]">Authentication Method</label>
-                            <div className="flex gap-4">
-                              <label className="flex items-center gap-2 cursor-pointer">
-                                <input
-                                  type="radio"
-                                  name="sshAuth"
-                                  checked={formData.sshAuthMethod === "password"}
-                                  onChange={() => setFormData({ ...formData, sshAuthMethod: "password" })}
-                                  className="w-4 h-4 accent-[var(--color-accent)]"
-                                />
-                                <span className="text-xs text-[var(--text-primary)]">Password</span>
-                              </label>
-                              <label className="flex items-center gap-2 cursor-pointer">
-                                <input
-                                  type="radio"
-                                  name="sshAuth"
-                                  checked={formData.sshAuthMethod === "key"}
-                                  onChange={() => setFormData({ ...formData, sshAuthMethod: "key" })}
-                                  className="w-4 h-4 accent-[var(--color-accent)]"
-                                />
-                                <span className="text-xs text-[var(--text-primary)]">Private Key</span>
-                              </label>
+                          <div className="grid grid-cols-2 gap-2.5">
+                            <div>
+                              <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">SSH Username</label>
+                              <input
+                                type="text"
+                                value={formData.sshUsername}
+                                onChange={(e) => setFormData({ ...formData, sshUsername: e.target.value })}
+                                className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono text-green-300"
+                                placeholder="deploy"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Authentication Method</label>
+                              <div className="flex gap-4 pt-1">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                  <input
+                                    type="radio"
+                                    name="sshAuth"
+                                    checked={formData.sshAuthMethod === "password"}
+                                    onChange={() => setFormData({ ...formData, sshAuthMethod: "password" })}
+                                    className="w-4 h-4 accent-[var(--color-accent)]"
+                                  />
+                                  <span className="text-xs text-[var(--text-primary)]">Password</span>
+                                </label>
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                  <input
+                                    type="radio"
+                                    name="sshAuth"
+                                    checked={formData.sshAuthMethod === "key"}
+                                    onChange={() => setFormData({ ...formData, sshAuthMethod: "key" })}
+                                    className="w-4 h-4 accent-[var(--color-accent)]"
+                                  />
+                                  <span className="text-xs text-[var(--text-primary)]">Private Key</span>
+                                </label>
+                              </div>
                             </div>
                           </div>
 
                           {formData.sshAuthMethod === "password" && (
                             <div>
-                              <label className="block text-xs font-bold mb-1.5 text-[var(--text-primary)]">SSH Password</label>
+                              <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">SSH Password</label>
                               <input
                                 type="password"
                                 value={formData.sshPassword}
                                 onChange={(e) => setFormData({ ...formData, sshPassword: e.target.value })}
-                                className="w-full px-4 py-2.5 text-sm rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono shadow-inner"
+                                className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono shadow-inner"
                                 placeholder="••••••••••"
                               />
                             </div>
@@ -722,73 +757,93 @@ export function ConnectionDialog({ connection, onClose }: { connection?: Databas
                           {formData.sshAuthMethod === "key" && (
                             <>
                               <div>
-                                <label className="block text-xs font-bold mb-1.5 text-[var(--text-primary)]">Private Key Path</label>
+                                <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Private Key Path</label>
                                 <input
                                   type="text"
                                   value={formData.sshKeyPath}
                                   onChange={(e) => setFormData({ ...formData, sshKeyPath: e.target.value })}
-                                  className="w-full px-4 py-2.5 text-sm rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono text-cyan-300"
+                                  className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono text-cyan-300"
                                   placeholder="/home/user/.ssh/id_ed25519"
                                 />
                               </div>
                               <div>
-                                <label className="block text-xs font-bold mb-1.5 text-[var(--text-primary)]">Key Passphrase (Optional)</label>
+                                <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Key Passphrase (Optional)</label>
                                 <input
                                   type="password"
                                   value={formData.sshKeyPassphrase}
                                   onChange={(e) => setFormData({ ...formData, sshKeyPassphrase: e.target.value })}
-                                  className="w-full px-4 py-2.5 text-sm rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono shadow-inner"
+                                  className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono shadow-inner"
                                   placeholder="••••••••••"
                                 />
                               </div>
                             </>
                           )}
 
-                          <div className="p-3 bg-[#2d2d2d] rounded-lg border border-[#444]">
-                            <p className="text-[10px] text-[var(--text-secondary)]">
-                              <span className="font-bold text-[var(--text-primary)]">How it works:</span> An SSH tunnel will be created on a free local port. 
-                              Your database connection will route through the SSH server to reach the target host securely.
-                            </p>
+                          <div className="flex items-center gap-3 pt-1">
+                            <button
+                              type="button"
+                              onClick={handleTestSsh}
+                              disabled={isTestingSsh || !formData.sshHost || !formData.sshUsername}
+                              className="px-3 py-1.5 text-[11px] font-bold rounded border border-[var(--border)] bg-[var(--surface)] hover:bg-[#333] transition-colors text-white disabled:opacity-50 flex items-center gap-2"
+                            >
+                              {isTestingSsh && <span className="animate-pulse w-1.5 h-1.5 rounded-full bg-amber-400" />}
+                              <Shield className="w-3 h-3" />
+                              {isTestingSsh ? "Testing SSH..." : "Test SSH Tunnel"}
+                            </button>
+                            {sshTestResult && (
+                              <span className={`text-[11px] font-mono flex items-center gap-1.5 ${sshTestResult.success ? "text-green-400" : "text-red-400"}`}>
+                                {sshTestResult.success ? <CheckCircle className="w-3.5 h-3.5" /> : <ServerCrash className="w-3.5 h-3.5" />}
+                                {sshTestResult.message}
+                              </span>
+                            )}
                           </div>
+
+                          <p className="text-[10px] text-[var(--text-secondary)] leading-relaxed pt-0.5">
+                            <span className="font-bold text-[var(--text-primary)]">How it works:</span> An SSH tunnel is opened on a free local port and the DB connection routes through your SSH server. <span className="font-bold text-[var(--text-primary)]">Test SSH Tunnel</span> verifies SSH auth alone — DB credentials are not required.
+                          </p>
                         </div>
                       ) : (
-                        <div className="flex flex-col items-center justify-center py-12 text-center">
-                          <Shield className="w-12 h-12 text-[var(--text-secondary)] opacity-30 mb-4" />
-                          <p className="text-sm text-[var(--text-secondary)] mb-2">SSH tunneling is disabled</p>
-                          <p className="text-[10px] text-[var(--text-secondary)]">Enable SSH above to connect through a bastion host or SSH tunnel</p>
+                        <div className="flex flex-col items-center justify-center py-10 text-center">
+                          <Shield className="w-10 h-10 text-[var(--text-secondary)] opacity-30 mb-3" />
+                          <p className="text-sm text-[var(--text-secondary)] mb-1">SSH tunneling is disabled</p>
+                          <p className="text-[10px] text-[var(--text-secondary)]">Enable SSH above to connect through a bastion host</p>
                         </div>
                       )}
                     </div>
                   )}
 
                   {formData.type === "sqlite" && (
-                    <div className="flex flex-col items-center justify-center py-12 text-center">
-                      <Database className="w-12 h-12 text-[var(--text-secondary)] opacity-30 mb-4" />
+                    <div className="flex flex-col items-center justify-center py-10 text-center">
+                      <Database className="w-10 h-10 text-[var(--text-secondary)] opacity-30 mb-3" />
                       <p className="text-sm text-[var(--text-secondary)]">SQLite connections use local files</p>
                       <p className="text-[10px] text-[var(--text-secondary)]">SSH tunneling is not available for SQLite databases</p>
-                    </div>
-                  )}
-
-                  {/* Error & Test Feedback */}
-                  {error && (
-                    <div className="p-3 rounded-lg border text-xs flex items-start gap-3 bg-red-500/10 border-red-500/30 text-red-400">
-                      <ServerCrash className="w-5 h-5 flex-shrink-0 mt-0.5" />
-                      <div className="font-mono">{error}</div>
-                    </div>
-                  )}
-                  
-                  {testResult?.success && (
-                    <div className="p-3 flex items-start gap-3 bg-green-500/10 border border-green-500/30 text-green-400 rounded-lg text-xs font-bold">
-                      <CheckCircle className="w-5 h-5 flex-shrink-0" />
-                      <div>{testResult.message}</div>
                     </div>
                   )}
                 </div>
               </form>
             </div>
-            
+
+            {/* Sticky feedback strip — always visible above the footer so errors
+                never hide below the fold when the form scrolls. #44 */}
+            {(error || testResult?.success) && (
+              <div className="border-t border-[var(--border)] bg-[#1e1e1e] px-4 py-2">
+                {error && (
+                  <div className="p-2 rounded border text-[11px] flex items-start gap-2 bg-red-500/10 border-red-500/30 text-red-400">
+                    <ServerCrash className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                    <div className="font-mono break-all">{error}</div>
+                  </div>
+                )}
+                {!error && testResult?.success && (
+                  <div className="p-2 flex items-start gap-2 bg-green-500/10 border border-green-500/30 text-green-400 rounded text-[11px] font-bold">
+                    <CheckCircle className="w-4 h-4 flex-shrink-0" />
+                    <div>{testResult.message}</div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Footer Actions */}
-            <div className="p-4 border-t border-[var(--border)] bg-[#1e1e1e] flex items-center justify-between shadow-[0_-4px_10px_rgba(0,0,0,0.1)] z-10">
+            <div className="p-3 border-t border-[var(--border)] bg-[#1e1e1e] flex items-center justify-between shadow-[0_-4px_10px_rgba(0,0,0,0.1)] z-10">
               <div className="flex gap-2">
                 {!connection && (
                   <button onClick={() => setStep("driver")} className="px-5 py-2 text-xs font-bold rounded-lg border border-[var(--border)] bg-[var(--surface)] hover:bg-[#333] transition-colors text-white">

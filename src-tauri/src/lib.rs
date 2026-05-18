@@ -84,6 +84,7 @@ pub fn run() {
             ssh::close_ssh_tunnel,
             ssh::get_tunnel_status,
             ssh::close_all_tunnels,
+            ssh::test_ssh_connection,
         ])
         .setup(|app| {
             info!("QueryDen application setup complete");
