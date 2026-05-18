@@ -7,7 +7,8 @@ import { useSettings } from "../../store/settingsStore";
 import { Play, Plus, X, ChevronDown, ChevronRight, Terminal, Database, Sparkles, GitCompare, Save, Square, Activity, Loader2, CheckCircle, XCircle } from "lucide-react";
 import { useSavedQueries } from "../../store/savedQueryStore";
 import { useConfirmDialog } from "../ui/ConfirmDialog";
-import { Copy, FileText, BarChart2, Activity as ActivityIcon, Monitor, Zap, Clock, HardDrive, ShieldCheck, Layers } from "lucide-react";
+import { Copy, FileText, BarChart2, Activity as ActivityIcon, Layers } from "lucide-react";
+import { EmptyStateLauncher } from "./EmptyStateLauncher";
 import { logger } from "../../utils/logger";
 import { getDefaultDatabaseName } from "../../config/app";
 import { splitStatements } from "../../utils/splitStatements";
@@ -94,6 +95,10 @@ export function MainContent() {
   const { connections, activeConnection, selectedDatabase, currentDb, vaultCredentials, databases: globalDatabases, connectToDatabase } = useConnections();
   const { addQuery } = useQueryHistory();
   const settings = useSettings();
+  // Gates the query toolbar, tab strip, and results panel. Until a database
+  // is picked, the main pane shows EmptyStateLauncher instead of disabled
+  // chrome. See #84.
+  const isDatabaseReady = !!activeConnection && !!selectedDatabase;
   const [showServices, setShowServices] = useState(true);
   const [queryTabs, setQueryTabs] = useState<QueryTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
@@ -2140,7 +2145,10 @@ Download "${filename}" (~80MB)?`,
         <span className="text-[var(--text-secondary)] opacity-100 whitespace-nowrap">{activeTab?.name || "No Active Tab"}</span>
       </div>
 
-      {/* Combined Tool Window Bar - Top */}
+      {/* Combined Tool Window Bar - Top — only when a database is selected.
+          Without a target DB, every action (Run, Format, Explain, Compare,
+          Clone, Activity, AI, Save) is either disabled or pointless. See #84. */}
+      {isDatabaseReady && (
       <div className="h-12 flex items-center gap-1 px-2 bg-[var(--surface)] border-b border-[var(--border)] shrink-0">
         {isExecuting ? (
           <button
@@ -2271,8 +2279,10 @@ Download "${filename}" (~80MB)?`,
           {showServices ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
         </button>
       </div>
+      )}
 
-      {/* Query Tabs - DataGrip Style */}
+      {/* Query Tabs - DataGrip Style — gated alongside the toolbar (#84). */}
+      {isDatabaseReady && (
       <div className="flex items-center bg-[var(--surface)] border-b border-[var(--border)] shrink-0 overflow-x-auto no-scrollbar">
         <div className="flex items-center flex-nowrap min-w-0">
           {queryTabs.map((tab) => {
@@ -2372,12 +2382,15 @@ Download "${filename}" (~80MB)?`,
           <Plus className="w-3.5 h-3.5" />
         </button>
       </div>
+      )}
 
       {/* Query Editor and Results */}
       <PanelGroup direction="vertical" className="flex-1 min-h-0">
         {/* Top panel: Editor or Dashboard — must be a Panel for PanelGroup to work */}
         <Panel minSize={20} maxSize={80}>
-          {activeTab ? (
+          {!isDatabaseReady ? (
+            <EmptyStateLauncher />
+          ) : activeTab ? (
             activeTab.usePsql ? (
               <div className="h-full flex flex-col">
                 <div className="flex-1 min-h-0">
@@ -2431,34 +2444,16 @@ Download "${filename}" (~80MB)?`,
               </Suspense>
             )
           ) : (
-            <div className="h-full flex flex-col items-center justify-center bg-[var(--background)] p-6 overflow-y-auto">
-              <div className="w-full max-w-4xl space-y-6 animate-in fade-in zoom-in duration-500">
-                <div className="text-center space-y-3">
-                  <div className="inline-flex p-3 rounded-2xl bg-gradient-to-br from-[var(--color-accent)] to-blue-600 shadow-xl shadow-[var(--color-accent)]/30 mb-1 group transition-all hover:scale-105 hover:shadow-[var(--color-accent)]/50 active:scale-95 duration-300 relative">
-                    <div className="absolute inset-0 bg-[var(--color-accent)] blur-xl opacity-20 group-hover:opacity-30 transition-opacity rounded-full"></div>
-                    <Terminal className="w-8 h-8 text-white relative z-10" />
-                  </div>
-                  <h1 className="text-xl font-bold tracking-tight text-[var(--text-primary)]">
-                     Database <span className="text-[var(--color-accent)]">Command Center</span>
-                  </h1>
-                  <p className="text-xs text-[var(--text-secondary)] max-w-md mx-auto">
-                     Connect to your databases, audit schema structures, and execute optimized queries.
-                  </p>
-                </div>
-                <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-                  <DashboardTile icon={<Zap className="w-4 h-4" />} title="Cluster Health" value={activeConnection ? "Online" : "Offline"} color={activeConnection ? "text-emerald-400" : "text-[var(--text-secondary)]"} description={activeConnection ? activeConnection.name : "No connection"} />
-                  <DashboardTile icon={<Monitor className="w-4 h-4" />} title="Active Sessions" value={activeConnection ? "Live" : "Idle"} color="text-blue-400" description={selectedDatabase || "No database"} onClick={() => activeConnection && setShowActivityMonitor(true)} />
-                  <DashboardTile icon={<ShieldCheck className="w-4 h-4" />} title="Security" value="Encrypted" color="text-purple-400" description="AES-256 vault active" />
-                  <DashboardTile icon={<Clock className="w-4 h-4" />} title="Quick Access" value="Saved" color="text-amber-400" description="Query library" onClick={() => window.dispatchEvent(new CustomEvent("open-saved-queries"))} />
-                  <DashboardTile icon={<HardDrive className="w-4 h-4" />} title="Storage" value={activeConnection ? "Healthy" : "---"} color="text-rose-400" description="DB WAL levels OK" />
-                  <DashboardTile icon={<ActivityIcon className="w-4 h-4" />} title="Throughput" value="Optimized" color="text-indigo-400" description="Low-latency engine" />
-                </div>
-              </div>
+            <div className="h-full flex flex-col items-center justify-center bg-[var(--background)] p-6 text-center">
+              <p className="text-sm text-[var(--text-secondary)]">
+                Press <kbd className="px-1.5 py-0.5 mx-1 text-[10px] font-bold rounded bg-[var(--surface-raised)] border border-[var(--border)]">Ctrl+N</kbd>
+                or click <Plus className="inline w-3.5 h-3.5 mx-0.5 align-text-bottom" /> in the tab bar to start a query.
+              </p>
             </div>
           )}
         </Panel>
 
-        {showServices && !activeTab?.usePsql && (
+        {isDatabaseReady && showServices && !activeTab?.usePsql && (
           <>
             <PanelResizeHandle className="h-1 bg-[var(--border)] hover:bg-[var(--color-accent)] transition-colors cursor-row-resize select-none shrink-0 data-[resize-handle-state=drag]:bg-[var(--color-accent)] data-[resize-handle-state=hover]:bg-[var(--color-accent)]/60" />
             <Panel minSize={15} maxSize={85} defaultSize={40}>
@@ -2538,46 +2533,6 @@ Download "${filename}" (~80MB)?`,
           />
         )}
       </Suspense>
-    </div>
-  );
-}
-function DashboardTile({ icon, title, value, color, description, trend, onClick }: { 
-  icon: React.ReactNode; 
-  title: string; 
-  value: string; 
-  color: string; 
-  description: string;
-  trend?: string;
-  onClick?: () => void;
-}) {
-  return (
-    <div 
-      className={`bg-gradient-to-br from-[var(--surface-raised)] to-[var(--surface)] border border-[var(--border)] rounded-xl p-3 transition-all group shadow-sm relative overflow-hidden flex flex-col justify-between min-h-[90px] ${onClick ? 'cursor-pointer hover:border-[var(--color-accent)]/40 hover:-translate-y-0.5 hover:shadow-md' : 'hover:border-[var(--border-hover)]'}`}
-      onClick={onClick}
-    >
-      <div className="absolute -right-1 -top-1 w-10 h-10 bg-gradient-to-br from-[var(--color-accent)] to-transparent opacity-0 group-hover:opacity-[0.03] transition-opacity rounded-full blur-lg" />
-      
-      <div>
-        <div className="flex items-start justify-between mb-2">
-          <div className={`p-1.5 rounded-lg bg-[var(--background)] border border-[var(--border)] group-hover:border-[var(--color-accent)]/30 transition-all duration-300 ${color}`}>
-            {icon}
-          </div>
-          {trend && (
-            <div className="px-1 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-[7px] font-bold border border-emerald-500/20">
-              {trend}
-            </div>
-          )}
-        </div>
-        <div className="text-[8px] font-bold text-[var(--text-secondary)] uppercase tracking-[0.03em] opacity-40">
-          {title}
-        </div>
-        <div className={`text-xs font-bold tracking-tight ${color}`}>
-          {value}
-        </div>
-      </div>
-      <div className="text-[9px] text-[var(--text-secondary)] leading-snug opacity-60 group-hover:opacity-80 transition-opacity line-clamp-1">
-        {description}
-      </div>
     </div>
   );
 }

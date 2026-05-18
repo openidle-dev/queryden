@@ -32,10 +32,15 @@ interface TableDetails {
   triggers: string[];
 }
 
-export function DatabaseExplorer() {
+interface DatabaseExplorerProps {
+  /** Whether AppLayout's Add Connection dialog is currently open.
+   *  Used to disable tree keyboard navigation while the dialog is up. */
+  isAddConnectionDialogOpen?: boolean;
+}
+
+export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: DatabaseExplorerProps = {}) {
   const { connections, activeConnection, selectedDatabase, databases, removeConnection, updateConnection, connectToDatabase, schemaItems, loadSchema, getDDL, generateStatement, isLoadingSchema, currentDb, schemaProgress, dropDatabase, createDatabase, createTable, exportConnections, importConnections, vaultCredentials, initialLoadDone, getSelectedSchemas } = useConnections();
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
-  const [showAddDialog, setShowAddDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [editingConnection, setEditingConnection] = useState<DatabaseConnection | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
@@ -626,7 +631,6 @@ export function DatabaseExplorer() {
         setRestoreDialogOpen(false);
         setIsCreateTableOpen(false);
         setIsCreateDatabaseOpen(false);
-        setShowAddDialog(false);
         setShowEditDialog(false);
         setShowSchemaDialog(false);
       }
@@ -1237,7 +1241,7 @@ export function DatabaseExplorer() {
   };
 
   const handleTreeKeyDown = (e: React.KeyboardEvent) => {
-    if (activeSubmenu || contextMenu || schemaContextMenu || showAddDialog || showEditDialog || backupDialogOpen || restoreDialogOpen || isCreateTableOpen || isCreateDatabaseOpen || showSchemaDialog) return;
+    if (activeSubmenu || contextMenu || schemaContextMenu || isAddConnectionDialogOpen || showEditDialog || backupDialogOpen || restoreDialogOpen || isCreateTableOpen || isCreateDatabaseOpen || showSchemaDialog) return;
 
     const visibleNodes = getVisibleNodes(schemaTree);
     if (visibleNodes.length === 0) return;
@@ -1466,7 +1470,7 @@ Note: "version" must be a number (e.g. 2), not a string like "0.1.0".`
               <Upload className="w-4 h-4" />
             </button>
             <button
-              onClick={() => setShowAddDialog(true)}
+              onClick={() => window.dispatchEvent(new CustomEvent("open-new-connection"))}
               className="p-1 rounded hover:bg-[var(--border)]"
               title="Add Connection"
             >
@@ -1520,7 +1524,7 @@ Note: "version" must be a number (e.g. 2), not a string like "0.1.0".`
               <Database className="w-6 h-6 mb-2 opacity-50" />
               <p>No connections configured</p>
               <button
-                 onClick={() => setShowAddDialog(true)}
+                 onClick={() => window.dispatchEvent(new CustomEvent("open-new-connection"))}
                  className="mt-2 text-[var(--color-accent)] hover:underline"
               >
                  Add a connection
@@ -2222,10 +2226,8 @@ Note: "version" must be a number (e.g. 2), not a string like "0.1.0".`
         </div>
       )}
 
-      {/* Add Connection Dialog */}
-      {showAddDialog && (
-        <ConnectionDialog onClose={() => setShowAddDialog(false)} />
-      )}
+      {/* Add Connection Dialog is owned by AppLayout (#84) — the "+" buttons
+          above dispatch `open-new-connection` to trigger it. */}
 
       {/* Edit Connection Dialog */}
       {showEditDialog && editingConnection && (

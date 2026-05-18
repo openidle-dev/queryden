@@ -3,6 +3,7 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { MainContent } from "./MainContent";
 import { DatabaseExplorer } from "../explorer/DatabaseExplorer";
 import { FilesExplorer } from "../explorer/FilesExplorer";
+import { ConnectionDialog } from "../explorer/ConnectionDialog";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useConnections } from "../../contexts/useConnections";
 import { useSettings } from "../../store/settingsStore";
@@ -19,6 +20,12 @@ export function AppLayout() {
   const [showFiles, setShowFiles] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  // Add Connection dialog is owned here (not in DatabaseExplorer) so the
+  // EmptyStateLauncher (#84) can trigger it via `open-new-connection` even
+  // when the sidebar is collapsed or showing the Files panel. Lifting also
+  // removes the listener-timing race where the event fired before
+  // DatabaseExplorer's listener had mounted.
+  const [showAddConnectionDialog, setShowAddConnectionDialog] = useState(false);
   const openHelp = () => window.dispatchEvent(new CustomEvent("open-help-dialog"));
   const openSettings = () => window.dispatchEvent(new CustomEvent("open-settings-dialog"));
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -34,6 +41,26 @@ export function AppLayout() {
     };
     window.addEventListener("status-bar-update", handleStatusUpdate);
     return () => window.removeEventListener("status-bar-update", handleStatusUpdate);
+  }, []);
+
+  // EmptyStateLauncher (#84) dispatches these. open-files-panel surfaces
+  // the saved-queries browser; open-new-connection opens the Add Connection
+  // dialog. Both listeners live here (not in the sidebar) so they survive
+  // panel toggles and work even when the sidebar is fully collapsed.
+  useEffect(() => {
+    const handleOpenFiles = () => {
+      setShowFiles(true);
+      setShowExplorer(false);
+    };
+    const handleOpenNewConnection = () => {
+      setShowAddConnectionDialog(true);
+    };
+    window.addEventListener("open-files-panel", handleOpenFiles);
+    window.addEventListener("open-new-connection", handleOpenNewConnection);
+    return () => {
+      window.removeEventListener("open-files-panel", handleOpenFiles);
+      window.removeEventListener("open-new-connection", handleOpenNewConnection);
+    };
   }, []);
 
   const searchResults = useMemo(() => {
@@ -361,7 +388,12 @@ export function AppLayout() {
                 order={1}
               >
                 <div className="h-full bg-[var(--surface)] border-r border-[var(--border)]">
-                  {showExplorer && <DatabaseExplorer />}
+                  {/* DatabaseExplorer stays mounted while the sidebar is visible
+                      (even when Files is the active panel) — keeps its tree state
+                      (expanded nodes, selection) intact across sidebar switches. */}
+                  <div className={showExplorer ? "h-full" : "hidden"}>
+                    <DatabaseExplorer isAddConnectionDialogOpen={showAddConnectionDialog} />
+                  </div>
                   {showFiles && <FilesExplorer />}
                 </div>
               </Panel>
@@ -435,6 +467,11 @@ export function AppLayout() {
           )}
         </div>
       </div>
+
+      {/* Add Connection dialog — owned here, not in DatabaseExplorer (#84). */}
+      {showAddConnectionDialog && (
+        <ConnectionDialog onClose={() => setShowAddConnectionDialog(false)} />
+      )}
     </div>
   );
 }
