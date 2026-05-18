@@ -164,11 +164,10 @@ export function AppLayout() {
           
           <button
             onClick={openHelp}
-            className="flex items-center gap-2 px-3 py-1.5 rounded text-sm hover:bg-[var(--border)] transition-colors group relative"
+            className="flex items-center gap-2 px-3 py-1.5 rounded text-sm hover:bg-[var(--border)] transition-colors group"
             title="Help & Documentation (Ctrl+H)"
           >
             <HelpCircle className="w-4 h-4 group-hover:text-[var(--color-accent)]" />
-            <span className="absolute top-1 right-1 w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse opacity-0 group-hover:opacity-100 transition-opacity" />
           </button>
 
           <button
