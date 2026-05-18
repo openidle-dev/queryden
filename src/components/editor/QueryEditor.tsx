@@ -7,7 +7,11 @@ import { useConnections } from "../../contexts/useConnections";
 import { useSettings } from "../../store/settingsStore";
 import { useLocalHistory } from "../../store/localHistoryStore";
 import { format } from "sql-formatter";
-import { detectSchemaDotContext, detectAliasDotContext } from "./completionContext";
+import {
+  detectSchemaDotContext,
+  detectAliasDotContext,
+  matchesQualifiedOrBareName,
+} from "./completionContext";
 
 // Global tracking to prevent duplicate provider registration across component mounts
 let sqlProviderDisposable: any = null;
@@ -944,17 +948,19 @@ const isInJoinContext = /(\b|^)(JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|INNER\s+JOIN|CROSS
             let contextSuggestions = [...cachedSuggestions];
 
             // Filter suggestions based on current word prefix for performance
-            // This significantly reduces the number of suggestions shown when typing
+            // This significantly reduces the number of suggestions shown when typing.
+            // Issue #97: tables/views carry schema-qualified labels (e.g. `app.users`), so a
+            // strict `startsWith` on the qualified label hides them when the user types the bare
+            // table name. `matchesQualifiedOrBareName` accepts either prefix.
             if (currentWordLength > 0) {
               contextSuggestions = contextSuggestions.filter(s => {
                 const label = s.label.toLowerCase();
                 // Always include keywords and functions (they're important)
-                if (s.kind === monaco.languages.CompletionItemKind.Keyword || 
+                if (s.kind === monaco.languages.CompletionItemKind.Keyword ||
                     s.kind === monaco.languages.CompletionItemKind.Function) {
                   return label.startsWith(currentWord) || label.includes(currentWord);
                 }
-                // For tables, views, columns - prefix match is faster
-                return label.startsWith(currentWord);
+                return matchesQualifiedOrBareName(label, currentWord);
               });
             }
 

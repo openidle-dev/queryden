@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { detectSchemaDotContext, detectAliasDotContext } from "./completionContext";
+import {
+  detectSchemaDotContext,
+  detectAliasDotContext,
+  matchesQualifiedOrBareName,
+} from "./completionContext";
 
 const COLUMNS = [
   { table_name: "app.users", column_name: "id" },
@@ -237,5 +241,53 @@ describe("detectAliasDotContext — alias resolution", () => {
     const m = detectAliasDotContext(cursorLine, cursorLine.length + 1, query, COLUMNS);
     expect(m!.tableName).toBe("app.users");
     expect(m!.columnNames).toEqual(["id", "email", "created_at"]);
+  });
+});
+
+// Issue #97: typing a bare table name (e.g. `users`) should still surface a schema-qualified
+// suggestion (`app.users`). https://github.com/openidle-dev/queryden/issues/97
+describe("matchesQualifiedOrBareName — schema-qualified label prefilter", () => {
+  it("returns true when the label starts with the typed word (qualified prefix path)", () => {
+    expect(matchesQualifiedOrBareName("app.users", "app")).toBe(true);
+    expect(matchesQualifiedOrBareName("app.users", "app.us")).toBe(true);
+  });
+
+  it("returns true when the post-dot bare name starts with the typed word (issue #97)", () => {
+    expect(matchesQualifiedOrBareName("app.users", "users")).toBe(true);
+    expect(matchesQualifiedOrBareName("app.users", "use")).toBe(true);
+    expect(matchesQualifiedOrBareName("audit.access_log", "access")).toBe(true);
+  });
+
+  it("is case-insensitive on both sides", () => {
+    expect(matchesQualifiedOrBareName("App.Users", "USERS")).toBe(true);
+    expect(matchesQualifiedOrBareName("APP.USERS", "users")).toBe(true);
+    expect(matchesQualifiedOrBareName("app.Users", "APP")).toBe(true);
+  });
+
+  it("returns false when neither the label nor its post-dot bare name starts with the word", () => {
+    expect(matchesQualifiedOrBareName("app.users", "products")).toBe(false);
+    expect(matchesQualifiedOrBareName("app.users", "xyz")).toBe(false);
+  });
+
+  it("returns false when the word only appears mid-bare-name (still prefix-match, not substring)", () => {
+    // We deliberately keep this as a prefix match — substring matching would flood the dropdown.
+    expect(matchesQualifiedOrBareName("app.users", "ser")).toBe(false);
+  });
+
+  it("handles bare (non-qualified) labels — required for public-schema tables", () => {
+    expect(matchesQualifiedOrBareName("users", "use")).toBe(true);
+    expect(matchesQualifiedOrBareName("users", "products")).toBe(false);
+  });
+
+  it("returns true for the empty word (no filtering applied)", () => {
+    expect(matchesQualifiedOrBareName("app.users", "")).toBe(true);
+    expect(matchesQualifiedOrBareName("anything", "")).toBe(true);
+  });
+
+  it("only considers the FIRST dot — multi-segment labels match against the suffix after the first dot", () => {
+    // Three-segment references (db.schema.table) aren't a current code path, but documenting:
+    // the suffix after the first dot is `schema.table`, which `.startsWith("schema")` matches.
+    expect(matchesQualifiedOrBareName("db.schema.table", "schema")).toBe(true);
+    expect(matchesQualifiedOrBareName("db.schema.table", "table")).toBe(false);
   });
 });

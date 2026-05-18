@@ -168,3 +168,20 @@ export function detectAliasDotContext(
     rangeStartColumn: base.rangeStartColumn,
   };
 }
+
+// Issue #97: when a suggestion label is schema-qualified (e.g. `app.users`) and the user types a
+// bare table name (e.g. `users`), a strict `label.startsWith(currentWord)` pre-filter rejects it
+// before Monaco's matcher ever sees the suggestion. This predicate accepts both the qualified
+// prefix (`app` → `app.users`) and the post-dot bare-name prefix (`users` → `app.users`) so
+// schema-qualified entries survive the pre-filter. Case-insensitive on both sides.
+export function matchesQualifiedOrBareName(
+  label: string,
+  currentWord: string,
+): boolean {
+  if (!currentWord) return true;
+  const labelLower = label.toLowerCase();
+  const wordLower = currentWord.toLowerCase();
+  if (labelLower.startsWith(wordLower)) return true;
+  const dotIdx = labelLower.indexOf(".");
+  return dotIdx >= 0 && labelLower.substring(dotIdx + 1).startsWith(wordLower);
+}
