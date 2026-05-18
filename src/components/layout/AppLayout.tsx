@@ -36,6 +36,17 @@ export function AppLayout() {
     return () => window.removeEventListener("status-bar-update", handleStatusUpdate);
   }, []);
 
+  // EmptyStateLauncher (#84) dispatches this to surface the saved-queries
+  // browser when there's nothing else for the user to do yet.
+  useEffect(() => {
+    const handleOpenFiles = () => {
+      setShowFiles(true);
+      setShowExplorer(false);
+    };
+    window.addEventListener("open-files-panel", handleOpenFiles);
+    return () => window.removeEventListener("open-files-panel", handleOpenFiles);
+  }, []);
+
   const searchResults = useMemo(() => {
     if (!searchQuery || !schemaItems) return [];
     const query = searchQuery.toLowerCase();

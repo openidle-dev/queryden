@@ -171,6 +171,14 @@ export function DatabaseExplorer() {
     }
   }, [activeConnection, selectedDatabase]);
 
+  // EmptyStateLauncher (#84) dispatches this to open the New Connection
+  // dialog from outside the sidebar.
+  useEffect(() => {
+    const handleOpenNewConnection = () => setShowAddDialog(true);
+    window.addEventListener("open-new-connection", handleOpenNewConnection);
+    return () => window.removeEventListener("open-new-connection", handleOpenNewConnection);
+  }, []);
+
   useEffect(() => {
     const buildConnNode = (conn: DatabaseConnection): TreeNode => {
       const isConnected = activeConnection?.id === conn.id;
