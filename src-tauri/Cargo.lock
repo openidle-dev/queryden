@@ -3735,7 +3735,7 @@ dependencies = [
 
 [[package]]
 name = "queryden"
-version = "1.0.16"
+version = "1.0.17"
 dependencies = [
  "aes-gcm",
  "argon2",

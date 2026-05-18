@@ -1,6 +1,6 @@
 {
   "name": "queryden",
-  "version": "1.0.16",
+  "version": "1.0.17",
   "type": "module",
   "description": "A modern multi-database manager built with Tauri, React, and TypeScript",
   "repository": {
