@@ -4,6 +4,9 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 
 ## [Unreleased]
 
+### Fixed
+- **[#97](https://github.com/openidle-dev/queryden/issues/97) — Typing a bare table name (e.g. `users`) now surfaces schema-qualified suggestions (e.g. `app.users`) in the SQL editor.** Latent since the initial commit but only newly visible after v1.0.18's CSP fix made Monaco's completion widget render correctly in release builds. The pre-Monaco filter in `QueryEditor.tsx` rejected anything whose lowercased label didn't pass `startsWith(currentWord)`. Table/view labels are schema-qualified (`app.users`), so typing `users` failed the check and the suggestion never reached Monaco's scorer. Replaced the predicate with a new `matchesQualifiedOrBareName` helper in `completionContext.ts` that accepts either the qualified prefix (`app` → `app.users`) or the post-dot bare-name prefix (`users` → `app.users`). Bare labels (public-schema tables, columns) keep their existing `startsWith` behavior. 8 new tests cover qualified-prefix, bare-name, case-insensitivity, prefix-only (no substring flooding), and the empty-word no-op.
+
 ### Changed
 - **chore: remove inert Monaco-scoped CSS overrides from `globals.css`.** PR [#92](https://github.com/openidle-dev/queryden/pull/92) added a `.monaco-editor` `box-sizing: content-box` block and a form-element `revert` block on the theory that Tailwind v4 Preflight was corrupting Monaco's layout. That diagnosis turned out to be wrong (real cause was Tauri's CSP nonce — fixed in v1.0.18). The overrides were inert in production and the `revert` rules on form elements were arguably making things worse by reverting Monaco's intentional invisibility styles to UA defaults. Deleted — no replacement needed.
 
