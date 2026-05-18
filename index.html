@@ -1,16 +1,19 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" style="background:#0b0f17">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/img/icon.png" />
+    <!-- Preload the splash logo so the splash never renders text-only
+         while the image fetch is in flight (would look like a flash). -->
+    <link rel="preload" as="image" href="/img/icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>QueryDen</title>
     <style>
-      /* Dark-only by design — the app boots into dark by default and the
-         native window backgroundColor (see tauri.conf.json) is already #0b0f17.
-         No prefers-color-scheme rule on purpose: that previously caused a
-         light/dark mismatch flash when the OS reported light but React mounted
-         in dark. */
+      /* Dark-only by design — the native window backgroundColor in
+         tauri.conf.json is already #0b0f17. The inline style on <html> is
+         belt-and-suspenders for the brief window between HTML parse and the
+         <style> block applying (some browsers default body to white during
+         that gap and would flash). */
       html,
       body {
         margin: 0;
@@ -25,6 +28,10 @@
       #root {
         height: 100%;
       }
+      /* Boot splash. NO fade-in animation on purpose — a fade-in reads as
+         a "weird flash" to the user because the splash content visibly
+         materialises against the dark canvas. The splash should be present
+         the instant CSS applies and only animate when leaving. */
       .qd-splash {
         position: fixed;
         inset: 0;
@@ -43,7 +50,6 @@
         transition: opacity 320ms ease-out;
         pointer-events: none;
         opacity: 1;
-        animation: qd-splash-in 220ms ease-out both;
       }
       .qd-splash--fade {
         opacity: 0;
@@ -81,14 +87,6 @@
         text-transform: uppercase;
         color: #475569;
       }
-      @keyframes qd-splash-in {
-        from {
-          opacity: 0;
-        }
-        to {
-          opacity: 1;
-        }
-      }
       @keyframes qd-float {
         0%, 100% {
           transform: translateY(0);
@@ -100,7 +98,7 @@
     </style>
   </head>
 
-  <body>
+  <body style="background:#0b0f17">
     <div id="root"></div>
     <div id="portal"></div>
     <div id="qd-splash" class="qd-splash" aria-hidden="true">
