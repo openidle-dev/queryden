@@ -134,12 +134,23 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
       if (error || successMessage) setActiveTab("messages");
       else if (results.length > 0 || (multiResults && multiResults.length > 0)) setActiveTab("result");
     }
-    
+
     // Reset local sorting when actual data content changes (likely new query)
     setSortCol(null);
     setSortDir(null);
     setSelectedMultiResultIdx(0);
   }, [error, successMessage, results, multiResults, suppressTabSwitch]);
+
+  // If the active tab loses its underlying content (e.g. user clears history,
+  // or saved-then-discarded a row set), fall back to Messages so we never sit
+  // on a tab whose chrome we just hid. #95
+  useEffect(() => {
+    if (activeTab === "result" && results.length === 0 && (!multiResults || multiResults.length === 0)) {
+      setActiveTab("messages");
+    } else if (activeTab === "history" && history.length === 0) {
+      setActiveTab("messages");
+    }
+  }, [activeTab, results, multiResults, history]);
 
   // Get current multi-result data for display
   const currentMultiResult = multiResults && multiResults.length > 0 ? multiResults[selectedMultiResultIdx] : null;
@@ -392,17 +403,24 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
     setContextMenu(null);
   };
 
+  const hasResults = results.length > 0 || (multiResults && multiResults.length > 0);
+  const hasHistory = history.length > 0;
+
   const TabHeader = () => (
     <div className="h-9 flex items-center gap-2 px-3 bg-[var(--surface)] border-b border-[var(--border)] text-xs shrink-0 select-none">
       <button onClick={() => setActiveTab("messages")} className={`h-full flex items-center px-1 border-b transition-all ${activeTab === "messages" ? (error ? "text-red-400 border-red-400" : "text-[var(--color-accent)] border-[var(--color-accent)]") : "text-[var(--text-secondary)] border-transparent hover:text-[var(--text-primary)]"}`}>
         <AlertCircle className="w-3.5 h-3.5 mr-1" /> Messages
       </button>
-      <button onClick={() => setActiveTab("result")} className={`h-full flex items-center px-1 border-b transition-all ${activeTab === "result" ? "text-[var(--color-accent)] border-[var(--color-accent)]" : "text-[var(--text-secondary)] border-transparent hover:text-[var(--text-primary)]"}`}>
-        <Table2 className="w-3.5 h-3.5 mr-1" /> Results {results.length > 0 && <span className="ml-1 opacity-60">({results.length})</span>}
-      </button>
-      <button onClick={() => setActiveTab("history")} className={`h-full flex items-center px-1 border-b transition-all ${activeTab === "history" ? "text-[var(--color-accent)] border-[var(--color-accent)]" : "text-[var(--text-secondary)] border-transparent hover:text-[var(--text-primary)]"}`}>
-        <HistoryIcon className="w-3.5 h-3.5 mr-1" /> History
-      </button>
+      {hasResults && (
+        <button onClick={() => setActiveTab("result")} className={`h-full flex items-center px-1 border-b transition-all ${activeTab === "result" ? "text-[var(--color-accent)] border-[var(--color-accent)]" : "text-[var(--text-secondary)] border-transparent hover:text-[var(--text-primary)]"}`}>
+          <Table2 className="w-3.5 h-3.5 mr-1" /> Results {results.length > 0 && <span className="ml-1 opacity-60">({results.length})</span>}
+        </button>
+      )}
+      {hasHistory && (
+        <button onClick={() => setActiveTab("history")} className={`h-full flex items-center px-1 border-b transition-all ${activeTab === "history" ? "text-[var(--color-accent)] border-[var(--color-accent)]" : "text-[var(--text-secondary)] border-transparent hover:text-[var(--text-primary)]"}`}>
+          <HistoryIcon className="w-3.5 h-3.5 mr-1" /> History
+        </button>
+      )}
       {optimizerData && (
         <button onClick={() => setActiveTab("optimizer")} className={`h-full flex items-center px-1 border-b transition-all ${activeTab === "optimizer" ? "text-emerald-400 border-emerald-400" : "text-[var(--text-secondary)] border-transparent hover:text-emerald-400"}`}>
           <Zap className="w-3.5 h-3.5 mr-1" /> Optimizer
