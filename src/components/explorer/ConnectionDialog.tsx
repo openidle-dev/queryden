@@ -7,6 +7,7 @@ import { useConfirmDialog } from "../ui/ConfirmDialog";
 import { PROVIDERS } from "../../config/providers";
 import { getDefaultDatabaseName } from "../../config/app";
 import { filterProviders, getComingSoonCount } from "./filterProviders";
+import { invokeCmd } from "../../lib/ipc";
 
 export function ConnectionDialog({ connection, onClose }: { connection?: DatabaseConnection; onClose: () => void }) {
   const { addConnection, updateConnection, removeConnection, vaultCredentials } = useConnections();
@@ -65,93 +66,117 @@ export function ConnectionDialog({ connection, onClose }: { connection?: Databas
     setError(null);
     setTestResult(null);
 
-    let connectionString = "";
-
     const supportedDrivers = ["sqlite", "postgres", "supabase", "cockroach", "mysql", "mariadb"];
     if (!supportedDrivers.includes(formData.type)) {
       setIsConnecting(false);
-      return { 
-        success: false, 
-        message: `The '${PROVIDERS.find(p => p.id === formData.type)?.name || formData.type}' provider is either coming soon or not supported by the underlying Tauri driver.` 
+      return {
+        success: false,
+        message: `The '${PROVIDERS.find(p => p.id === formData.type)?.name || formData.type}' provider is either coming soon or not supported by the underlying Tauri driver.`
       };
     }
 
-    if (formData.type === "sqlite") {
-      connectionString = `sqlite:${formData.filepath || getDefaultDatabaseName()}`;
-    } else if (["postgres", "supabase", "cockroach"].includes(formData.type)) {
-      const host = formData.host || "localhost";
-      const port = formData.port || (formData.type === "cockroach" ? "26257" : "5432");
-      const database = formData.database || (formData.type === "cockroach" ? "defaultdb" : "postgres");
-      
-      let user = formData.username || "postgres";
-      let pass = formData.password || "";
-
-      if (formData.vaultCredentialId) {
-        const cred = vaultCredentials.find(c => c.id === formData.vaultCredentialId);
-        if (cred) {
-          user = cred.username || user;
-          pass = cred.password || pass;
-        }
-      }
-
-      // URL encode credentials to handle special characters
-      const encodedUser = encodeURIComponent(user);
-      const encodedPass = encodeURIComponent(pass);
-
-      connectionString = `postgres://${encodedUser}:${encodedPass}@${host}:${port}/${database}`;
-    } else if (["mysql", "mariadb"].includes(formData.type)) {
-      const host = formData.host || "localhost";
-      const port = formData.port || "3306";
-      const database = formData.database || "mysql";
-      
-      let user = formData.username || "root";
-      let pass = formData.password || "";
-
-      if (formData.vaultCredentialId) {
-        const cred = vaultCredentials.find(c => c.id === formData.vaultCredentialId);
-        if (cred) {
-          user = cred.username || user;
-          pass = cred.password || pass;
-        }
-      }
-
-      // URL encode credentials to handle special characters
-      const encodedUser = encodeURIComponent(user);
-      const encodedPass = encodeURIComponent(pass);
-
-      connectionString = `mysql://${encodedUser}:${encodedPass}@${host}:${port}/${database}`;
-    }
-
     const isTauri = typeof window !== 'undefined' && (
-      !!(window as any).__TAURI_INTERNALS__ || 
+      !!(window as any).__TAURI_INTERNALS__ ||
       !!(window as any).__TAURI__
     );
     if (!isTauri) {
       setIsConnecting(false);
-      return { 
-        success: false, 
-        message: "Not running in Tauri framework. Connection testing only works in the desktop app." 
+      return {
+        success: false,
+        message: "Not running in Tauri framework. Connection testing only works in the desktop app."
       };
     }
 
+    // Resolve credentials (vault override takes precedence over inline fields).
+    const defaultUser = ["mysql", "mariadb"].includes(formData.type) ? "root" : "postgres";
+    let user = formData.username || defaultUser;
+    let pass = formData.password || "";
+    if (formData.vaultCredentialId) {
+      const cred = vaultCredentials.find(c => c.id === formData.vaultCredentialId);
+      if (cred) {
+        user = cred.username || user;
+        pass = cred.password || pass;
+      }
+    }
+    const encodedUser = encodeURIComponent(user);
+    const encodedPass = encodeURIComponent(pass);
+
+    // Default ports must match the per-engine fallbacks the connect path uses.
+    const defaultPort = formData.type === "cockroach" ? 26257
+      : ["mysql", "mariadb"].includes(formData.type) ? 3306
+      : 5432;
+    let actualHost = formData.host || "localhost";
+    let actualPort = parseInt(formData.port, 10) || defaultPort;
+    const database = formData.database
+      || (formData.type === "cockroach" ? "defaultdb"
+        : ["mysql", "mariadb"].includes(formData.type) ? "mysql"
+        : "postgres");
+
+    // #46: If SSH tunneling is enabled, the target DB host is unreachable from
+    // this machine — only the SSH gateway is. Mirror the production connect
+    // path (ConnectionContext.connectToDatabase) and open a tunnel, then
+    // connect to 127.0.0.1:<local_port>. Tear the tunnel down in `finally`
+    // so a successful test doesn't leak a long-lived tunnel.
+    const useSshTunnel =
+      formData.type !== "sqlite" &&
+      formData.sshEnabled &&
+      !!formData.sshHost &&
+      !!formData.sshUsername;
+    const testTunnelId = useSshTunnel ? `__test_${crypto.randomUUID()}` : null;
+
     try {
+      if (useSshTunnel && testTunnelId) {
+        try {
+          const tunnelResult = await invokeCmd("create_ssh_tunnel", {
+            connectionId: testTunnelId,
+            sshHost: formData.sshHost,
+            sshPort: parseInt(formData.sshPort, 10) || 22,
+            sshUsername: formData.sshUsername,
+            sshPassword: formData.sshAuthMethod === "password" ? (formData.sshPassword || null) : null,
+            sshKeyPath: formData.sshAuthMethod === "key" ? (formData.sshKeyPath || null) : null,
+            sshKeyPassphrase: formData.sshAuthMethod === "key" ? (formData.sshKeyPassphrase || null) : null,
+            remoteHost: actualHost,
+            remotePort: actualPort,
+          });
+          actualHost = "127.0.0.1";
+          actualPort = tunnelResult.local_port;
+        } catch (err: any) {
+          setIsConnecting(false);
+          return { success: false, message: `SSH tunnel failed: ${err?.message || err}` };
+        }
+      }
+
+      let connectionString = "";
+      if (formData.type === "sqlite") {
+        connectionString = `sqlite:${formData.filepath || getDefaultDatabaseName()}`;
+      } else if (["postgres", "supabase", "cockroach"].includes(formData.type)) {
+        connectionString = `postgres://${encodedUser}:${encodedPass}@${actualHost}:${actualPort}/${database}`;
+      } else if (["mysql", "mariadb"].includes(formData.type)) {
+        connectionString = `mysql://${encodedUser}:${encodedPass}@${actualHost}:${actualPort}/${database}`;
+      }
+
       const Database = await import("@tauri-apps/plugin-sql");
       if (!Database.default) {
-        setIsConnecting(false);
         return { success: false, message: "SQL plugin not available. Please run the app in Tauri." };
       }
 
       const db = await Database.default.load(connectionString);
       await db.select("SELECT 1");
       await db.close();
-      
-      setIsConnecting(false);
       return { success: true, message: "Connection successful!" };
     } catch (err: any) {
       console.error("Connection test error:", err);
       const errorMsg = err.message || err.toString() || "Unknown error occurred";
-      setIsConnecting(false);
       return { success: false, message: errorMsg };
+    } finally {
+      if (testTunnelId) {
+        try {
+          await invokeCmd("close_ssh_tunnel", { connectionId: testTunnelId });
+        } catch (err) {
+          console.warn("Failed to close test SSH tunnel:", err);
+        }
+      }
+      setIsConnecting(false);
     }
   };
 
