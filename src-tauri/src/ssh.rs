@@ -275,6 +275,59 @@ pub fn get_tunnel_status(connection_id: String) -> Result<Option<TunnelInfo>, St
     }
 }
 
+/// Test SSH connectivity in isolation — TCP connect, handshake, authenticate,
+/// and disconnect. No port forward, no DB connect. Used by the connection
+/// dialog's "Test SSH tunnel" button so users can distinguish SSH auth
+/// failures from DB connection failures.
+#[tauri::command]
+pub fn test_ssh_connection(
+    ssh_host: String,
+    ssh_port: u16,
+    ssh_username: String,
+    ssh_password: Option<String>,
+    ssh_key_path: Option<String>,
+    ssh_key_passphrase: Option<String>,
+) -> Result<(), String> {
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    let tcp = TcpStream::connect_timeout(
+        &format!("{}:{}", ssh_host, ssh_port)
+            .parse()
+            .map_err(|e| format!("Invalid SSH host/port: {}", e))?,
+        Duration::from_secs(10),
+    )
+    .map_err(|e| format!("Failed to connect to SSH server: {}", e))?;
+    tcp.set_read_timeout(Some(Duration::from_secs(15)))
+        .map_err(|e| e.to_string())?;
+
+    let mut sess = ssh2::Session::new().map_err(|e| e.to_string())?;
+    sess.set_tcp_stream(tcp);
+    sess.handshake()
+        .map_err(|e| format!("SSH handshake failed: {}", e))?;
+
+    if let Some(key_path) = ssh_key_path.as_ref().filter(|p| !p.is_empty()) {
+        sess.userauth_pubkey_file(
+            &ssh_username,
+            Some(std::path::Path::new(key_path)),
+            std::path::Path::new(key_path),
+            ssh_key_passphrase.as_deref(),
+        )
+        .map_err(|e| format!("SSH key authentication failed: {}", e))?;
+    } else if let Some(password) = ssh_password.as_ref().filter(|p| !p.is_empty()) {
+        sess.userauth_password(&ssh_username, password)
+            .map_err(|e| format!("SSH password authentication failed: {}", e))?;
+    } else {
+        return Err("No SSH authentication credentials provided".to_string());
+    }
+
+    if !sess.authenticated() {
+        return Err("SSH authentication failed".to_string());
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 pub fn close_all_tunnels() -> Result<(), String> {
     let tunnels = get_tunnels();

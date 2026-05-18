@@ -235,6 +235,17 @@ export interface IpcCommands {
   close_ssh_tunnel: { args: { connectionId: string }; result: boolean };
   get_tunnel_status: { args: { connectionId: string }; result: TunnelInfoDto | null };
   close_all_tunnels: { args: void; result: void };
+  test_ssh_connection: {
+    args: {
+      sshHost: string;
+      sshPort: number;
+      sshUsername: string;
+      sshPassword: string | null;
+      sshKeyPath: string | null;
+      sshKeyPassphrase: string | null;
+    };
+    result: void;
+  };
 
   // cli
   cli_check_tools: { args: void; result: CliToolInfoDto[] };
