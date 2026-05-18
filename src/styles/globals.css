@@ -98,9 +98,33 @@ html, body, #root {
   animation: shimmer 1.5s infinite linear;
 }
 
-/* Smooth Transitions */
-* {
-  transition: background-color 0.2s ease, border-color 0.2s ease;
+/* Monaco editor + Tailwind v4 Preflight defense.
+   Tailwind v4's Preflight applies `box-sizing: border-box`, `margin: 0`,
+   `padding: 0`, `border: 0 solid` to every element, plus `font: inherit`,
+   `background-color: transparent`, `opacity: 1` to form elements. Monaco's
+   layout calculations were authored against browser defaults and break in
+   two ways: (1) `box-sizing: border-box` corrupts `.view-lines` / cursor
+   positioning so text renders offset from the gutter; (2) the form-element
+   reset makes Monaco's hidden `<textarea class="inputarea">` (used for
+   keyboard/IME capture) visible because Monaco hides it via UA-default
+   opacity behavior rather than explicit inline styles. Restore browser
+   defaults inside the Monaco subtree. (#90) */
+.monaco-editor,
+.monaco-editor *,
+.monaco-editor *::before,
+.monaco-editor *::after {
+  box-sizing: content-box;
+}
+
+.monaco-editor input,
+.monaco-editor textarea {
+  font: revert;
+  background-color: revert;
+  opacity: revert;
+}
+
+.monaco-editor textarea {
+  resize: none;
 }
 
 /* Custom Scrollbar for a cleaner look */
