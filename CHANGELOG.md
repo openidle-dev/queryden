@@ -4,6 +4,9 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 
 ## [Unreleased]
 
+### Changed
+- **chore: remove inert Monaco-scoped CSS overrides from `globals.css`.** PR [#92](https://github.com/openidle-dev/queryden/pull/92) added a `.monaco-editor` `box-sizing: content-box` block and a form-element `revert` block on the theory that Tailwind v4 Preflight was corrupting Monaco's layout. That diagnosis turned out to be wrong (real cause was Tauri's CSP nonce — fixed in v1.0.18). The overrides were inert in production and the `revert` rules on form elements were arguably making things worse by reverting Monaco's intentional invisibility styles to UA defaults. Deleted — no replacement needed.
+
 ## [1.0.18] - 2026-05-18
 
 Hotfix on top of v1.0.17. The Monaco editor fix shipped in v1.0.17 ([#90](https://github.com/openidle-dev/queryden/issues/90)) didn't actually fix anything — the diagnosis was wrong. After enabling DevTools in a local release build, the real root cause turned out to be **Tauri 2's auto-injected CSP nonce on `style-src`**, which silently disables `'unsafe-inline'` and blocks every inline `style=""` attribute Monaco emits to position its DOM. Fixed by opting `style-src` out of Tauri's nonce augmentation via `dangerousDisableAssetCspModification`. Also dropped the always-visible Results and History tab chrome when those panels have no content ([#95](https://github.com/openidle-dev/queryden/issues/95)).
