@@ -55,6 +55,15 @@ export interface StoredConnectionDto {
   ssh_password?: string | null;
   ssh_key_path?: string | null;
   ssh_key_passphrase?: string | null;
+  folder_id?: string | null;
+}
+
+/** Mirrors `storage.rs::Folder`. */
+export interface FolderDto {
+  id: string;
+  name: string;
+  parent_id?: string | null;
+  order: number;
 }
 
 /** Mirrors `storage.rs::VaultCredential`. */
@@ -216,6 +225,10 @@ export interface IpcCommands {
     result: VaultCredentialDto[];
   };
   get_app_data_path: { args: void; result: string };
+
+  // storage — folders (connection grouping, #104)
+  save_folders: { args: { folders: FolderDto[] }; result: void };
+  load_folders: { args: void; result: FolderDto[] };
 
   // ssh
   create_ssh_tunnel: {

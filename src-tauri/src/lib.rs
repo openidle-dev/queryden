@@ -66,6 +66,8 @@ pub fn run() {
             storage::get_app_data_path,
             storage::save_vault_credentials,
             storage::load_vault_credentials,
+            storage::save_folders,
+            storage::load_folders,
             sysinfo::get_system_info,
             get_build_info,
             cli::cli_check_tools,
