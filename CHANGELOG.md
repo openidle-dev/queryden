@@ -4,6 +4,9 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 
 ## [Unreleased]
 
+### Fixed
+- **[#112](https://github.com/openidle-dev/queryden/issues/112) — macOS dropped from `latest.json` / `beta.json` — auto-updates broken on Mac.** Pre-existing bug in `release.yml` (since the very first release that shipped an updater manifest) that PR #106 propagated into `beta.yml` when copying the manifest-generation block. The glob looked for `*aarch64.app.tar.gz`, but Tauri's macOS update bundle is named `QueryDen.app.tar.gz` — no architecture in the filename — so `MAC_TGZ` stayed empty and the platform was silently dropped from both manifests. Consequence: macOS users on stable never got an in-app update offer (had to manually re-download), and macOS users on the new beta channel saw nothing at all. Discovered while sanity-checking the first beta build for #105 dogfooding. Fix: drop the arch filter to `*.app.tar.gz` (we only build aarch64 today, so the wildcard is safe). Applied in both workflows. Takes effect the next time each manifest is regenerated — the next stable tag push and the next beta workflow run, respectively.
+
 ### Added
 - **[#110](https://github.com/openidle-dev/queryden/issues/110) — Show/hide eye toggle on password inputs.** Connection dialog (main DB password, SSH password, SSH key passphrase) and vault credential dialog (in Settings → Credential Vault) now wrap their password fields in a reusable `<PasswordInput>` component (`src/components/ui/PasswordInput.tsx`) that overlays an Eye/EyeOff lucide button on the right. Click toggles the input between `type="password"` and `type="text"`. Visibility state is per-instance and not persisted across renders — every dialog re-open starts hidden. Toggle is in normal tab order so keyboard users can reach it. AI API key field deliberately not converted: it has a left-side icon that would clash with the right-side toggle without further refactoring; can revisit if asked.
 
