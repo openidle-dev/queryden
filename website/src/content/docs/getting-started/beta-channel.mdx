@@ -21,7 +21,8 @@ The active channel is shown in **Help → About** next to the version and build 
 ## What you're opting into
 
 - Beta builds are signed with the same key as stable, and the updater verifies the signature before installing. They are not unsigned dev builds.
-- Versions follow the form `1.0.18-beta.<timestamp>+<sha>`. They sort higher than the matching stable version, so the updater will always offer the latest beta over your current stable.
+- Versions follow the form `<next-patch>-beta.<timestamp>+<sha>` — e.g. while stable is on `1.0.18`, betas ship as `1.0.19-beta.20260520...`. The next-patch base is deliberate: SemVer says a pre-release suffix sorts *lower* than the same normal version (`1.0.18-beta.X < 1.0.18`), so if we tagged betas with the current stable version, opted-in users would never receive them. Pushing the base forward keeps `1.0.18 < 1.0.19-beta.X < 1.0.19`.
+- Once you're on the beta channel, the updater only checks `beta.json`. A new stable release does **not** automatically pull you back — you'll keep getting betas until you either receive a newer beta or manually revert (see below).
 - Beta builds can contain bugs that **never ship to stable**. We may build a beta, get feedback, and abandon the change.
 - There's no published changelog for the beta channel today. The commit log on [`main`](https://github.com/openidle-dev/queryden/commits/main) is the source of truth for what's in a beta build.
 

@@ -12,8 +12,11 @@ on:
         required: false
         default: "main"
 
+# Default to read-only at the workflow level; the build job inherits this and
+# only the `publish` job opts in to `contents: write` (it deletes/recreates the
+# `beta-latest` rolling tag and publishes the release).
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -35,6 +38,9 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.inputs.ref || 'main' }}
+          # Artifact-only job — no need to leave a credentialed git remote
+          # lying around inside the runner.
+          persist-credentials: false
 
       - uses: actions/setup-node@v5
         with:
@@ -70,13 +76,26 @@ jobs:
           BASE=$(jq -r .version package.json)
           TS=$(date -u +%Y%m%d%H%M%S)
           SHA=$(git rev-parse --short HEAD)
-          # Semver-compliant pre-release identifier. Sorts higher than the
-          # same stable version (1.0.18-beta.X > 1.0.18, < 1.0.19). The sha
-          # is added as build metadata so two beta builds at the same second
-          # don't collide.
-          BETA="${BASE}-beta.${TS}+${SHA}"
+          # SemVer 2.0.0: a pre-release identifier has LOWER precedence than
+          # the same normal version, so `1.0.18-beta.X` < `1.0.18`. If we
+          # tagged betas with the current stable version, beta users on
+          # stable would never receive a beta — the updater would correctly
+          # conclude they're already ahead.
+          #
+          # Strategy: bump the patch component, so betas live in the version
+          # space ABOVE the current stable. Example: while stable is 1.0.18,
+          # betas are `1.0.19-beta.<ts>+<sha>` and sort `1.0.18 < 1.0.19-beta.X
+          # < 1.0.19`. When 1.0.19 ships stable, the next batch of betas
+          # rolls to 1.0.20-beta.X.
+          #
+          # Build metadata (`+<sha>`) is informational only — SemVer says
+          # it must be ignored when determining precedence — but two beta
+          # builds at the same second would otherwise produce identical
+          # version strings, so we keep it.
+          NEXT=$(node -e "const [a,b,c]=process.argv[1].split('.').map(Number);console.log(\`\${a}.\${b}.\${c+1}\`);" "$BASE")
+          BETA="${NEXT}-beta.${TS}+${SHA}"
           echo "version=${BETA}" >> "$GITHUB_OUTPUT"
-          echo "Building beta version: ${BETA}"
+          echo "Building beta version: ${BETA} (stable base was ${BASE})"
 
       - name: Stamp beta version into manifests
         shell: bash
@@ -149,8 +168,15 @@ jobs:
     name: Publish beta-latest pre-release
     needs: build
     runs-on: ubuntu-latest
+    # Only the publish job needs write — it deletes/recreates the rolling
+    # `beta-latest` tag and creates the release. Build inherits the
+    # workflow-level read-only default.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - name: Download all artifacts
         uses: actions/download-artifact@v5
