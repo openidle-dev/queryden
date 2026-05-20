@@ -10,6 +10,7 @@ import DataEditor, {
 } from "@glideapps/glide-data-grid";
 import "@glideapps/glide-data-grid/dist/index.css";
 import { useSettings } from "../../store/settingsStore";
+import { toNormalizedBytes, detectFileType, formatFileSize, detectBinaryColumns, FileType } from "../../utils/binaryUtils";
 
 interface GridViewProps {
   data: any[];
@@ -19,6 +20,7 @@ interface GridViewProps {
   onRowDoubleClicked?: (rowIdx: number) => void;
   onHeaderClicked?: (colIdx: number) => void;
   onCellContextMenu?: (rowIdx: number, colIdx: number, event: React.MouseEvent) => void;
+  onBinaryCellClick?: (rowIdx: number, col: string, bytes: number[], fileType: FileType, base64?: string) => void;
   isProductionMode?: boolean;
   rowMarkers?: "none" | "number" | "checkbox" | "both";
   gridSelection?: any;
@@ -69,6 +71,7 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
   columns,
   onCellEdited,
   onCellContextMenu,
+  onBinaryCellClick,
   isProductionMode = false,
   rowMarkers = "both",
   gridSelection,
@@ -106,29 +109,34 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
     })), 
   [columns, columnWidths]);
 
+  // Pre-compute column metadata so getCellContent avoids per-cell string ops
+  const sensitiveColumns = useMemo(() => new Set(
+    columns.filter(col => {
+      const low = col.toLowerCase();
+      return low.includes("email") || low.includes("password") || low.includes("token") ||
+        low.includes("secret") || low.includes("key") || low.includes("phone") ||
+        low.includes("ssn") || low.includes("credit_card") || low.includes("card_number") ||
+        low.includes("cvv") || low.includes("address") || low.includes("dob") ||
+        low.includes("date_of_birth") || low.includes("social_security");
+    })
+  ), [columns]);
+
+  const dateColumns = useMemo(() => new Set(
+    columns.filter(col => {
+      const low = col.toLowerCase();
+      return low.includes("date") || low.includes("time");
+    })
+  ), [columns]);
+
+  const binaryColumns = useMemo(() => detectBinaryColumns(data, columns), [data, columns]);
+
   const getCellContent = useCallback((cell: Item): GridCell => {
     const [colIdx, rowIdx] = cell;
     const col = columns[colIdx];
     const row = data[rowIdx];
     let val = row ? row[col] : undefined;
 
-    const colLower = col.toLowerCase();
-    const isSensitive = isProductionMode && typeof val === "string" && (
-      colLower.includes("email") ||
-      colLower.includes("password") ||
-      colLower.includes("token") ||
-      colLower.includes("secret") ||
-      colLower.includes("key") ||
-      colLower.includes("phone") ||
-      colLower.includes("ssn") ||
-      colLower.includes("credit_card") ||
-      colLower.includes("card_number") ||
-      colLower.includes("cvv") ||
-      colLower.includes("address") ||
-      colLower.includes("dob") ||
-      colLower.includes("date_of_birth") ||
-      colLower.includes("social_security")
-    );
+    const isSensitive = isProductionMode && typeof val === "string" && sensitiveColumns.has(col);
 
     // A cell is editable when the grid is not read-only.
     // With editOnType=true, clicking a cell and typing opens the overlay immediately.
@@ -138,7 +146,6 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
       val = maskValue(val);
     }
 
-    const colName = columns[colIdx];
     const isNew = data[rowIdx]?._isNew;
     const isModified = data[rowIdx]?._isModified;
 
@@ -168,7 +175,7 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
     // Common text color for data rows
     themeOverride.textDark = isDark ? "#f8fafc" : "#0f172a";
 
-    if (colName.toLowerCase().includes("date") || colName.toLowerCase().includes("time")) {
+    if (dateColumns.has(col)) {
       return {
         kind: GridCellKind.Text,
         data: String(val),
@@ -213,6 +220,26 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
       } as BooleanCell;
     }
 
+    // Binary / BLOB / BYTEA — show a readable label instead of raw byte arrays
+    if (binaryColumns.has(col)) {
+      const bytes = toNormalizedBytes(val);
+      if (bytes !== null) {
+        const ft = detectFileType(bytes);
+        const size = formatFileSize(bytes.length);
+        return {
+          kind: GridCellKind.Text,
+          data: `__binary__${col}`,
+          displayData: `[${ft.label} \u00B7 ${size}]`,
+          allowOverlay: false,
+          readonly: true,
+          themeOverride: {
+            ...themeOverride,
+            textDark: isDark ? "#818cf8" : "#4f46e5",
+          }
+        };
+      }
+    }
+
     if (typeof val === "object" && val !== null) {
       const str = JSON.stringify(val);
       return {
@@ -233,7 +260,7 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
       readonly: !canEdit,
       themeOverride
     };
-  }, [data, columns, isProductionMode, isDark, isReadOnly]);
+  }, [data, columns, isProductionMode, isDark, isReadOnly, sensitiveColumns, dateColumns, binaryColumns]);
 
   return (
     <div className="w-full h-full relative overflow-hidden bg-[var(--background)]">
@@ -256,10 +283,16 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
             onCellContextMenu(rowIdx, colIdx, event as unknown as React.MouseEvent);
           }
         }}
-        onCellClicked={(_cell) => {
-          // Note: double-click is handled by onCellActivated in DataEditor.
-          // With editOnType=true, typing while a cell is focused opens the overlay immediately.
-          // For row double-click to open the side panel, use onCellActivated if available.
+        onCellClicked={(cell) => {
+          if (!onBinaryCellClick) return;
+          const [colIdx, rowIdx] = cell;
+          const col = columns[colIdx];
+          const val = data[rowIdx]?.[col];
+          if (val == null || !binaryColumns.has(col)) return;
+          const bytes = toNormalizedBytes(val);
+          if (bytes !== null) {
+            onBinaryCellClick(rowIdx, col, bytes, detectFileType(bytes), typeof val === "string" ? val : undefined);
+          }
         }}
         gridSelection={gridSelection}
         onGridSelectionChange={onGridSelectionChange}

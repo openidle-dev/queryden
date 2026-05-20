@@ -1,9 +1,9 @@
-import React, { useState, useMemo, useEffect, memo, useRef } from "react";
+import React, { useState, useMemo, useEffect, memo, useRef, useDeferredValue } from "react";
 import { 
   AlertCircle, Table2, Hash, Type, Calendar, Binary, Code as CodeIcon, 
   Filter, Shield, Download, FileJson, XCircle, Search, Copy, 
   Trash2, Maximize2, Plus, RefreshCw, Zap, CheckCircle, Clock, ChevronRight, ChevronDown, X,
-  FileCode, Globe, Database, History as HistoryIcon
+  FileCode, Globe, Database, History as HistoryIcon, Image, File
 } from "lucide-react";
 import { useQueryHistory } from "../../store/queryHistoryStore";
 import { useSettings } from "../../store/settingsStore";
@@ -14,6 +14,7 @@ import { GridView, GridViewRef } from "../ui/GridView";
 import { CompactSelection } from "@glideapps/glide-data-grid";
 import "@glideapps/glide-data-grid/dist/index.css";
 import clsx from "clsx";
+import { FileType, toBlobUrl, revokeBlobUrl, formatFileSize, binaryToUtf8, isImageType, isPdfType, formatHexDump, formatHexCompact, toDataUrl } from "../../utils/binaryUtils";
 
 interface ResultsPanelProps {
   results: any[];
@@ -83,6 +84,10 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
   const [toastMessage, setToastMessage] = useState("Copied to clipboard");
   const [selectedMultiResultIdx, setSelectedMultiResultIdx] = useState<number>(0);
+  const [binaryPreview, setBinaryPreview] = useState<{
+    col: string; bytes: number[]; fileType: FileType; blobUrl: string;
+    viewMode: "preview" | "text" | "hex"; base64?: string;
+  } | null>(null);
   
   const gridRef = useRef<GridViewRef>(null);
   const columnDropdownRef = useRef<HTMLDivElement>(null);
@@ -119,13 +124,54 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
     };
   }, [showColumnDropdown, showExportDropdown]);
 
-  // Debounce column filters
+  const [debouncedColumnFilters, setDebouncedColumnFilters] = useState<Record<string, string>>({});
+
+  // Multi-result handling (support for queries returning multiple result sets)
+  const currentMultiResult = multiResults && multiResults.length > 0 ? multiResults[selectedMultiResultIdx] : null;
+  const displayResults = currentMultiResult?.rows || results;
+  const displayColumns = currentMultiResult?.columns || forcedColumns;
+
+  // Debounce filter input changes
   useEffect(() => {
-    const timer = setTimeout(() => {
-      // Logic for debounced filtering if needed
-    }, 200);
-    return () => clearTimeout(timer);
+    const handler = setTimeout(() => {
+      setDebouncedColumnFilters(columnFilters);
+    }, 300);
+    return () => clearTimeout(handler);
   }, [columnFilters]);
+
+  // Compute sorted/filtered data — uses displayResults so multi-statement
+  // and row-editing overrides are respected.
+  const _sortedResults = useMemo(() => {
+    let finalData = displayResults.length > 0 ? displayResults : results;
+    if (Object.keys(debouncedColumnFilters).length > 0) {
+      finalData = finalData.filter(row => {
+        return Object.entries(debouncedColumnFilters).every(([col, filterText]) => {
+          if (!filterText) return true;
+          const val = row[col];
+          if (val === null || val === undefined) return false;
+          return String(val).toLowerCase().includes(filterText.toLowerCase());
+        });
+      });
+    }
+    if (sortCol && sortDir) {
+      finalData = [...finalData].sort((a, b) => {
+        const va = a[sortCol];
+        const vb = b[sortCol];
+        if (va === vb) return 0;
+        if (va == null) return sortDir === "asc" ? -1 : 1;
+        if (vb == null) return sortDir === "asc" ? 1 : -1;
+        const comparison = typeof va === "number" && typeof vb === "number"
+          ? va - vb
+          : String(va).localeCompare(String(vb));
+        return sortDir === "asc" ? comparison : -comparison;
+      });
+    }
+    return finalData;
+  }, [displayResults, results, debouncedColumnFilters, sortCol, sortDir]);
+
+  // Defer grid updates so the UI stays responsive on large result sets
+  const sortedResults = useDeferredValue(_sortedResults);
+
 
   // Tab management
   useEffect(() => {
@@ -151,11 +197,6 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
       setActiveTab("messages");
     }
   }, [activeTab, results, multiResults, history]);
-
-  // Get current multi-result data for display
-  const currentMultiResult = multiResults && multiResults.length > 0 ? multiResults[selectedMultiResultIdx] : null;
-  const displayResults = currentMultiResult?.rows || results;
-  const displayColumns = currentMultiResult?.columns || forcedColumns;
 
   // Global listeners
   useEffect(() => {
@@ -199,6 +240,18 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [editingCell, onSave, results]);
 
+  // Keyboard shortcut to close binary preview on Escape
+  useEffect(() => {
+    if (!binaryPreview) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setBinaryPreview(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
+  }, [binaryPreview]);
+
   // Sync columns with results
   const columns = useMemo(() => {
     if (columnOrder.length > 0) return columnOrder;
@@ -210,41 +263,15 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
   useEffect(() => {
     if (results.length > 0) {
       const newCols = Object.keys(results[0]);
-      if (JSON.stringify(newCols) !== JSON.stringify(columnOrder)) {
+      const colsMatch = newCols.length === columnOrder.length
+        && newCols.every((c, i) => c === columnOrder[i]);
+      if (!colsMatch) {
         setColumnOrder(newCols);
       }
     } else {
       setColumnOrder([]);
     }
   }, [results]);
-
-  const sortedResults = useMemo(() => {
-    let finalData = displayResults.length > 0 ? displayResults : results;
-    // Apply column filters
-    if (Object.keys(columnFilters).length > 0) {
-      finalData = finalData.filter(row => {
-        return Object.entries(columnFilters).every(([col, filterText]) => {
-          if (!filterText) return true;
-          const val = row[col];
-          if (val === null || val === undefined) return false;
-          return String(val).toLowerCase().includes(filterText.toLowerCase());
-        });
-      });
-    }
-
-    if (!sortCol || !sortDir) return finalData;
-    return [...finalData].sort((a, b) => {
-      const va = a[sortCol];
-      const vb = b[sortCol];
-      if (va === vb) return 0;
-      if (va == null) return sortDir === "asc" ? -1 : 1;
-      if (vb == null) return sortDir === "asc" ? 1 : -1;
-      const comparison = typeof va === "number" && typeof vb === "number"
-        ? va - vb
-        : String(va).localeCompare(String(vb));
-      return sortDir === "asc" ? comparison : -comparison;
-    });
-  }, [displayResults, results, sortCol, sortDir, columnFilters]);
 
   // Selection sync & focus
   useEffect(() => {
@@ -254,6 +281,43 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
       setSelectedIndex(-1);
     }
   }, [gridSelection.current]);
+
+  useEffect(() => {
+    return () => {
+      if (binaryPreview) revokeBlobUrl(binaryPreview.blobUrl);
+    };
+  }, [binaryPreview]);
+
+  // Auto-close binary preview when new query results arrive
+  useEffect(() => {
+    setBinaryPreview(null);
+  }, [results]);
+
+  const handleBinaryCellClick = (_rowIdx: number, col: string, bytes: number[], fileType: FileType, base64?: string) => {
+    if (binaryPreview) revokeBlobUrl(binaryPreview.blobUrl);
+    const blobUrl = toBlobUrl(bytes, fileType.mime);
+    setBinaryPreview({ col, bytes, fileType, blobUrl, viewMode: "preview", base64 });
+  };
+
+  const handleBinaryDownload = async () => {
+    if (!binaryPreview) return;
+    const { col, bytes, fileType } = binaryPreview;
+    try {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const { writeFile } = await import("@tauri-apps/plugin-fs");
+      const path = await save({
+        defaultPath: `${col}.${fileType.extension}`,
+        filters: [{ name: fileType.label, extensions: [fileType.extension] }]
+      });
+      if (!path) return;
+      await writeFile(path, new Uint8Array(bytes));
+      setToastMessage("Download complete");
+      setShowCopyToast(true);
+      setTimeout(() => setShowCopyToast(false), 2000);
+    } catch (e: any) {
+      confirmDialog.dialog({ title: "Download Failed", message: e.message, type: "danger" });
+    }
+  };
 
   const saveEdit = (newValue: any, manualEdit?: { rowIdx: number; col: string; value: any }) => {
     const context = manualEdit || editingCell;
@@ -812,6 +876,146 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
         </div>
       )}
 
+      {/* Binary Preview Overlay */}
+      {binaryPreview && (() => {
+        const { col, bytes, fileType, blobUrl, viewMode, base64 } = binaryPreview;
+        const utf8 = binaryToUtf8(bytes);
+        const isImage = isImageType(fileType);
+        const isPdf = isPdfType(fileType);
+        const isText = utf8 !== null && utf8.length > 0;
+        const hexDump = formatHexDump(bytes, 4096);
+        const hexCompact = formatHexCompact(bytes, 16384);
+        const dataUrl = isImage ? toDataUrl(bytes, fileType.mime) : "";
+
+        const setView = (v: "preview" | "text" | "hex") => setBinaryPreview(prev => prev ? { ...prev, viewMode: v } : null);
+
+        return (
+          <div className="absolute inset-0 z-50 bg-black/40 flex items-center justify-end p-4 backdrop-blur-[1px]" onClick={(e) => { if (e.button === 0) setBinaryPreview(null); }} onContextMenu={(e) => e.stopPropagation()}>
+            <div className="w-[560px] h-full bg-[var(--surface)] shadow-2xl border-l border-[var(--border)] flex flex-col animate-in slide-in-from-right duration-200" onClick={e => e.stopPropagation()}>
+              <div className="p-3 border-b flex items-center gap-3 shrink-0">
+                <div className="flex items-center gap-2 min-w-0 flex-1">
+                  {isImage ? <Image className="w-4 h-4 text-indigo-400 shrink-0" /> : isPdf ? <File className="w-4 h-4 text-rose-400 shrink-0" /> : <Binary className="w-4 h-4 text-amber-400 shrink-0" />}
+                  <span className="font-bold truncate text-sm">{col}</span>
+                  <span className="text-[10px] text-[var(--text-secondary)] bg-[var(--background)] px-1.5 py-0.5 rounded shrink-0">{fileType.label}</span>
+                  <span className="text-[10px] opacity-50 shrink-0">{formatFileSize(bytes.length)}</span>
+                </div>
+                <div className="flex items-center gap-1 shrink-0 bg-[var(--background)] rounded-lg p-0.5">
+                  <button onClick={() => setView("preview")} className={`px-2 py-1 rounded-md text-[11px] font-medium transition-colors ${viewMode === "preview" ? "bg-[var(--color-accent)] text-white" : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"}`}>Preview</button>
+                  <button onClick={() => setView("text")} className={`px-2 py-1 rounded-md text-[11px] font-medium transition-colors ${viewMode === "text" ? "bg-[var(--color-accent)] text-white" : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"}`}>Text</button>
+                  <button onClick={() => setView("hex")} className={`px-2 py-1 rounded-md text-[11px] font-medium transition-colors ${viewMode === "hex" ? "bg-[var(--color-accent)] text-white" : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"}`}>Hex</button>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button onClick={handleBinaryDownload} className="px-2 py-1 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 rounded text-xs font-medium flex items-center gap-1">
+                    <Download className="w-3 h-3" /> Save
+                  </button>
+                  <button onClick={() => setBinaryPreview(null)} className="p-1 hover:bg-[var(--border)] rounded"><XCircle className="w-4 h-4" /></button>
+                </div>
+              </div>
+              <div className="flex-1 overflow-auto p-4">
+                {viewMode === "hex" ? (
+                  <div className="space-y-4">
+                    <div>
+                      <div className="text-[10px] uppercase font-bold text-[var(--text-secondary)] tracking-widest flex items-center justify-between mb-1">
+                        <span>Hex Dump{bytes.length > 4096 ? ` (first 4096 of ${bytes.length.toLocaleString()} bytes)` : ""}</span>
+                        <span className="text-[9px] opacity-50">{bytes.length.toLocaleString()} total bytes</span>
+                      </div>
+                      <pre className="font-mono text-[10px] leading-relaxed whitespace-pre select-all bg-[var(--background)] p-3 rounded-lg border border-[var(--border)] text-[var(--text-secondary)] overflow-x-auto">{hexDump}{bytes.length > 4096 ? `\n\u2026 ${(bytes.length - 4096).toLocaleString()} more bytes` : ""}</pre>
+                    </div>
+                    <div className="flex justify-center">
+                      <button onClick={() => { navigator.clipboard.writeText(hexCompact); setToastMessage("Hex copied"); setShowCopyToast(true); setTimeout(() => setShowCopyToast(false), 2000); }} className="px-3 py-2 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 rounded-lg text-xs font-medium flex items-center gap-2">
+                        <Copy className="w-3 h-3" /> Copy Hex
+                      </button>
+                    </div>
+                  </div>
+                ) : viewMode === "text" ? (
+                  <div className="space-y-4">
+                    {base64 && (
+                      <div>
+                        <div className="text-[10px] uppercase font-bold text-[var(--text-secondary)] tracking-widest mb-1">Base64 String</div>
+                        <pre className="font-mono text-[10px] whitespace-pre-wrap break-all select-all leading-relaxed bg-[var(--background)] p-3 rounded-lg border border-[var(--border)] text-[var(--text-secondary)] max-h-48 overflow-y-auto">{base64}</pre>
+                      </div>
+                    )}
+                    {utf8 !== null ? (
+                      <div>
+                        <div className="text-[10px] uppercase font-bold text-[var(--text-secondary)] tracking-widest mb-1">Decoded Text (UTF-8){utf8.length > 8192 ? ` — first 8192 chars` : ""}</div>
+                        <pre className="font-mono text-[11px] whitespace-pre-wrap break-all select-all leading-relaxed bg-[var(--background)] p-4 rounded-lg border border-[var(--border)]">{utf8.slice(0, 8192)}{utf8.length > 8192 ? `\n\u2026 ${(utf8.length - 8192).toLocaleString()} more chars` : ""}</pre>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <div>
+                          <div className="text-[10px] uppercase font-bold text-[var(--text-secondary)] tracking-widest mb-1">Raw Bytes{base64 ? " (decoded from Base64)" : ""}</div>
+                          <pre className="font-mono text-[10px] leading-relaxed whitespace-pre select-all bg-[var(--background)] p-3 rounded-lg border border-[var(--border)] text-[var(--text-secondary)]">{bytes.slice(0, 32).map(b => b.toString(16).padStart(2, "0")).join(" ")}{bytes.length > 32 ? `  \u2026 ${(bytes.length - 32).toLocaleString()} more bytes` : ""}</pre>
+                        </div>
+                        <div>
+                          <div className="text-[10px] uppercase font-bold text-[var(--text-secondary)] tracking-widest mb-1">ASCII Signature</div>
+                          <pre className="font-mono text-[10px] whitespace-pre select-all bg-[var(--background)] p-3 rounded-lg border border-[var(--border)]">{bytes.slice(0, 64).map(b => (b >= 0x20 && b <= 0x7E) ? String.fromCharCode(b) : ".").join("")}{bytes.length > 64 ? ` \u2026 ${(bytes.length - 64).toLocaleString()} unused bytes` : ""}</pre>
+                        </div>
+                        <p className="text-[10px] text-[var(--text-secondary)] opacity-50 text-center">Not valid UTF-8 text. Switch to Preview or Hex tab for full inspection.</p>
+                      </div>
+                    )}
+                    <div className="flex gap-2 justify-center">
+                      {base64 && (
+                        <button onClick={() => { navigator.clipboard.writeText(base64); setToastMessage("Base64 copied"); setShowCopyToast(true); setTimeout(() => setShowCopyToast(false), 2000); }} className="px-3 py-2 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 rounded-lg text-xs font-medium flex items-center gap-2">
+                          <Copy className="w-3 h-3" /> Copy Base64
+                        </button>
+                      )}
+                      {utf8 !== null && (
+                        <button onClick={() => { navigator.clipboard.writeText(utf8); setToastMessage("Text copied"); setShowCopyToast(true); setTimeout(() => setShowCopyToast(false), 2000); }} className="px-3 py-2 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 rounded-lg text-xs font-medium flex items-center gap-2">
+                          <Copy className="w-3 h-3" /> Copy Text
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ) : isImage ? (
+                  <div className="flex flex-col h-full">
+                    <div className="flex-1 flex items-center justify-center min-h-0">
+                      <img src={blobUrl} alt={col} className="max-w-full max-h-full object-contain rounded-lg shadow-lg" />
+                    </div>
+                    <div className="flex gap-2 justify-center py-3 shrink-0">
+                      <button onClick={handleBinaryDownload} className="px-3 py-2 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 rounded-lg text-xs font-medium flex items-center gap-2">
+                        <Download className="w-3 h-3" /> Save
+                      </button>
+                      <button onClick={() => { navigator.clipboard.writeText(dataUrl); setToastMessage("Image URL copied"); setShowCopyToast(true); setTimeout(() => setShowCopyToast(false), 2000); }} className="px-3 py-2 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 rounded-lg text-xs font-medium flex items-center gap-2">
+                        <Copy className="w-3 h-3" /> Copy
+                      </button>
+                      <button onClick={() => { if (bytes.length > 5 * 1024 * 1024) { setToastMessage("Image too large for inline open — use Save instead"); setShowCopyToast(true); setTimeout(() => setShowCopyToast(false), 2000); } else { window.open(dataUrl, "_blank"); } }} className="px-3 py-2 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 rounded-lg text-xs font-medium flex items-center gap-2">
+                        <Maximize2 className="w-3 h-3" /> Open
+                      </button>
+                    </div>
+                  </div>
+                ) : isPdf ? (
+                  <div className="flex flex-col items-center justify-center h-full gap-4">
+                    <File className="w-16 h-16 text-rose-400 opacity-40" />
+                    <p className="text-sm opacity-60">PDF documents cannot be previewed inline.</p>
+                    <button onClick={handleBinaryDownload} className="px-4 py-2 bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 rounded-lg text-sm font-medium flex items-center gap-2">
+                      <Download className="w-4 h-4" /> Download PDF ({formatFileSize(bytes.length)})
+                    </button>
+                  </div>
+                ) : isText ? (
+                  <pre className="font-mono text-[11px] whitespace-pre-wrap break-all select-text leading-relaxed bg-[var(--background)] p-4 rounded-lg border border-[var(--border)]">{utf8!.length > 32768 ? utf8!.slice(0, 32768) + `\n\n\u2026 ${(utf8!.length - 32768).toLocaleString()} more characters (use Text tab or download for full content)` : utf8}</pre>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="text-[10px] uppercase font-bold text-[var(--text-secondary)] tracking-widest">Hex Preview (first 256 bytes)</div>
+                    <pre className="font-mono text-[10px] whitespace-pre-wrap break-all select-all leading-relaxed bg-[var(--background)] p-3 rounded-lg border border-[var(--border)] text-[var(--text-secondary)]">{bytes.slice(0, 256).map(b => b.toString(16).padStart(2, "0")).join(" ")}</pre>
+                    {utf8 && (
+                      <>
+                        <div className="text-[10px] uppercase font-bold text-[var(--text-secondary)] tracking-widest">Text Preview</div>
+                        <pre className="font-mono text-[11px] whitespace-pre-wrap break-all select-text leading-relaxed bg-[var(--background)] p-4 rounded-lg border border-[var(--border)]">{utf8.slice(0, 4096)}{utf8.length > 4096 ? "\n\u2026" : ""}</pre>
+                      </>
+                    )}
+                    <div className="flex justify-center pt-2">
+                      <button onClick={handleBinaryDownload} className="px-4 py-2 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 rounded-lg text-sm font-medium flex items-center gap-2">
+                        <Download className="w-4 h-4" /> Download ({formatFileSize(bytes.length)})
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {activeTab === "messages" && (
         <div className="flex-1 overflow-auto p-4 font-mono select-text">
           {error ? (
@@ -898,6 +1102,7 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
                 columns={displayColumns || columns}
                 isProductionMode={isProductionMode}
                 isReadOnly={isReadOnly}
+                onBinaryCellClick={handleBinaryCellClick}
                 onCellEdited={(rowIdx, col, newValue) => { 
                   const edit = { rowIdx, col, value: newValue };
                   setEditingCell(edit); 

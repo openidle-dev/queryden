@@ -385,7 +385,6 @@ export const QueryEditor = memo(function QueryEditor({
 
       const text = model.getValue();
       const decorations: any[] = [];
-      // Match :varname (with optional :default and ?)
       const regex = /:[a-zA-Z_][a-zA-Z0-9_]*(?::[^:?]+)?(\?)?/g;
       let match;
 
@@ -408,8 +407,18 @@ export const QueryEditor = memo(function QueryEditor({
       varDecorationCollection.set(decorations);
     };
 
+    // Throttle: run at most every 150ms so keystrokes on large files stay responsive
+    let varDecoThrottle: ReturnType<typeof setTimeout> | null = null;
+    const throttledVarDecorations = () => {
+      if (varDecoThrottle !== null) return;
+      varDecoThrottle = setTimeout(() => {
+        varDecoThrottle = null;
+        updateVarDecorations();
+      }, 150);
+    };
+
     updateVarDecorations();
-    const contentChangeDisposable = editor.onDidChangeModelContent(() => updateVarDecorations());
+    const contentChangeDisposable = editor.onDidChangeModelContent(() => throttledVarDecorations());
 
     // Custom context menu handler (defined as named function for cleanup)
     const handleContextMenu = (e: MouseEvent) => {
@@ -661,6 +670,7 @@ export const QueryEditor = memo(function QueryEditor({
       window.removeEventListener("run-query-smart", handleRunSmart);
       window.removeEventListener("run-query-all", handleRunAll);
       if (domNode) domNode.removeEventListener("contextmenu", handleContextMenu);
+      if (varDecoThrottle !== null) clearTimeout(varDecoThrottle);
     });
 
     // NOTE: Ctrl+Shift+F is intentionally NOT bound to formatDocument here.

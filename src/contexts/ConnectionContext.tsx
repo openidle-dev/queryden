@@ -551,10 +551,16 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         // Otherwise try to use vault credentials from connection's vaultCredentialId
         let vaultCred = vaultCredentials.find(vc => vc.id === conn.vaultCredentialId);
         
-        if (!vaultCred && vaultCredentials.length === 0) {
-          // Vault credentials not loaded yet, try reloading
-          await reloadVaultCredentials();
-          vaultCred = vaultCredentials.find(vc => vc.id === conn.vaultCredentialId);
+        if (!vaultCred) {
+          // Vault credentials not loaded yet, reload directly
+          try {
+            const creds = await invokeCmd("load_vault_credentials", { vaultPassword: null });
+            const mapped = creds.map(vaultDtoToCredential);
+            setVaultCredentials(mapped);
+            vaultCred = mapped.find(vc => vc.id === conn.vaultCredentialId);
+          } catch (e) {
+            logger.error("Failed to reload vault credentials:", e);
+          }
         }
         
         if (vaultCred) {
