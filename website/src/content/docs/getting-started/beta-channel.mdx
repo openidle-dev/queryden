@@ -1,0 +1,48 @@
+---
+title: Beta channel
+description: Opt into pre-release builds from main to get fixes before they're cut into a tagged release.
+section: getting-started
+order: 40
+updated: 2026-05-20
+---
+
+import Callout from '../../../components/Callout.astro';
+
+The beta channel ships **signed pre-release builds from `main`**, before they're rolled up into a tagged release. Use it if you want fixes faster and don't mind the occasional regression. Stable users are unaffected — they stay on tagged releases.
+
+## Enable it
+
+1. Open **Settings → Updates**.
+2. Switch the channel to **Beta (experimental)**.
+3. Hit **Check for updates** in the main menu. If a beta is available, it downloads and installs like any other update.
+
+The active channel is shown in **Help → About** next to the version and build date, so you can verify at a glance.
+
+## What you're opting into
+
+- Beta builds are signed with the same key as stable, and the updater verifies the signature before installing. They are not unsigned dev builds.
+- Versions follow the form `1.0.18-beta.<timestamp>+<sha>`. They sort higher than the matching stable version, so the updater will always offer the latest beta over your current stable.
+- Beta builds can contain bugs that **never ship to stable**. We may build a beta, get feedback, and abandon the change.
+- There's no published changelog for the beta channel today. The commit log on [`main`](https://github.com/openidle-dev/queryden/commits/main) is the source of truth for what's in a beta build.
+
+<Callout type="warn" title="Reverting is manual">
+The in-app updater does not support downgrading. Switching the channel back to **Stable** stops new betas from being offered, but the beta version that's already installed stays put. To get back onto stable today, **uninstall and reinstall** the latest stable build from [queryden.openidle.com](https://queryden.openidle.com).
+</Callout>
+
+## Reporting issues from a beta build
+
+Use **Help → Report an issue** as usual. The reporter now includes the channel and exact version in the environment block, which is what we need to triage.
+
+If you're seeing something that smells like a regression, please include:
+
+- The exact beta version (`1.0.X-beta.YYYYMMDDhhmmss+sha`) from the About dialog.
+- The last stable version where the behavior worked, if known.
+- Whether disabling the channel and reinstalling stable makes it go away.
+
+## Frequently asked
+
+**Will I get a beta when I'm not opted in?** No. Stable channel only sees tagged releases.
+
+**Does opting in affect existing data?** No. The vault, settings, history, and saved queries are all stored on disk independently of the binary; both channels read the same files.
+
+**How often are betas published?** Today, only when someone manually triggers the beta build workflow in CI. We may move to scheduled or push-triggered builds later — that decision lives in [#105](https://github.com/openidle-dev/queryden/issues/105).

@@ -3761,9 +3761,11 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-sql",
  "tauri-plugin-updater",
+ "time",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "url",
  "which",
  "zip 2.4.2",
 ]
