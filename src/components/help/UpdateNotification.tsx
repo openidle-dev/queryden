@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import {
   Bell,
-  BellDot,
   Download,
   CheckCircle,
   ArrowUpCircle,
@@ -59,9 +58,12 @@ export function UpdateNotification() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [showPanel]);
 
-  const showBadge = phase === "available" && !dismissed;
+  // A single, stable "you have unread" dot — same pattern as VS Code /
+  // Slack / GitHub. We don't swap the icon shape based on state (was a
+  // BellDot swap previously) because the icon flip reads as a glitch
+  // rather than a status change. See #115.
   const showDot =
-    phase === "available" ||
+    (phase === "available" && !dismissed) ||
     phase === "downloading" ||
     phase === "ready";
 
@@ -87,18 +89,14 @@ export function UpdateNotification() {
             : "Check for updates"
         }
       >
-        {showDot ? (
-          <BellDot className="w-4 h-4 text-amber-400" />
-        ) : (
-          <Bell className="w-4 h-4 group-hover:text-[var(--color-accent)]" />
-        )}
+        <Bell className="w-4 h-4 group-hover:text-[var(--color-accent)]" />
 
-        {/* Animated badge */}
-        {showBadge && (
-          <span className="absolute -top-0.5 -right-0.5 flex h-3 w-3">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400/60" />
-            <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-400 border border-black/20" />
-          </span>
+        {/* Static unread-style dot. No animation, no icon swap; the dot is
+            the only visual change between states. Sized + positioned to
+            sit inside the icon's top-right rather than floating outside
+            the button's padding. */}
+        {showDot && (
+          <span className="absolute top-1 right-2 block w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] ring-2 ring-[var(--surface)]" />
         )}
       </button>
 

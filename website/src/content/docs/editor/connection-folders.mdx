@@ -10,24 +10,19 @@ import Callout from '../../../components/Callout.astro';
 
 The Database Explorer supports **user-defined folders** for organizing your connection list. Folders can be nested to any depth and are persisted per-machine, encrypted alongside your other QueryDen state.
 
-## Switching to folder view
+## Switching view modes and creating folders
 
-The Explorer has three view modes. Click the folder icon in the top-right of the sidebar to cycle through them:
+Click the folder icon in the top-right of the sidebar header. A popover opens with the three view modes and a **+ New folder** action:
 
-1. **Flat** — connections in the order you created them (the original default).
-2. **By type** — auto-grouped by database engine (Postgres / MySQL / SQLite / etc.).
-3. **Custom folders** — your own hierarchy.
+- **Folders** (default) — your own hierarchy. With no folders defined, this renders identically to Flat — the popover is just always the same place to come back to.
+- **By type** — auto-grouped by database engine (Postgres / MySQL / SQLite / etc.).
+- **Flat** — connections in the order you created them.
 
-The active mode is highlighted. The user's choice **is not persisted across launches** — every app start re-evaluates which mode to show:
+The currently active mode is shown as a filled radio dot. Pick a different mode and the popover closes immediately.
 
-- **Existing users with folders defined** → land in **Custom folders** automatically.
-- **New users / users with no folders** → land in **Flat**.
+The **+ New folder** action lives in the popover regardless of which mode you're currently in — picking it prompts for a folder name and switches you to Folders view so you can see what you just created.
 
-That auto-detect makes the common case correct without surfacing a setting. Manual cycling during the session still wins (the auto-detect runs once on first render). True per-user persistence of the choice is tracked as a follow-up.
-
-## Creating folders
-
-In **Custom folders** mode, a **+** button appears next to the view-mode toggle. Click it to create a root-level folder. To create a subfolder, right-click an existing folder and pick **New subfolder**.
+View-mode choice is not persisted across launches in v1; every app start defaults to Folders. To create a subfolder of an existing folder, right-click it and pick **New subfolder**.
 
 ## Moving connections
 
