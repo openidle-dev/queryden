@@ -18,7 +18,12 @@ The Explorer has three view modes. Click the folder icon in the top-right of the
 2. **By type** — auto-grouped by database engine (Postgres / MySQL / SQLite / etc.).
 3. **Custom folders** — your own hierarchy.
 
-The active mode is highlighted. The current view persists for the session but isn't yet saved across launches — you'll be back in **Flat** the next time you open the app. (Tracked as a follow-up.)
+The active mode is highlighted. The user's choice **is not persisted across launches** — every app start re-evaluates which mode to show:
+
+- **Existing users with folders defined** → land in **Custom folders** automatically.
+- **New users / users with no folders** → land in **Flat**.
+
+That auto-detect makes the common case correct without surfacing a setting. Manual cycling during the session still wins (the auto-detect runs once on first render). True per-user persistence of the choice is tracked as a follow-up.
 
 ## Creating folders
 

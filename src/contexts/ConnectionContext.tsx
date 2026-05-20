@@ -306,9 +306,12 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Load folders on mount. Standalone file (folders.json) — see
-  // storage.rs::load_folders. Mirrors the load_connections gating: we only
-  // save back to disk after the initial load completes, so a slow load
-  // doesn't get clobbered by an immediate empty-state save.
+  // storage.rs::load_folders. We only save back to disk after a successful
+  // load; if the load fails (e.g. file exists but parse fails on this
+  // machine), we deliberately refuse to enable the save path so we don't
+  // overwrite the on-disk file with an empty list. The user's mutations
+  // become session-only until they reload — visible failure mode beats
+  // silent data loss.
   const [foldersLoaded, setFoldersLoaded] = useState(false);
   useEffect(() => {
     if (!isTauri()) {
@@ -319,15 +322,17 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       try {
         const dtos = await invokeCmd("load_folders");
         if (dtos) setFolders(dtos.map(folderDtoToFolder));
-      } catch (e) {
-        logger.error("Failed to load folders:", e);
-      } finally {
+        // Only flip the save gate when the load actually succeeded.
         setFoldersLoaded(true);
+      } catch (e) {
+        // Intentionally leave foldersLoaded=false so the save effect
+        // below never fires. Logged for forensic visibility.
+        logger.error("Failed to load folders — folder changes will not be persisted this session:", e);
       }
     })();
   }, []);
 
-  // Save folders on change (after initial load).
+  // Save folders on change (after a successful initial load).
   useEffect(() => {
     if (!isTauri() || !foldersLoaded) return;
     (async () => {
@@ -446,9 +451,19 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     return Math.max(...siblings.map((f) => f.order)) + 1;
   };
 
+  /** Throws if `parentId` is non-null but doesn't match any existing folder.
+   *  Prevents callers from orphaning a folder by passing a stale id (the
+   *  result would be unreachable from the root-based tree walk). */
+  const ensureValidParent = (parentId: string | null): void => {
+    if (parentId !== null && !folders.some((f) => f.id === parentId)) {
+      throw new Error(`Parent folder ${parentId} not found`);
+    }
+  };
+
   const addFolder = async (name: string, parentId: string | null): Promise<Folder> => {
     const trimmed = name.trim();
     if (!trimmed) throw new Error("Folder name cannot be empty");
+    ensureValidParent(parentId);
     const newFolder: Folder = {
       id: crypto.randomUUID(),
       name: trimmed,
@@ -502,6 +517,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   };
 
   const moveFolder = async (id: string, parentId: string | null): Promise<void> => {
+    ensureValidParent(parentId);
     if (wouldCreateCycle(id, parentId, folders)) {
       throw new Error("Cannot move a folder into itself or one of its descendants");
     }

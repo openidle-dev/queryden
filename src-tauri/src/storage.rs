@@ -544,20 +544,31 @@ pub fn load_folders(app: tauri::AppHandle) -> Result<Vec<Folder>, String> {
     let dir = get_app_data_dir(&app);
     let path = dir.join("folders.json");
     if !path.exists() {
+        // First-run / never-saved → genuine empty state.
         return Ok(vec![]);
     }
     let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let json = decrypt(&content, None, &dir);
     match serde_json::from_str::<FoldersData>(&json) {
         Ok(data) => {
-            // Same policy as query-history: don't surface a different
-            // machine's folder tree even if the file was copied over.
+            // Cross-machine: treat as empty intentionally. The user's
+            // folder tree from machine A simply doesn't belong here, and
+            // we deliberately ignore it the way query-history does.
+            // Frontend treats this as "no folders" — safe because the
+            // file was never encrypted for this machine's key and any
+            // save will overwrite with this machine's content.
             if data.machine_fingerprint != get_machine_fingerprint() {
                 return Ok(vec![]);
             }
             Ok(data.folders)
         }
-        Err(_) => Ok(vec![]),
+        // Parse failure on a file that EXISTS and decrypted-on-this-machine
+        // is a real error — return Err so the frontend can refuse to save
+        // (and thereby refuse to overwrite the existing on-disk file with
+        // an empty list). Query history takes the opposite stance because
+        // history is high-volume / low-value; folders are user-curated
+        // and clobbering them would be a serious incident.
+        Err(e) => Err(format!("Failed to parse folders.json: {e}")),
     }
 }
 

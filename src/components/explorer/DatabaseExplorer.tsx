@@ -1818,8 +1818,17 @@ Note: "version" must be a number (e.g. 2), not a string like "0.1.0".`
               } else {
                 await moveFolder(moveTarget.id, parentId);
               }
-            } finally {
               setMoveTarget(null);
+            } catch (e) {
+              // moveFolder throws on cycle / unknown parent; surface that
+              // instead of swallowing it. The dialog stays open so the
+              // user can pick a different destination.
+              await confirmDialog.dialog({
+                title: "Move failed",
+                message: e instanceof Error ? e.message : String(e),
+                confirmLabel: "OK",
+                type: "danger",
+              });
             }
           }}
         />
