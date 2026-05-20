@@ -1,0 +1,300 @@
+name: Beta build
+
+# Manual trigger only for now. Once we're confident in the pipeline we can
+# switch this to `push: branches: [main]` (or a schedule) — but every fire
+# of this workflow burns the full Win/Mac/Linux matrix + signing, so we
+# keep it dispatch-only until that cost is worth it.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or commit to build (defaults to main)"
+        required: false
+        default: "main"
+
+# Default to read-only at the workflow level; the build job inherits this and
+# only the `publish` job opts in to `contents: write` (it deletes/recreates the
+# `beta-latest` rolling tag and publishes the release).
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build beta (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.ref || 'main' }}
+          # Artifact-only job — no need to leave a credentialed git remote
+          # lying around inside the runner.
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+
+      - name: Install Linux deps
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            pkg-config
+
+      - run: npm ci
+
+      - name: Compute beta version
+        id: betaver
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE=$(jq -r .version package.json)
+          TS=$(date -u +%Y%m%d%H%M%S)
+          SHA=$(git rev-parse --short HEAD)
+          # SemVer 2.0.0: a pre-release identifier has LOWER precedence than
+          # the same normal version, so `1.0.18-beta.X` < `1.0.18`. If we
+          # tagged betas with the current stable version, beta users on
+          # stable would never receive a beta — the updater would correctly
+          # conclude they're already ahead.
+          #
+          # Strategy: bump the patch component, so betas live in the version
+          # space ABOVE the current stable. Example: while stable is 1.0.18,
+          # betas are `1.0.19-beta.<ts>+<sha>` and sort `1.0.18 < 1.0.19-beta.X
+          # < 1.0.19`. When 1.0.19 ships stable, the next batch of betas
+          # rolls to 1.0.20-beta.X.
+          #
+          # Build metadata (`+<sha>`) is informational only — SemVer says
+          # it must be ignored when determining precedence — but two beta
+          # builds at the same second would otherwise produce identical
+          # version strings, so we keep it.
+          NEXT=$(node -e "const [a,b,c]=process.argv[1].split('.').map(Number);console.log(\`\${a}.\${b}.\${c+1}\`);" "$BASE")
+          BETA="${NEXT}-beta.${TS}+${SHA}"
+          echo "version=${BETA}" >> "$GITHUB_OUTPUT"
+          echo "Building beta version: ${BETA} (stable base was ${BASE})"
+
+      - name: Stamp beta version into manifests
+        shell: bash
+        env:
+          BETA_VERSION: ${{ steps.betaver.outputs.version }}
+        run: |
+          set -euo pipefail
+          # package.json — use a node one-liner so we don't need yq/jq-edit.
+          node -e "const f='package.json';const j=require('./'+f);j.version=process.env.BETA_VERSION;require('fs').writeFileSync(f, JSON.stringify(j,null,2)+'\n');"
+          # tauri.conf.json — same trick.
+          node -e "const f='src-tauri/tauri.conf.json';const j=require('./'+f);j.version=process.env.BETA_VERSION;require('fs').writeFileSync(f, JSON.stringify(j,null,2)+'\n');"
+          # Cargo.toml — sed is fine because the package version line is unique.
+          # Note: build metadata (the part after +) is not valid in Cargo's
+          # version field, so we strip it for Cargo only. The Tauri-side
+          # version (which the updater uses) keeps the full string.
+          CARGO_VER="${BETA_VERSION%+*}"
+          sed -i.bak -E "s/^version = \"[^\"]+\"/version = \"${CARGO_VER}\"/" src-tauri/Cargo.toml
+          rm -f src-tauri/Cargo.toml.bak
+          echo "--- package.json ---"; jq .version package.json
+          echo "--- tauri.conf.json ---"; jq .version src-tauri/tauri.conf.json
+          echo "--- Cargo.toml ---"; grep '^version' src-tauri/Cargo.toml | head -1
+
+      - name: Build app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri build -- --target ${{ matrix.target }}
+
+      - name: Generate SHA256 companion files
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v sha256sum >/dev/null 2>&1; then
+            HASH_CMD="sha256sum"
+          else
+            HASH_CMD="shasum -a 256"
+          fi
+
+          TARGET_DIR="src-tauri/target/${{ matrix.target }}/release/bundle"
+          if [ ! -d "$TARGET_DIR" ]; then
+            echo "::warning::Bundle dir $TARGET_DIR not found; skipping checksum step."
+            exit 0
+          fi
+
+          find "$TARGET_DIR" -type f \
+            \( -name '*.deb' -o -name '*.AppImage' \
+            -o -name '*.exe' -o -name '*.msi' \
+            -o -name '*.dmg' -o -name '*.app.tar.gz' \) \
+            -print | while IFS= read -r f; do
+              $HASH_CMD "$f" | awk '{print $1}' > "$f.sha256"
+              echo "Wrote $f.sha256"
+            done
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: beta-bundle-${{ matrix.target }}
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app.tar.gz
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.sig
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.sha256
+          if-no-files-found: warn
+
+  publish:
+    name: Publish beta-latest pre-release
+    needs: build
+    runs-on: ubuntu-latest
+    # Only the publish job needs write — it deletes/recreates the rolling
+    # `beta-latest` tag and creates the release. Build inherits the
+    # workflow-level read-only default.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+
+      - name: Flatten artifact tree
+        run: |
+          mkdir -p release
+          find artifacts -type f \( \
+            -name "*.deb" -o -name "*.AppImage" \
+            -o -name "*.exe" -o -name "*.msi" \
+            -o -name "*.dmg" -o -name "*.app.tar.gz" \
+            -o -name "*.sig" -o -name "*.sha256" \
+          \) -exec cp {} release/ \;
+          ls -la release
+
+      - name: Compute beta version (publish-side mirror)
+        id: betaver
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Recompute from package.json on main, with the same recipe the
+          # build job used. We can't easily pass values between jobs, but
+          # the artifact filenames already embed the version, so the
+          # manifest's version field is the only thing we need to derive.
+          BASE=$(jq -r .version package.json)
+          # The version we want is whatever the artifacts were built with.
+          # Read it from any bundle that includes it in its filename.
+          # NSIS: QueryDen_<version>_x64-setup.exe
+          PROBE=$(ls release/*_x64-setup.exe 2>/dev/null | head -1 || true)
+          if [ -n "$PROBE" ]; then
+            BETA=$(basename "$PROBE" | sed -E 's/^QueryDen_([^_]+)_x64-setup\.exe$/\1/')
+          else
+            # Fallback: read from AppImage filename QueryDen_<version>_amd64.AppImage
+            PROBE=$(ls release/*.AppImage 2>/dev/null | head -1 || true)
+            if [ -n "$PROBE" ]; then
+              BETA=$(basename "$PROBE" | sed -E 's/^QueryDen_([^_]+)_.*\.AppImage$/\1/')
+            else
+              BETA="${BASE}-beta.unknown"
+            fi
+          fi
+          echo "version=${BETA}" >> "$GITHUB_OUTPUT"
+          echo "Publishing beta manifest for: ${BETA}"
+
+      - name: Generate beta.json (tauri-plugin-updater manifest)
+        shell: bash
+        env:
+          BETA_VERSION: ${{ steps.betaver.outputs.version }}
+        run: |
+          set -euo pipefail
+          # The manifest lives on the moving tag `beta-latest` so the URL
+          # stays stable across builds. The bundle URLs point at the same
+          # release.
+          BASE_URL="https://github.com/${{ github.repository }}/releases/download/beta-latest"
+
+          first() { ls release/$1 2>/dev/null | head -1 || true; }
+
+          PLATFORMS='{}'
+
+          WIN_EXE=$(first '*_x64-setup.exe')
+          WIN_SIG=$(first '*_x64-setup.exe.sig')
+          if [ -n "$WIN_EXE" ] && [ -n "$WIN_SIG" ]; then
+            PLATFORMS=$(jq \
+              --arg sig "$(cat "$WIN_SIG")" \
+              --arg url "$BASE_URL/$(basename "$WIN_EXE")" \
+              '. + {"windows-x86_64": {signature: $sig, url: $url}}' <<<"$PLATFORMS")
+          fi
+
+          MAC_TGZ=$(first '*aarch64.app.tar.gz')
+          MAC_SIG=$(first '*aarch64.app.tar.gz.sig')
+          if [ -n "$MAC_TGZ" ] && [ -n "$MAC_SIG" ]; then
+            PLATFORMS=$(jq \
+              --arg sig "$(cat "$MAC_SIG")" \
+              --arg url "$BASE_URL/$(basename "$MAC_TGZ")" \
+              '. + {"darwin-aarch64": {signature: $sig, url: $url}}' <<<"$PLATFORMS")
+          fi
+
+          LINUX_APP=$(first '*.AppImage')
+          LINUX_SIG=$(first '*.AppImage.sig')
+          if [ -n "$LINUX_APP" ] && [ -n "$LINUX_SIG" ]; then
+            PLATFORMS=$(jq \
+              --arg sig "$(cat "$LINUX_SIG")" \
+              --arg url "$BASE_URL/$(basename "$LINUX_APP")" \
+              '. + {"linux-x86_64": {signature: $sig, url: $url}}' <<<"$PLATFORMS")
+          fi
+
+          jq -n \
+            --arg version "$BETA_VERSION" \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg notes "Beta build from main. See https://github.com/${{ github.repository }}/commits/main for changes." \
+            --argjson platforms "$PLATFORMS" \
+            '{version: $version, notes: $notes, pub_date: $pub_date, platforms: $platforms}' \
+            > release/beta.json
+
+          echo "::group::beta.json"
+          cat release/beta.json
+          echo "::endgroup::"
+
+      - name: Move beta-latest tag and recreate pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Delete previous beta-latest release + tag so we can recreate
+          # cleanly. `gh release delete --cleanup-tag` removes both. The
+          # `|| true` lets the first run succeed when nothing exists yet.
+          gh release delete beta-latest --yes --cleanup-tag --repo ${{ github.repository }} || true
+
+      - name: Create beta-latest pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: beta-latest
+          name: "Beta (rolling)"
+          prerelease: true
+          fail_on_unmatched_files: true
+          body: |
+            Rolling beta channel. This tag/release is recreated on every successful beta build — the URL `beta-latest` is what the in-app updater points at when the user opts into the beta channel.
+
+            **Do not** treat this like a versioned release: contents are replaced without notice. The `version` field inside `beta.json` is the source of truth for what's currently published.
+          files: release/*

@@ -2,6 +2,7 @@ mod cli;
 mod ssh;
 mod storage;
 mod sysinfo;
+mod updater;
 
 use tauri::Manager;
 use tracing::info;
@@ -85,6 +86,7 @@ pub fn run() {
             ssh::get_tunnel_status,
             ssh::close_all_tunnels,
             ssh::test_ssh_connection,
+            updater::check_for_update_on_channel,
         ])
         .setup(|app| {
             info!("QueryDen application setup complete");

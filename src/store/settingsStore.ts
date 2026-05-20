@@ -58,7 +58,10 @@ export interface DBSettings {
   
   // Vault
   hasVaultEnabled: boolean;
-  
+
+  // Updates
+  updateChannel: "stable" | "beta";
+
   // Export Formats
   enabledExportFormats: string[];
   
@@ -123,6 +126,9 @@ const defaultSettings: Omit<DBSettings, "setSetting" | "resetSettings"> = {
   
   // Vault
   hasVaultEnabled: true,
+
+  // Updates
+  updateChannel: "stable",
 
   // Export Formats
   enabledExportFormats: ["csv", "json", "xml", "html", "sql"],

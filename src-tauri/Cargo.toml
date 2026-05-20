@@ -44,6 +44,8 @@ zip = "2"
 flate2 = "1"
 tar = "0.4"
 which = "7"
+url = "2"
+time = { version = "0.3", features = ["formatting"] }
 
 [patch.crates-io]
 # Patch tauri-plugin-sql to handle PostgreSQL types like INTERVAL, OID, arrays, etc.
