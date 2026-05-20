@@ -336,6 +336,26 @@ export interface IpcCommands {
   // sysinfo + build info (updater itself now goes through tauri-plugin-updater)
   get_build_info: { args: void; result: string };
   get_system_info: { args: void; result: SystemInfoDto };
+
+  // updater — channel-aware check. The download/install side stays on the
+  // plugin's own commands (plugin:updater|download / plugin:updater|install)
+  // via the JS-side Update handle constructed from this result.
+  check_for_update_on_channel: {
+    args: { channel: "stable" | "beta" };
+    result: UpdateMetadataDto | null;
+  };
+}
+
+/** Wire shape of `check_for_update_on_channel`. Mirrors the plugin's
+ *  crate-private `Metadata` struct, so it can be passed directly to
+ *  `new Update(...)` from `@tauri-apps/plugin-updater`. */
+export interface UpdateMetadataDto {
+  rid: number;
+  currentVersion: string;
+  version: string;
+  date: string | null;
+  body: string | null;
+  rawJson: unknown;
 }
 
 export type IpcCommandName = keyof IpcCommands;

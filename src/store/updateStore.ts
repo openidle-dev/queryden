@@ -1,8 +1,9 @@
 import { create } from 'zustand';
-import { check, type Update } from '@tauri-apps/plugin-updater';
+import { Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { getVersion } from '@tauri-apps/api/app';
 import { invokeCmd } from '../lib/ipc';
+import { useSettings } from './settingsStore';
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -63,9 +64,16 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
   checkForUpdates: async () => {
     set({ phase: 'checking', error: null, dismissed: false });
     try {
-      const update = await check();
-      const currentVersion = update?.currentVersion ?? (await getVersion());
-      if (update) {
+      // Channel selection happens Rust-side because the JS `check()` doesn't
+      // accept an `endpoints` override — only headers/timeout/proxy/target.
+      const channel = useSettings.getState().updateChannel ?? 'stable';
+      const metadata = await invokeCmd('check_for_update_on_channel', { channel });
+      const currentVersion = metadata?.currentVersion ?? (await getVersion());
+      if (metadata) {
+        // The plugin's Update class is constructed from the same Metadata
+        // shape our Rust command returns, so download()/install() keep
+        // working against the upstream plugin commands.
+        const update = new Update(metadata as never);
         set({ update, currentVersion, phase: 'available' });
       } else {
         set({ update: null, currentVersion, phase: 'up-to-date' });

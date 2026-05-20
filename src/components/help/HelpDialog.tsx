@@ -5,6 +5,7 @@ import { invokeCmd, SystemInfoDto } from "../../lib/ipc";
 import { logger } from "../../utils/logger";
 import { useAppInfo } from "../../hooks/useAppInfo";
 import { useUpdateStore } from "../../store/updateStore";
+import { useSettings } from "../../store/settingsStore";
 
 interface HelpDialogProps {
   isOpen: boolean;
@@ -22,6 +23,7 @@ export function HelpDialog({ isOpen, onClose }: HelpDialogProps) {
   const [sysInfo, setSysInfo] = useState<SystemInfo | null>(null);
   const { name: appName, version: appVersion } = useAppInfo();
   const { buildDate, fetchBuildDate } = useUpdateStore();
+  const updateChannel = useSettings((s) => s.updateChannel ?? "stable");
 
   useEffect(() => {
     if (isOpen) {
@@ -140,6 +142,7 @@ export function HelpDialog({ isOpen, onClose }: HelpDialogProps) {
                 <div className="grid grid-cols-2 gap-4">
                   <InfoCard title="Version" value={`v${appVersion}`} icon={<Terminal className="w-4 h-4" />} />
                   <InfoCard title="Build" value={buildDate || 'Loading…'} icon={<Terminal className="w-4 h-4" />} />
+                  <InfoCard title="Channel" value={updateChannel === "beta" ? "Beta" : "Stable"} icon={<Terminal className="w-4 h-4" />} />
                   <InfoCard title="Platform" value={sysInfo?.os_name?.toString() || "Detecting..."} icon={<HardDrive className="w-4 h-4" />} />
                   <InfoCard title="CPU" value={sysInfo?.cpu_model?.toString() || "Detecting..."} icon={<Cpu className="w-4 h-4" />} />
                 </div>
@@ -147,9 +150,10 @@ export function HelpDialog({ isOpen, onClose }: HelpDialogProps) {
             )}
 
             {activeTab === "report" && (
-              <IssueReporter 
-                appVersion={appVersion} 
-                buildDate={buildDate} 
+              <IssueReporter
+                appVersion={appVersion}
+                buildDate={buildDate}
+                updateChannel={updateChannel}
                 sysInfo={sysInfo}
                 activeConnection={activeConnection}
               />
@@ -166,11 +170,12 @@ export function HelpDialog({ isOpen, onClose }: HelpDialogProps) {
 interface IssueReporterProps {
   appVersion: string;
   buildDate: string | null;
+  updateChannel: "stable" | "beta";
   sysInfo: SystemInfo | null;
   activeConnection: any;
 }
 
-function IssueReporter({ appVersion, buildDate, sysInfo, activeConnection }: IssueReporterProps) {
+function IssueReporter({ appVersion, buildDate, updateChannel, sysInfo, activeConnection }: IssueReporterProps) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [severity, setSeverity] = useState<"bug" | "enhancement" | "question">("bug");
@@ -251,10 +256,11 @@ function IssueReporter({ appVersion, buildDate, sysInfo, activeConnection }: Iss
     if (screenshot) body += isPlaintext ? `Note: A screenshot is copied to the clipboard. Please attach it.\n\n` : `## Screenshot\n> ⚠️ Screenshot captured & copied to clipboard. Paste it here.\n\n`;
     body += "---\n\n";
     body += isPlaintext ? `Environment:\n` : `## Environment\n`;
+    const channelLabel = updateChannel === "beta" ? "Beta" : "Stable";
     if (isPlaintext) {
-      body += `App: v${appVersion} (${buildDate || "dev"})\nOS: ${sysInfo?.os_name || "unknown"}\nCPU: ${sysInfo?.cpu_model || "unknown"}\n`;
+      body += `App: v${appVersion} (${buildDate || "dev"})\nChannel: ${channelLabel}\nOS: ${sysInfo?.os_name || "unknown"}\nCPU: ${sysInfo?.cpu_model || "unknown"}\n`;
     } else {
-      body += `| Key | Value |\n|---|---|\n| **App** | v${appVersion} (${buildDate || "dev"}) |\n| **OS** | ${sysInfo?.os_name || "unknown"} |\n| **CPU** | ${sysInfo?.cpu_model || "unknown"} |\n`;
+      body += `| Key | Value |\n|---|---|\n| **App** | v${appVersion} (${buildDate || "dev"}) |\n| **Channel** | ${channelLabel} |\n| **OS** | ${sysInfo?.os_name || "unknown"} |\n| **CPU** | ${sysInfo?.cpu_model || "unknown"} |\n`;
     }
     if (activeConnection) body += isPlaintext ? `DB: ${activeConnection.type?.toUpperCase()}\n` : `| **DB** | ${activeConnection.type?.toUpperCase()} |\n`;
     return body;

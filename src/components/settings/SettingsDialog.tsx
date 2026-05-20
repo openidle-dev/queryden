@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { X, Settings, Database, Play, Monitor, Keyboard, Zap, Trash2, Search, Import, Edit2, Copy, HardDrive, Shield, AlertTriangle, CheckCircle, AlertCircle } from "lucide-react";
+import { X, Settings, Database, Play, Monitor, Keyboard, Zap, Trash2, Search, Import, Edit2, Copy, HardDrive, Shield, AlertTriangle, CheckCircle, AlertCircle, Download } from "lucide-react";
 import { useSettings } from "../../store/settingsStore";
 import { useKeymap, defaultKeymaps, useLiveTemplates } from "../../store/keymapStore";
 import { useAI, AIProvider } from "../../store/aiStore";
@@ -8,7 +8,7 @@ import { VaultCredential } from "../../contexts/ConnectionContext";
 import { useConnections } from "../../contexts/useConnections";
 import { useVault } from "../../store/vaultStore";
 
-type SettingsCategory = "appearance" | "sqlCompletion" | "queryExecution" | "explorer" | "keymap" | "templates" | "importExport" | "ai" | "copyTransfer" | "permissions" | "vault";
+type SettingsCategory = "appearance" | "sqlCompletion" | "queryExecution" | "explorer" | "keymap" | "templates" | "importExport" | "ai" | "copyTransfer" | "permissions" | "vault" | "updates";
 
 interface SettingsDialogProps {
   isOpen: boolean;
@@ -26,6 +26,7 @@ const categories: { id: SettingsCategory; label: string; icon: any; keywords: st
   { id: "ai", label: "AI Assistant", icon: Sparkles, keywords: ["ai", "assistant", "openai", "gemini", "anthropic", "llm", "api", "key", "model", "ollama", "gpt-4", "claude"] },
   { id: "importExport", label: "Import/Export", icon: Import, keywords: ["import", "export", "csv", "json", "sql", "tsv", "xml", "html", "delimiter", "headers", "null", "quote"] },
   { id: "vault", label: "Credential Vault", icon: Shield, keywords: ["vault", "security", "credentials", "password", "username", "encryption", "master", "profiles"] },
+  { id: "updates", label: "Updates", icon: Download, keywords: ["update", "updates", "beta", "channel", "stable", "release", "version", "auto-update", "prerelease"] },
 ];
 
 export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
@@ -136,6 +137,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
             {activeCategory === "copyTransfer" && <CopyTransferSettings />}
             {activeCategory === "permissions" && <PermissionsSettings />}
             {activeCategory === "vault" && <VaultCredentialsSettings />}
+            {activeCategory === "updates" && <UpdatesSettings />}
           </div>
 
           {/* Footer */}
@@ -1300,5 +1302,87 @@ return (
         </div>
       )}
     </div>
+  );
+}
+
+function UpdatesSettings() {
+  const settings = useSettings();
+  const channel = settings.updateChannel ?? "stable";
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <div className="text-sm font-semibold mb-2">Update channel</div>
+        <div className="space-y-2">
+          <ChannelOption
+            value="stable"
+            current={channel}
+            label="Stable"
+            description="Tagged releases only. The default for everyone."
+            onChange={(v) => settings.setSetting("updateChannel", v)}
+          />
+          <ChannelOption
+            value="beta"
+            current={channel}
+            label="Beta (experimental)"
+            description="Signed pre-release builds from main. Faster fixes, more bugs. Some beta builds may never ship to stable."
+            onChange={(v) => settings.setSetting("updateChannel", v)}
+          />
+        </div>
+      </div>
+
+      {channel === "beta" && (
+        <div className="rounded border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10 px-3 py-2 text-xs space-y-1">
+          <div className="flex items-center gap-1.5 font-semibold text-[var(--color-warning)]">
+            <AlertTriangle className="w-3.5 h-3.5" />
+            Heads up
+          </div>
+          <ul className="list-disc list-inside space-y-0.5 text-[var(--text-secondary)]">
+            <li>Beta builds can have bugs that never ship to stable.</li>
+            <li>Switching back to Stable here will stop new betas, but the installed beta version stays put — to revert, uninstall and reinstall the latest stable build from <span className="font-mono">queryden.openidle.com</span>.</li>
+            <li>When reporting issues, include the version + channel from the About dialog.</li>
+          </ul>
+        </div>
+      )}
+
+      <div className="text-xs text-[var(--text-secondary)]">
+        See the <a href="https://queryden.openidle.com/docs/getting-started/beta-channel" target="_blank" rel="noreferrer" className="text-[var(--color-accent)] hover:underline">beta channel docs</a> for details.
+      </div>
+    </div>
+  );
+}
+
+function ChannelOption({ value, current, label, description, onChange }: {
+  value: "stable" | "beta";
+  current: "stable" | "beta";
+  label: string;
+  description: string;
+  onChange: (v: "stable" | "beta") => void;
+}) {
+  const selected = current === value;
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(value)}
+      className={`w-full text-left rounded border px-3 py-2 transition-colors ${
+        selected
+          ? "border-[var(--color-accent)] bg-[var(--color-accent)]/10"
+          : "border-[var(--border)] hover:bg-[var(--border)]/40"
+      }`}
+    >
+      <div className="flex items-center gap-2">
+        <span
+          className={`w-3.5 h-3.5 rounded-full border-2 shrink-0 ${
+            selected ? "border-[var(--color-accent)]" : "border-[var(--text-secondary)]"
+          }`}
+        >
+          {selected && (
+            <span className="block w-1.5 h-1.5 m-[3px] rounded-full bg-[var(--color-accent)]" />
+          )}
+        </span>
+        <span className="text-sm font-medium">{label}</span>
+      </div>
+      <div className="text-xs text-[var(--text-secondary)] mt-1 ml-5">{description}</div>
+    </button>
   );
 }
