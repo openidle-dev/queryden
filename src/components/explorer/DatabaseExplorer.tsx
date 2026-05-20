@@ -608,8 +608,17 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
       return;
     }
 
-    // If no profile is selected, but vault credentials exist, prompt the user
-    if (connections.length > 0 && connections[0] /* dummy check for context availability */ && vaultCredentials.length > 0) {
+    // Only prompt for a vault profile when:
+    //   1. The connection is explicitly configured as a vault connection
+    //      (`isVault === true`), AND
+    //   2. It hasn't picked a profile yet (`!vaultCredentialId`), AND
+    //   3. The user has any vault credentials at all to choose from.
+    //
+    // Previously this branch only checked condition 3, so a manual
+    // connection (`isVault === false`) or a legacy connection without
+    // the flag would still trip the picker as long as the user had
+    // any vault credential stored anywhere — see #109.
+    if (conn.isVault === true && !conn.vaultCredentialId && vaultCredentials.length > 0) {
       const selectedProfileId = await confirmDialog.dialog({
         title: "Select Credential Profile",
         message: `How would you like to connect to "${conn.name}"?`,

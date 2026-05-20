@@ -3,6 +3,7 @@ import { DatabaseConnection } from "../../contexts/ConnectionContext";
 import { useConnections } from "../../contexts/useConnections";
 import { X, CheckCircle, Database, ServerCrash, Search, Settings, Shield } from "lucide-react";
 import { useConfirmDialog } from "../ui/ConfirmDialog";
+import { PasswordInput } from "../ui/PasswordInput";
 
 import { PROVIDERS } from "../../config/providers";
 import { getDefaultDatabaseName } from "../../config/app";
@@ -648,8 +649,7 @@ export function ConnectionDialog({ connection, onClose }: { connection?: Databas
                               
                               <div>
                                 <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Password</label>
-                                <input
-                                  type="password"
+                                <PasswordInput
                                   value={formData.password}
                                   onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                                   className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono shadow-inner"
@@ -744,8 +744,7 @@ export function ConnectionDialog({ connection, onClose }: { connection?: Databas
                           {formData.sshAuthMethod === "password" && (
                             <div>
                               <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">SSH Password</label>
-                              <input
-                                type="password"
+                              <PasswordInput
                                 value={formData.sshPassword}
                                 onChange={(e) => setFormData({ ...formData, sshPassword: e.target.value })}
                                 className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono shadow-inner"
@@ -768,8 +767,7 @@ export function ConnectionDialog({ connection, onClose }: { connection?: Databas
                               </div>
                               <div>
                                 <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Key Passphrase (Optional)</label>
-                                <input
-                                  type="password"
+                                <PasswordInput
                                   value={formData.sshKeyPassphrase}
                                   onChange={(e) => setFormData({ ...formData, sshKeyPassphrase: e.target.value })}
                                   className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono shadow-inner"

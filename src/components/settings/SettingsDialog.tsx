@@ -7,6 +7,7 @@ import { Sparkles, Bot } from "lucide-react";
 import { VaultCredential } from "../../contexts/ConnectionContext";
 import { useConnections } from "../../contexts/useConnections";
 import { useVault } from "../../store/vaultStore";
+import { PasswordInput } from "../ui/PasswordInput";
 
 type SettingsCategory = "appearance" | "sqlCompletion" | "queryExecution" | "explorer" | "keymap" | "templates" | "importExport" | "ai" | "copyTransfer" | "permissions" | "vault" | "updates";
 
@@ -1238,8 +1239,7 @@ return (
                     onChange={(e) => setNewCredUser(e.target.value)}
                     className="w-full px-2 py-1 text-sm rounded bg-[var(--surface)] border border-[var(--border)] outline-none focus:border-[var(--color-accent)]"
                   />
-                  <input
-                    type="password"
+                  <PasswordInput
                     placeholder="Password"
                     value={newCredPass}
                     onChange={(e) => setNewCredPass(e.target.value)}
@@ -1372,12 +1372,15 @@ function ChannelOption({ value, current, label, description, onChange }: {
     >
       <div className="flex items-center gap-2">
         <span
-          className={`w-3.5 h-3.5 rounded-full border-2 shrink-0 ${
+          className={`w-4 h-4 rounded-full border-2 shrink-0 flex items-center justify-center ${
             selected ? "border-[var(--color-accent)]" : "border-[var(--text-secondary)]"
           }`}
         >
+          {/* Flex-centered. The old `m-[3px]` overflowed the inner
+              border-box (6px dot + 6px margin > 10px inner space) and
+              pushed the dot down-right. */}
           {selected && (
-            <span className="block w-1.5 h-1.5 m-[3px] rounded-full bg-[var(--color-accent)]" />
+            <span className="block w-1.5 h-1.5 rounded-full bg-[var(--color-accent)]" />
           )}
         </span>
         <span className="text-sm font-medium">{label}</span>
