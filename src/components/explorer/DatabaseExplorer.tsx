@@ -80,24 +80,19 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
   const [showSchemaDialog, setShowSchemaDialog] = useState(false);
   const [schemaDialogInfo, setSchemaDialogInfo] = useState<{connectionId: string, connectionName: string, databaseName: string, selectedSchemas: string[]} | null>(null);
   /**
-   * "flat"  → connections rendered in input order (legacy default).
-   * "type"  → grouped by db engine (was the `groupByType` toggle).
-   * "folders" → grouped by user-defined folders (#104). Auto-selected on
-   *             first render if the user already has folders defined; new
-   *             users land on "flat" so they see the familiar list. After
-   *             that, the user-driven toggle wins. View mode is not
-   *             persisted across launches — known limitation, documented
-   *             in the docs page.
+   * "folders" → grouped by user-defined folders (#104). The default.
+   *             With no folders defined the render degenerates to a flat
+   *             list at the root, so new users see no regression.
+   * "type"    → grouped by db engine (was the legacy `groupByType` toggle).
+   * "flat"    → connections rendered in input order (pre-#104 default,
+   *             still available for users who prefer it).
+   *
+   * Selection lives in component state and is not persisted across
+   * launches in v1 (#116). The user picks via the popover on the
+   * folder-icon button in the toolbar.
    */
-  const [viewMode, setViewMode] = useState<"flat" | "type" | "folders">("flat");
-  const autoSwitchedRef = useRef(false);
-  useEffect(() => {
-    if (autoSwitchedRef.current) return;
-    if (folders.length > 0) {
-      autoSwitchedRef.current = true;
-      setViewMode("folders");
-    }
-  }, [folders.length]);
+  const [viewMode, setViewMode] = useState<"flat" | "type" | "folders">("folders");
+  const [viewModeMenuOpen, setViewModeMenuOpen] = useState(false);
   const backupStopRef = useRef(false);
   const settings = useSettings();
   const confirmDialog = useConfirmDialog();
@@ -677,6 +672,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
     setContextMenu(null);
     setSchemaContextMenu(null);
     setActiveSubmenu(null);
+    setViewModeMenuOpen(false);
   };
 
   // Close context menus and dialogs on ESC or click outside
@@ -1436,44 +1432,89 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
         <div className="flex items-center justify-between mb-2">
           <h3 className="text-sm font-semibold">Database Explorer</h3>
           <div className="flex items-center gap-1">
-            {/* View-mode cycle: Flat → By type → Folders → Flat. Single
-                button to keep the toolbar compact; the title attribute
-                names the *current* mode + next-on-click. */}
-            <button
-              onClick={() => {
-                setViewMode((m) =>
-                  m === "flat" ? "type" : m === "type" ? "folders" : "flat",
-                );
-              }}
-              className={`p-1 rounded transition-all ${
-                viewMode !== "flat"
-                  ? "bg-[var(--color-accent)]/20 text-[var(--color-accent)]"
-                  : "hover:bg-[var(--border)] text-[var(--text-secondary)]"
-              }`}
-              title={`View: ${
-                viewMode === "flat"
-                  ? "Flat list (click for By type)"
-                  : viewMode === "type"
-                  ? "Grouped by type (click for Custom folders)"
-                  : "Custom folders (click for Flat list)"
-              }`}
-            >
-              <FolderOpen className="w-4 h-4" />
-            </button>
-            {viewMode === "folders" && (
+            {/* View-mode + New-Folder popover (#116). One stable icon
+                button; click opens a menu with radio options for the
+                three grouping modes plus a "+ New folder" action. This
+                replaces the previous 3-state cycle button, which was
+                undiscoverable — users had to click 2-3 times to
+                accidentally find that folders existed. */}
+            <div className="relative">
               <button
-                onClick={async () => {
-                  const name = window.prompt("New folder name");
-                  if (name && name.trim()) {
-                    await addFolder(name, null);
-                  }
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setViewModeMenuOpen((v) => !v);
                 }}
-                className="p-1 rounded hover:bg-[var(--border)] text-[var(--text-secondary)]"
-                title="New folder"
+                className={`p-1 rounded transition-all ${
+                  viewModeMenuOpen
+                    ? "bg-[var(--color-accent)]/20 text-[var(--color-accent)]"
+                    : "hover:bg-[var(--border)] text-[var(--text-secondary)]"
+                }`}
+                title="View mode + new folder"
               >
-                <Plus className="w-4 h-4" />
+                <FolderOpen className="w-4 h-4" />
               </button>
-            )}
+              {viewModeMenuOpen && (
+                <div
+                  className="absolute right-0 top-full mt-1 z-50 min-w-[180px] bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-xl py-1"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] opacity-60">
+                    Group by
+                  </div>
+                  {(
+                    [
+                      { id: "folders" as const, label: "Folders" },
+                      { id: "type" as const, label: "By type" },
+                      { id: "flat" as const, label: "Flat" },
+                    ]
+                  ).map((opt) => {
+                    const selected = viewMode === opt.id;
+                    return (
+                      <button
+                        key={opt.id}
+                        onClick={() => {
+                          setViewMode(opt.id);
+                          setViewModeMenuOpen(false);
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
+                      >
+                        <span
+                          className={`w-3 h-3 rounded-full border-2 shrink-0 flex items-center justify-center ${
+                            selected
+                              ? "border-[var(--color-accent)]"
+                              : "border-[var(--text-secondary)]"
+                          }`}
+                        >
+                          {selected && (
+                            <span className="block w-1 h-1 rounded-full bg-[var(--color-accent)]" />
+                          )}
+                        </span>
+                        <span>{opt.label}</span>
+                      </button>
+                    );
+                  })}
+                  <div className="h-px bg-[var(--border)] my-1" />
+                  <button
+                    onClick={async () => {
+                      const name = window.prompt("New folder name");
+                      setViewModeMenuOpen(false);
+                      if (name && name.trim()) {
+                        await addFolder(name, null);
+                        // If the user was in a different view, switch them
+                        // to folders so they can see the thing they just
+                        // created. Otherwise the create silently does
+                        // nothing visible.
+                        setViewMode("folders");
+                      }
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
+                  >
+                    <Plus className="w-3.5 h-3.5 text-emerald-400" />
+                    New folder…
+                  </button>
+                </div>
+              )}
+            </div>
 
             <button
               onClick={async () => {
