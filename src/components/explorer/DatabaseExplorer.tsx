@@ -82,11 +82,22 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
   /**
    * "flat"  → connections rendered in input order (legacy default).
    * "type"  → grouped by db engine (was the `groupByType` toggle).
-   * "folders" → grouped by user-defined folders (#104). Defaults to "folders"
-   *             only when the user has any folders defined; otherwise we fall
-   *             back to "flat" so new users still see the familiar list.
+   * "folders" → grouped by user-defined folders (#104). Auto-selected on
+   *             first render if the user already has folders defined; new
+   *             users land on "flat" so they see the familiar list. After
+   *             that, the user-driven toggle wins. View mode is not
+   *             persisted across launches — known limitation, documented
+   *             in the docs page.
    */
   const [viewMode, setViewMode] = useState<"flat" | "type" | "folders">("flat");
+  const autoSwitchedRef = useRef(false);
+  useEffect(() => {
+    if (autoSwitchedRef.current) return;
+    if (folders.length > 0) {
+      autoSwitchedRef.current = true;
+      setViewMode("folders");
+    }
+  }, [folders.length]);
   const backupStopRef = useRef(false);
   const settings = useSettings();
   const confirmDialog = useConfirmDialog();
@@ -119,17 +130,24 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
       
       const normalizedTerm = term.toLowerCase().trim();
       
-      // Find first matching node path
+      // Find first matching node path.
+      //
+      // Folder-icon nodes are skipped as match targets because they're
+      // structural containers (Tables, Views, Indexes, etc.) the user
+      // doesn't think of by name — EXCEPT user-defined connection folders
+      // (#104), which ARE user-named and ought to be searchable. Those
+      // carry a `folder:<id>` contextMenuId set by buildFolderNode.
       const findPath = (nodes: TreeNode[], searchId?: string, searchTerm?: string, path: string[] = []): string[] | null => {
         for (const node of nodes) {
           const idMatch = searchId && node.id === searchId;
-          const nameMatch = searchTerm && node.name.toLowerCase().includes(searchTerm) && 
-                           !["folder", "server", "database", "loading"].includes(node.icon);
-          
+          const isUserFolder = node.icon === "folder" && node.contextMenuId?.startsWith("folder:");
+          const skipForName = !isUserFolder && ["folder", "server", "database", "loading"].includes(node.icon);
+          const nameMatch = searchTerm && node.name.toLowerCase().includes(searchTerm) && !skipForName;
+
           if (idMatch || nameMatch) {
             return [...path, node.id];
           }
-          
+
           if (node.children && node.children.length > 0) {
             const res = findPath(node.children, searchId, searchTerm, [...path, node.id]);
             if (res) return res;

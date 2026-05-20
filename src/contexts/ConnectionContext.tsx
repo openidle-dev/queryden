@@ -431,7 +431,15 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
 
   // ── Folder CRUD (#104) ────────────────────────────────────────────────
 
-  /** Pick the next free order index among siblings of the same parent. */
+  /**
+   * Pick the next free order index among siblings of the same parent.
+   *
+   * Reads `folders` from outer-scope state. Two rapid calls before re-render
+   * could in theory return the same value, producing duplicate `order`
+   * keys — but ties are broken deterministically by `name.localeCompare`
+   * in `buildConnectionTree`, so the worst observable outcome is a
+   * tie-by-name sort. Revisit if/when we add drag-reorder or bulk ops.
+   */
   const nextFolderOrder = (parentId: string | null): number => {
     const siblings = folders.filter((f) => (f.parentId ?? null) === parentId);
     if (siblings.length === 0) return 0;
@@ -462,30 +470,23 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     if (!target) return { connections: 0, subfolders: 0 };
     const newParent = target.parentId; // null if target was at root
 
-    let connsAffected = 0;
-    let subsAffected = 0;
+    // Compute counts from the captured state BEFORE the setState calls.
+    // Mutating locals inside a setState updater would be doubled under
+    // React Strict Mode (which is enabled in main.tsx), producing wrong
+    // counts in dev — passes tests, ships, only shows up as off-by-2x
+    // numbers in the confirm dialog the next time anyone uses devtools.
+    const subsAffected = folders.filter((f) => f.parentId === id).length;
+    const connsAffected = connections.filter((c) => c.folderId === id).length;
 
     // Reparent direct children (folders + connections) to the target's parent.
     setFolders((prev) =>
       prev
         .filter((f) => f.id !== id)
-        .map((f) => {
-          if (f.parentId === id) {
-            subsAffected++;
-            return { ...f, parentId: newParent };
-          }
-          return f;
-        }),
+        .map((f) => (f.parentId === id ? { ...f, parentId: newParent } : f)),
     );
 
     setConnections((prev) =>
-      prev.map((c) => {
-        if (c.folderId === id) {
-          connsAffected++;
-          return { ...c, folderId: newParent };
-        }
-        return c;
-      }),
+      prev.map((c) => (c.folderId === id ? { ...c, folderId: newParent } : c)),
     );
 
     return { connections: connsAffected, subfolders: subsAffected };
