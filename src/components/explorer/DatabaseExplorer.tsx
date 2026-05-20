@@ -12,6 +12,7 @@ import { SchemaSelectionDialog } from "./SchemaSelectionDialog";
 import { CreateTableDialog } from "./CreateTableDialog";
 import { CreateDatabaseDialog } from "./CreateDatabaseDialog";
 import { logger } from "../../utils/logger";
+import { buildConnectionTree, type FolderTreeNode } from "../../utils/folderTree";
 
 interface TreeNode {
   id: string;
@@ -39,13 +40,16 @@ interface DatabaseExplorerProps {
 }
 
 export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: DatabaseExplorerProps = {}) {
-  const { connections, activeConnection, selectedDatabase, databases, removeConnection, updateConnection, connectToDatabase, schemaItems, loadSchema, getDDL, generateStatement, isLoadingSchema, currentDb, schemaProgress, dropDatabase, createDatabase, createTable, exportConnections, importConnections, vaultCredentials, initialLoadDone, getSelectedSchemas } = useConnections();
+  const { connections, activeConnection, selectedDatabase, databases, removeConnection, updateConnection, connectToDatabase, schemaItems, loadSchema, getDDL, generateStatement, isLoadingSchema, currentDb, schemaProgress, dropDatabase, createDatabase, createTable, exportConnections, importConnections, vaultCredentials, initialLoadDone, getSelectedSchemas, folders, addFolder, renameFolder, removeFolder, moveConnectionToFolder, moveFolder } = useConnections();
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [editingConnection, setEditingConnection] = useState<DatabaseConnection | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [schemaTree, setSchemaTree] = useState<TreeNode[]>([]);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; connectionId: string } | null>(null);
+  /** Move-to-folder picker (#104). `kind` distinguishes connection vs folder
+   *  so we route to the right context-method and skip self+descendants. */
+  const [moveTarget, setMoveTarget] = useState<{ kind: "connection" | "folder"; id: string; name: string } | null>(null);
   const [connectingConnectionIds, setConnectingConnectionIds] = useState<Set<string>>(new Set());
   const isConnecting = connectingConnectionIds.size > 0;
   const beginConnect = (id: string) => setConnectingConnectionIds(prev => {
@@ -75,7 +79,25 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
   const [backupStatus, setBackupStatus] = useState("");
   const [showSchemaDialog, setShowSchemaDialog] = useState(false);
   const [schemaDialogInfo, setSchemaDialogInfo] = useState<{connectionId: string, connectionName: string, databaseName: string, selectedSchemas: string[]} | null>(null);
-  const [groupByType, setGroupByType] = useState(false);
+  /**
+   * "flat"  → connections rendered in input order (legacy default).
+   * "type"  → grouped by db engine (was the `groupByType` toggle).
+   * "folders" → grouped by user-defined folders (#104). Auto-selected on
+   *             first render if the user already has folders defined; new
+   *             users land on "flat" so they see the familiar list. After
+   *             that, the user-driven toggle wins. View mode is not
+   *             persisted across launches — known limitation, documented
+   *             in the docs page.
+   */
+  const [viewMode, setViewMode] = useState<"flat" | "type" | "folders">("flat");
+  const autoSwitchedRef = useRef(false);
+  useEffect(() => {
+    if (autoSwitchedRef.current) return;
+    if (folders.length > 0) {
+      autoSwitchedRef.current = true;
+      setViewMode("folders");
+    }
+  }, [folders.length]);
   const backupStopRef = useRef(false);
   const settings = useSettings();
   const confirmDialog = useConfirmDialog();
@@ -108,17 +130,24 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
       
       const normalizedTerm = term.toLowerCase().trim();
       
-      // Find first matching node path
+      // Find first matching node path.
+      //
+      // Folder-icon nodes are skipped as match targets because they're
+      // structural containers (Tables, Views, Indexes, etc.) the user
+      // doesn't think of by name — EXCEPT user-defined connection folders
+      // (#104), which ARE user-named and ought to be searchable. Those
+      // carry a `folder:<id>` contextMenuId set by buildFolderNode.
       const findPath = (nodes: TreeNode[], searchId?: string, searchTerm?: string, path: string[] = []): string[] | null => {
         for (const node of nodes) {
           const idMatch = searchId && node.id === searchId;
-          const nameMatch = searchTerm && node.name.toLowerCase().includes(searchTerm) && 
-                           !["folder", "server", "database", "loading"].includes(node.icon);
-          
+          const isUserFolder = node.icon === "folder" && node.contextMenuId?.startsWith("folder:");
+          const skipForName = !isUserFolder && ["folder", "server", "database", "loading"].includes(node.icon);
+          const nameMatch = searchTerm && node.name.toLowerCase().includes(searchTerm) && !skipForName;
+
           if (idMatch || nameMatch) {
             return [...path, node.id];
           }
-          
+
           if (node.children && node.children.length > 0) {
             const res = findPath(node.children, searchId, searchTerm, [...path, node.id]);
             if (res) return res;
@@ -384,8 +413,25 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
       };
     };
 
+    // Recursive walk for the user-defined folder hierarchy (#104). Folder
+    // nodes carry `contextMenuId` keyed `folder:<id>` so the same context-
+    // menu handler can distinguish folder vs connection without an extra
+    // type field on TreeNode.
+    const buildFolderNode = (node: FolderTreeNode): TreeNode => {
+      if (node.kind === "connection") {
+        return buildConnNode(node.connection!);
+      }
+      return {
+        id: `folder-${node.id}`,
+        name: node.name,
+        icon: "folder",
+        contextMenuId: `folder:${node.id}`,
+        children: node.children.map(buildFolderNode),
+      };
+    };
+
     let tree: TreeNode[];
-    if (groupByType) {
+    if (viewMode === "type") {
       const grouped: Record<string, DatabaseConnection[]> = {};
       connections.forEach(conn => {
         const type = conn.type || "other";
@@ -399,12 +445,14 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
         icon: "folder" as const,
         children: conns.map(buildConnNode),
       }));
+    } else if (viewMode === "folders") {
+      tree = buildConnectionTree(folders, connections).map(buildFolderNode);
     } else {
       tree = connections.map(buildConnNode);
     }
 
     setSchemaTree(tree);
-  }, [connections, activeConnection, selectedDatabase, settings, schemaItems, databases, isLoadingSchema, loadingDatabases, tableDetails, loadingTableDetails, groupByType]);
+  }, [connections, activeConnection, selectedDatabase, settings, schemaItems, databases, isLoadingSchema, loadingDatabases, tableDetails, loadingTableDetails, viewMode, folders]);
 
   const toggleExpand = async (nodeId: string) => {
     const wasExpanded = expandedNodes.has(nodeId);
@@ -1379,13 +1427,44 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
         <div className="flex items-center justify-between mb-2">
           <h3 className="text-sm font-semibold">Database Explorer</h3>
           <div className="flex items-center gap-1">
+            {/* View-mode cycle: Flat → By type → Folders → Flat. Single
+                button to keep the toolbar compact; the title attribute
+                names the *current* mode + next-on-click. */}
             <button
-              onClick={() => setGroupByType(!groupByType)}
-              className={`p-1 rounded transition-all ${groupByType ? "bg-[var(--color-accent)]/20 text-[var(--color-accent)]" : "hover:bg-[var(--border)] text-[var(--text-secondary)]"}`}
-              title="Group connections by type"
+              onClick={() => {
+                setViewMode((m) =>
+                  m === "flat" ? "type" : m === "type" ? "folders" : "flat",
+                );
+              }}
+              className={`p-1 rounded transition-all ${
+                viewMode !== "flat"
+                  ? "bg-[var(--color-accent)]/20 text-[var(--color-accent)]"
+                  : "hover:bg-[var(--border)] text-[var(--text-secondary)]"
+              }`}
+              title={`View: ${
+                viewMode === "flat"
+                  ? "Flat list (click for By type)"
+                  : viewMode === "type"
+                  ? "Grouped by type (click for Custom folders)"
+                  : "Custom folders (click for Flat list)"
+              }`}
             >
               <FolderOpen className="w-4 h-4" />
             </button>
+            {viewMode === "folders" && (
+              <button
+                onClick={async () => {
+                  const name = window.prompt("New folder name");
+                  if (name && name.trim()) {
+                    await addFolder(name, null);
+                  }
+                }}
+                className="p-1 rounded hover:bg-[var(--border)] text-[var(--text-secondary)]"
+                title="New folder"
+              >
+                <Plus className="w-4 h-4" />
+              </button>
+            )}
 
             <button
               onClick={async () => {
@@ -1570,8 +1649,91 @@ Note: "version" must be a number (e.g. 2), not a string like "0.1.0".`
         </div>
       )}
 
-      {/* Context Menu (Connection) */}
-      {contextMenu && (
+      {/* Context Menu (Connection or Folder). Folder rows carry a
+          `folder:<id>` contextMenuId set by buildFolderNode — we branch
+          here rather than maintaining a second piece of state. */}
+      {contextMenu && contextMenu.connectionId.startsWith("folder:") && (
+        <div
+          className="fixed bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-xl py-1 z-50 min-w-[180px]"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {(() => {
+            const folderId = contextMenu.connectionId.slice("folder:".length);
+            const folder = folders.find((f) => f.id === folderId);
+            if (!folder) return null;
+            return (
+              <>
+                <button
+                  onClick={async () => {
+                    const name = window.prompt("Rename folder", folder.name);
+                    if (name && name.trim()) {
+                      await renameFolder(folderId, name);
+                    }
+                    closeContextMenu();
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
+                >
+                  <Edit2 className="w-3 h-3" /> Rename
+                </button>
+                <button
+                  onClick={async () => {
+                    const name = window.prompt("New subfolder name");
+                    if (name && name.trim()) {
+                      await addFolder(name, folderId);
+                      // Open the parent so the new subfolder is visible.
+                      setExpandedNodes((prev) => new Set(prev).add(`folder-${folderId}`));
+                    }
+                    closeContextMenu();
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
+                >
+                  <Plus className="w-3 h-3 text-emerald-400" /> New subfolder
+                </button>
+                <button
+                  onClick={() => {
+                    setMoveTarget({ kind: "folder", id: folderId, name: folder.name });
+                    closeContextMenu();
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
+                >
+                  <FolderOpen className="w-3 h-3 text-yellow-500" /> Move to folder…
+                </button>
+                <div className="h-px bg-[var(--border)] my-1" />
+                <button
+                  onClick={async () => {
+                    // Preview what would happen before asking. removeFolder
+                    // reparents children to the deleted folder's parent.
+                    const subs = folders.filter((f) => f.parentId === folderId).length;
+                    const conns = connections.filter((c) => c.folderId === folderId).length;
+                    const message =
+                      subs + conns === 0
+                        ? `Delete folder "${folder.name}"?`
+                        : `Delete folder "${folder.name}"? ${conns} connection${
+                            conns === 1 ? "" : "s"
+                          } and ${subs} subfolder${subs === 1 ? "" : "s"} will be moved to its parent.`;
+                    const confirmed = await confirmDialog.confirm({
+                      title: "Delete folder",
+                      message,
+                      confirmLabel: "Delete",
+                      cancelLabel: "Keep",
+                      type: "danger",
+                    });
+                    if (confirmed) {
+                      await removeFolder(folderId);
+                    }
+                    closeContextMenu();
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)] text-red-400"
+                >
+                  <Trash2 className="w-3 h-3" /> Delete folder
+                </button>
+              </>
+            );
+          })()}
+        </div>
+      )}
+      {contextMenu && !contextMenu.connectionId.startsWith("folder:") && (
         <div
           className="fixed bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-xl py-1 z-50 min-w-[160px]"
           style={{ left: contextMenu.x, top: contextMenu.y }}
@@ -1596,6 +1758,20 @@ Note: "version" must be a number (e.g. 2), not a string like "0.1.0".`
           >
             <Edit2 className="w-3 h-3" /> Edit
           </button>
+          {viewMode === "folders" && (
+            <button
+              onClick={() => {
+                const conn = connections.find((c) => c.id === contextMenu.connectionId);
+                if (conn) {
+                  setMoveTarget({ kind: "connection", id: conn.id, name: conn.name });
+                }
+                closeContextMenu();
+              }}
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
+            >
+              <FolderOpen className="w-3 h-3 text-yellow-500" /> Move to folder…
+            </button>
+          )}
           <button
             onClick={async () => {
               const confirmed = await confirmDialog.confirm({
@@ -1626,6 +1802,36 @@ Note: "version" must be a number (e.g. 2), not a string like "0.1.0".`
             <Plus className="w-3 h-3 text-emerald-400" /> Create Database...
           </button>
         </div>
+      )}
+
+      {/* Move-to-folder picker (#104). Excludes self + descendants when
+          moving a folder so the user can't construct a cycle. */}
+      {moveTarget && (
+        <MoveToFolderDialog
+          target={moveTarget}
+          folders={folders}
+          onCancel={() => setMoveTarget(null)}
+          onPick={async (parentId) => {
+            try {
+              if (moveTarget.kind === "connection") {
+                await moveConnectionToFolder(moveTarget.id, parentId);
+              } else {
+                await moveFolder(moveTarget.id, parentId);
+              }
+              setMoveTarget(null);
+            } catch (e) {
+              // moveFolder throws on cycle / unknown parent; surface that
+              // instead of swallowing it. The dialog stays open so the
+              // user can pick a different destination.
+              await confirmDialog.dialog({
+                title: "Move failed",
+                message: e instanceof Error ? e.message : String(e),
+                confirmLabel: "OK",
+                type: "danger",
+              });
+            }
+          }}
+        />
       )}
 
       {/* Schema Context Menu */}
@@ -2410,6 +2616,88 @@ Note: "version" must be a number (e.g. 2), not a string like "0.1.0".`
         }}
         dbType={activeConnection?.type || "postgres"}
       />
+    </div>
+  );
+}
+
+// ── Move-to-folder picker dialog (#104) ─────────────────────────────────
+//
+// Renders a flat list of all folders with indentation reflecting depth,
+// plus a "Root" option at the top. When moving a folder, the dialog hides
+// the folder itself and its descendants — picking one of those would form
+// a cycle, and ConnectionContext.moveFolder rejects it anyway.
+
+import type { Folder as FolderModel } from "../../contexts/ConnectionContext";
+import { descendantFolderIds } from "../../utils/folderTree";
+
+interface MoveToFolderDialogProps {
+  target: { kind: "connection" | "folder"; id: string; name: string };
+  folders: FolderModel[];
+  onCancel: () => void;
+  onPick: (parentId: string | null) => void;
+}
+
+function MoveToFolderDialog({ target, folders, onCancel, onPick }: MoveToFolderDialogProps) {
+  // Sort folders into a depth-aware list so the UI shows hierarchy without
+  // needing a real tree component.
+  const flat: { folder: FolderModel; depth: number }[] = [];
+  const walk = (parentId: string | null, depth: number) => {
+    const siblings = folders
+      .filter((f) => (f.parentId ?? null) === parentId)
+      .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+    for (const f of siblings) {
+      flat.push({ folder: f, depth });
+      walk(f.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+
+  const excluded =
+    target.kind === "folder" ? descendantFolderIds(target.id, folders) : new Set<string>();
+
+  return (
+    <div
+      className="fixed inset-0 z-[200] bg-black/50 flex items-center justify-center"
+      onClick={onCancel}
+    >
+      <div
+        className="bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-xl w-[360px] max-h-[480px] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-4 py-3 border-b border-[var(--border)] flex items-center justify-between">
+          <div className="text-sm font-semibold">Move "{target.name}" to…</div>
+          <button onClick={onCancel} className="p-1 rounded hover:bg-[var(--border)]">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto py-1">
+          <button
+            onClick={() => onPick(null)}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
+          >
+            <FolderOpen className="w-3.5 h-3.5 text-yellow-500" />
+            <span className="font-medium">Root</span>
+          </button>
+          {flat
+            .filter(({ folder }) => !excluded.has(folder.id))
+            .map(({ folder, depth }) => (
+              <button
+                key={folder.id}
+                onClick={() => onPick(folder.id)}
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
+                style={{ paddingLeft: `${12 + depth * 16}px` }}
+              >
+                <Folder className="w-3.5 h-3.5 text-yellow-500" />
+                <span>{folder.name}</span>
+              </button>
+            ))}
+          {flat.length === 0 && (
+            <div className="px-3 py-4 text-center text-xs text-[var(--text-secondary)] italic">
+              No folders yet. Use the + button in the toolbar to create one.
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

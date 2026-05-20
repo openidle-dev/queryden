@@ -445,6 +445,12 @@ pub struct StoredConnection {
     pub ssh_key_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ssh_key_passphrase: Option<String>,
+    /// ID of the containing folder. `None` means the connection lives at
+    /// the root of the explorer. Missing in old connections.json files —
+    /// serde defaults `Option<String>` to `None` on deserialize, so older
+    /// files load cleanly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder_id: Option<String>,
 }
 
 impl StoredConnection {
@@ -484,7 +490,85 @@ impl StoredConnection {
             ssh_password,
             ssh_key_path: self.ssh_key_path.clone(),
             ssh_key_passphrase,
+            folder_id: self.folder_id.clone(),
         }
+    }
+}
+
+// ── Folder hierarchy ────────────────────────────────────────────────────
+//
+// Folders are user-defined groupings of connections in the Database
+// Explorer (issue #104). Each folder has a stable id, a display name,
+// an optional `parent_id` (None = root level), and an `order` for sibling
+// sorting. Folders are encrypted + machine-bound like query history — the
+// names can leak environment hints ("Production / EU") so we don't store
+// them in plaintext.
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct Folder {
+    pub id: String,
+    pub name: String,
+    /// None for root-level folders. The frontend enforces no-cycle
+    /// invariants; we just store what we're told.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    /// Sort key among siblings of the same parent. The frontend assigns
+    /// these; ties broken by id for determinism.
+    pub order: i32,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct FoldersData {
+    pub folders: Vec<Folder>,
+    pub version: u32,
+    pub machine_fingerprint: String,
+}
+
+#[tauri::command]
+pub fn save_folders(app: tauri::AppHandle, folders: Vec<Folder>) -> Result<(), String> {
+    let dir = ensure_app_dir(&app)?;
+    let data = FoldersData {
+        folders,
+        version: 1,
+        machine_fingerprint: get_machine_fingerprint(),
+    };
+    let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
+    let encrypted = encrypt(&json, None, &dir)?;
+    let path = dir.join("folders.json");
+    fs::write(&path, encrypted).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn load_folders(app: tauri::AppHandle) -> Result<Vec<Folder>, String> {
+    let dir = get_app_data_dir(&app);
+    let path = dir.join("folders.json");
+    if !path.exists() {
+        // First-run / never-saved → genuine empty state.
+        return Ok(vec![]);
+    }
+    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let json = decrypt(&content, None, &dir);
+    match serde_json::from_str::<FoldersData>(&json) {
+        Ok(data) => {
+            // Cross-machine: treat as empty intentionally. The user's
+            // folder tree from machine A simply doesn't belong here, and
+            // we deliberately ignore it the way query-history does.
+            // Frontend treats this as "no folders" — safe because the
+            // file was never encrypted for this machine's key and any
+            // save will overwrite with this machine's content.
+            if data.machine_fingerprint != get_machine_fingerprint() {
+                return Ok(vec![]);
+            }
+            Ok(data.folders)
+        }
+        // Parse failure on a file that EXISTS and decrypted-on-this-machine
+        // is a real error — return Err so the frontend can refuse to save
+        // (and thereby refuse to overwrite the existing on-disk file with
+        // an empty list). Query history takes the opposite stance because
+        // history is high-volume / low-value; folders are user-curated
+        // and clobbering them would be a serious incident.
+        Err(e) => Err(format!("Failed to parse folders.json: {e}")),
     }
 }
 

@@ -1,5 +1,6 @@
 import { createContext, useState, useEffect, ReactNode } from "react";
-import { invokeCmd, StoredConnectionDto, VaultCredentialDto } from "../lib/ipc";
+import { invokeCmd, StoredConnectionDto, VaultCredentialDto, FolderDto } from "../lib/ipc";
+import { wouldCreateCycle } from "../utils/folderTree";
 import { useSettings } from "../store/settingsStore";
 import { getDefaultDatabaseName } from "../config/app";
 import { quoteIdentifier } from "../utils/sqlSecurity";
@@ -28,6 +29,16 @@ export interface DatabaseConnection {
   sshPassword?: string;
   sshKeyPath?: string;
   sshKeyPassphrase?: string;
+  /** Folder this connection belongs to, or null/undefined for root. */
+  folderId?: string | null;
+}
+
+/** Connection-explorer folder (#104). */
+export interface Folder {
+  id: string;
+  name: string;
+  parentId: string | null;
+  order: number;
 }
 
 export interface VaultCredential {
@@ -131,6 +142,25 @@ interface ConnectionContextType {
   getDatabaseTemplates: () => Promise<string[]>;
   getSelectedSchemas: (connectionId: string, databaseName: string) => string[];
   setSelectedSchemas: (connectionId: string, databaseName: string, schemas: string[]) => Promise<void>;
+  // Folder hierarchy (#104)
+  folders: Folder[];
+  addFolder: (name: string, parentId: string | null) => Promise<Folder>;
+  renameFolder: (id: string, name: string) => Promise<void>;
+  /**
+   * Delete a folder. Connections in this folder are reparented to the
+   * folder's own parent (so deleting `Production/EU` leaves its connections
+   * under `Production`). Subfolders are reparented the same way. Returns
+   * the number of affected connections + subfolders for the caller's
+   * confirmation UI.
+   */
+  removeFolder: (id: string) => Promise<{ connections: number; subfolders: number }>;
+  /** Move a connection into a folder (or to the root with `folderId = null`). */
+  moveConnectionToFolder: (connectionId: string, folderId: string | null) => Promise<void>;
+  /**
+   * Reparent a folder. Rejects (no-op + throws) if it would create a cycle —
+   * i.e. `parentId` is the folder itself or one of its descendants.
+   */
+  moveFolder: (id: string, parentId: string | null) => Promise<void>;
 }
 
 export const ConnectionContext = createContext<ConnectionContextType | undefined>(undefined);
@@ -164,6 +194,7 @@ function dtoToConnection(c: StoredConnectionDto): DatabaseConnection {
     sshPassword: c.ssh_password ?? undefined,
     sshKeyPath: c.ssh_key_path ?? undefined,
     sshKeyPassphrase: c.ssh_key_passphrase ?? undefined,
+    folderId: c.folder_id ?? null,
   };
 }
 
@@ -206,6 +237,25 @@ function connectionToDto(c: DatabaseConnection): StoredConnectionDto {
     ssh_password: c.sshPassword ?? null,
     ssh_key_path: c.sshKeyPath ?? null,
     ssh_key_passphrase: c.sshKeyPassphrase ?? null,
+    folder_id: c.folderId ?? null,
+  };
+}
+
+function folderDtoToFolder(f: FolderDto): Folder {
+  return {
+    id: f.id,
+    name: f.name,
+    parentId: f.parent_id ?? null,
+    order: f.order,
+  };
+}
+
+function folderToDto(f: Folder): FolderDto {
+  return {
+    id: f.id,
+    name: f.name,
+    parent_id: f.parentId,
+    order: f.order,
   };
 }
 
@@ -222,6 +272,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const [initialLoadDone, setInitialLoadDone] = useState(false);
   const [schemaProgress, setSchemaProgress] = useState<SchemaLoadingProgress>({ phase: "idle", current: 0, total: 0 });
   const [vaultCredentials, setVaultCredentials] = useState<VaultCredential[]>([]);
+  const [folders, setFolders] = useState<Folder[]>([]);
   /** Selected schemas per database: { "connectionId:databaseName": string[] } */
   const [selectedSchemasByDatabase, setSelectedSchemasByDatabase] = useState<Record<string, string[]>>({});
 
@@ -253,6 +304,45 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       reloadVaultCredentials();
     }
   }, []);
+
+  // Load folders on mount. Standalone file (folders.json) — see
+  // storage.rs::load_folders. We only save back to disk after a successful
+  // load; if the load fails (e.g. file exists but parse fails on this
+  // machine), we deliberately refuse to enable the save path so we don't
+  // overwrite the on-disk file with an empty list. The user's mutations
+  // become session-only until they reload — visible failure mode beats
+  // silent data loss.
+  const [foldersLoaded, setFoldersLoaded] = useState(false);
+  useEffect(() => {
+    if (!isTauri()) {
+      setFoldersLoaded(true);
+      return;
+    }
+    (async () => {
+      try {
+        const dtos = await invokeCmd("load_folders");
+        if (dtos) setFolders(dtos.map(folderDtoToFolder));
+        // Only flip the save gate when the load actually succeeded.
+        setFoldersLoaded(true);
+      } catch (e) {
+        // Intentionally leave foldersLoaded=false so the save effect
+        // below never fires. Logged for forensic visibility.
+        logger.error("Failed to load folders — folder changes will not be persisted this session:", e);
+      }
+    })();
+  }, []);
+
+  // Save folders on change (after a successful initial load).
+  useEffect(() => {
+    if (!isTauri() || !foldersLoaded) return;
+    (async () => {
+      try {
+        await invokeCmd("save_folders", { folders: folders.map(folderToDto) });
+      } catch (e) {
+        logger.error("Failed to save folders:", e);
+      }
+    })();
+  }, [folders, foldersLoaded]);
 
   const reloadVaultCredentials = async () => {
     if (!isTauri()) return;
@@ -342,6 +432,102 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
 
   const updateConnection = (id: string, updates: Partial<DatabaseConnection>) => {
     setConnections((prev) => prev.map((c) => (c.id === id ? { ...c, ...updates } : c)));
+  };
+
+  // ── Folder CRUD (#104) ────────────────────────────────────────────────
+
+  /**
+   * Pick the next free order index among siblings of the same parent.
+   *
+   * Reads `folders` from outer-scope state. Two rapid calls before re-render
+   * could in theory return the same value, producing duplicate `order`
+   * keys — but ties are broken deterministically by `name.localeCompare`
+   * in `buildConnectionTree`, so the worst observable outcome is a
+   * tie-by-name sort. Revisit if/when we add drag-reorder or bulk ops.
+   */
+  const nextFolderOrder = (parentId: string | null): number => {
+    const siblings = folders.filter((f) => (f.parentId ?? null) === parentId);
+    if (siblings.length === 0) return 0;
+    return Math.max(...siblings.map((f) => f.order)) + 1;
+  };
+
+  /** Throws if `parentId` is non-null but doesn't match any existing folder.
+   *  Prevents callers from orphaning a folder by passing a stale id (the
+   *  result would be unreachable from the root-based tree walk). */
+  const ensureValidParent = (parentId: string | null): void => {
+    if (parentId !== null && !folders.some((f) => f.id === parentId)) {
+      throw new Error(`Parent folder ${parentId} not found`);
+    }
+  };
+
+  const addFolder = async (name: string, parentId: string | null): Promise<Folder> => {
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error("Folder name cannot be empty");
+    ensureValidParent(parentId);
+    const newFolder: Folder = {
+      id: crypto.randomUUID(),
+      name: trimmed,
+      parentId,
+      order: nextFolderOrder(parentId),
+    };
+    setFolders((prev) => [...prev, newFolder]);
+    return newFolder;
+  };
+
+  const renameFolder = async (id: string, name: string): Promise<void> => {
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error("Folder name cannot be empty");
+    setFolders((prev) => prev.map((f) => (f.id === id ? { ...f, name: trimmed } : f)));
+  };
+
+  const removeFolder = async (id: string): Promise<{ connections: number; subfolders: number }> => {
+    const target = folders.find((f) => f.id === id);
+    if (!target) return { connections: 0, subfolders: 0 };
+    const newParent = target.parentId; // null if target was at root
+
+    // Compute counts from the captured state BEFORE the setState calls.
+    // Mutating locals inside a setState updater would be doubled under
+    // React Strict Mode (which is enabled in main.tsx), producing wrong
+    // counts in dev — passes tests, ships, only shows up as off-by-2x
+    // numbers in the confirm dialog the next time anyone uses devtools.
+    const subsAffected = folders.filter((f) => f.parentId === id).length;
+    const connsAffected = connections.filter((c) => c.folderId === id).length;
+
+    // Reparent direct children (folders + connections) to the target's parent.
+    setFolders((prev) =>
+      prev
+        .filter((f) => f.id !== id)
+        .map((f) => (f.parentId === id ? { ...f, parentId: newParent } : f)),
+    );
+
+    setConnections((prev) =>
+      prev.map((c) => (c.folderId === id ? { ...c, folderId: newParent } : c)),
+    );
+
+    return { connections: connsAffected, subfolders: subsAffected };
+  };
+
+  const moveConnectionToFolder = async (
+    connectionId: string,
+    folderId: string | null,
+  ): Promise<void> => {
+    setConnections((prev) =>
+      prev.map((c) => (c.id === connectionId ? { ...c, folderId } : c)),
+    );
+  };
+
+  const moveFolder = async (id: string, parentId: string | null): Promise<void> => {
+    ensureValidParent(parentId);
+    if (wouldCreateCycle(id, parentId, folders)) {
+      throw new Error("Cannot move a folder into itself or one of its descendants");
+    }
+    setFolders((prev) =>
+      prev.map((f) =>
+        f.id === id
+          ? { ...f, parentId, order: nextFolderOrder(parentId) }
+          : f,
+      ),
+    );
   };
 
   const connectToDatabase = async (connId: string, databaseName?: string, overrideVaultCredential?: VaultCredential) => {
@@ -1381,7 +1567,13 @@ SELECT ${colList} FROM ${schemaPart}.${tablePart};
         getDatabaseOwners,
         getDatabaseTemplates,
         getSelectedSchemas,
-        setSelectedSchemas
+        setSelectedSchemas,
+        folders,
+        addFolder,
+        renameFolder,
+        removeFolder,
+        moveConnectionToFolder,
+        moveFolder,
       }}
     >
       {children}

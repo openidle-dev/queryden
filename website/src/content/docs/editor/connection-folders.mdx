@@ -1,0 +1,55 @@
+---
+title: Connection folders
+description: Group servers into nested folders in the Database Explorer.
+section: editor
+order: 50
+updated: 2026-05-20
+---
+
+import Callout from '../../../components/Callout.astro';
+
+The Database Explorer supports **user-defined folders** for organizing your connection list. Folders can be nested to any depth and are persisted per-machine, encrypted alongside your other QueryDen state.
+
+## Switching to folder view
+
+The Explorer has three view modes. Click the folder icon in the top-right of the sidebar to cycle through them:
+
+1. **Flat** — connections in the order you created them (the original default).
+2. **By type** — auto-grouped by database engine (Postgres / MySQL / SQLite / etc.).
+3. **Custom folders** — your own hierarchy.
+
+The active mode is highlighted. The user's choice **is not persisted across launches** — every app start re-evaluates which mode to show:
+
+- **Existing users with folders defined** → land in **Custom folders** automatically.
+- **New users / users with no folders** → land in **Flat**.
+
+That auto-detect makes the common case correct without surfacing a setting. Manual cycling during the session still wins (the auto-detect runs once on first render). True per-user persistence of the choice is tracked as a follow-up.
+
+## Creating folders
+
+In **Custom folders** mode, a **+** button appears next to the view-mode toggle. Click it to create a root-level folder. To create a subfolder, right-click an existing folder and pick **New subfolder**.
+
+## Moving connections
+
+Right-click a connection and pick **Move to folder…** The picker shows your folder tree (indented to reflect nesting) plus a **Root** option for moving a connection out of any folder.
+
+<Callout type="info" title="No drag-and-drop yet">
+All folder operations are driven by the right-click menu and the **+** button. We deliberately shipped without drag-and-drop in v1 to keep the surface small. Send us feedback if it's something you want — [issue #104](https://github.com/openidle-dev/queryden/issues/104) is where the discussion lives.
+</Callout>
+
+## Reorganizing folders
+
+Right-click a folder for the full set of actions:
+
+- **Rename** — change the display name.
+- **New subfolder** — add a child folder.
+- **Move to folder…** — reparent (including back to root). QueryDen rejects any move that would form a cycle (a folder being its own ancestor).
+- **Delete folder** — remove the folder. **Connections and subfolders inside it are reparented to the deleted folder's parent**, not deleted. So deleting `Production/EU` with two connections inside leaves those two connections directly under `Production`.
+
+The cascade-reparent behavior means **you can't accidentally lose connections by deleting a folder**. The connections are unaffected.
+
+## Where is this stored?
+
+Folders are saved to `folders.json` in the QueryDen app data directory (e.g. `~/.local/share/com.queryden.app/` on Linux, equivalent per OS). The file is **encrypted with the machine-bound key** — the same scheme that protects `connections.json` and `query-history.json`. Copying the file to another machine won't reveal your folder tree.
+
+Folder membership for each connection is stored as a `folder_id` field inside `connections.json`. Older `connections.json` files without that field load cleanly (the missing field is treated as "no folder").
