@@ -246,8 +246,13 @@ jobs:
               '. + {"windows-x86_64": {signature: $sig, url: $url}}' <<<"$PLATFORMS")
           fi
 
-          MAC_TGZ=$(first '*aarch64.app.tar.gz')
-          MAC_SIG=$(first '*aarch64.app.tar.gz.sig')
+          # Tauri's macOS update bundle is named `QueryDen.app.tar.gz`
+          # — no architecture in the filename. We only build one macOS
+          # target today (aarch64), so a wildcard without arch is safe
+          # and correct. The old `*aarch64.app.tar.gz` glob silently
+          # dropped macOS from beta.json (see #112).
+          MAC_TGZ=$(first '*.app.tar.gz')
+          MAC_SIG=$(first '*.app.tar.gz.sig')
           if [ -n "$MAC_TGZ" ] && [ -n "$MAC_SIG" ]; then
             PLATFORMS=$(jq \
               --arg sig "$(cat "$MAC_SIG")" \
