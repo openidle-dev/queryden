@@ -23,6 +23,7 @@ interface TreeNode {
   action?: () => void;
   contextMenuId?: string;
   providerType?: string;
+  color?: string;
 }
 
 interface TableDetails {
@@ -399,6 +400,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
         icon: "server",
         contextMenuId: conn.id,
         providerType: conn.type,
+        color: conn.color,
         children: connChildren,
         action: () => {
           if (!isConnected) {
@@ -1202,8 +1204,22 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
               }
             }}
             id={`node-${node.id}`}
-            className={`w-full flex items-center gap-1 px-2 py-1 transition-colors text-sm text-left truncate ${focusedNodeId === node.id ? "bg-indigo-500/20 ring-1 ring-inset ring-indigo-500/30" : "hover:bg-[var(--surface-raised)]"}`}
-            style={{ paddingLeft: `${depth * 16 + 8}px` }}
+            className={`w-full flex items-center gap-1 px-2 py-1 transition-colors text-sm text-left truncate ${
+              focusedNodeId === node.id 
+                ? "bg-indigo-500/20 ring-1 ring-inset ring-indigo-500/30" 
+                : node.icon === "server" && node.color
+                  ? "hover:brightness-110"
+                  : "hover:bg-[var(--surface-raised)]"
+            }`}
+            style={{ 
+              paddingLeft: `${depth * 16 + 8}px`,
+              borderLeft: node.icon === "server" && node.color ? `3px solid ${node.color}` : undefined,
+              backgroundColor: focusedNodeId === node.id
+                ? undefined
+                : node.icon === "server" && node.color 
+                  ? `color-mix(in srgb, ${node.color}, transparent 85%)` 
+                  : undefined
+            }}
             disabled={isDbLoading || isSchemasLoading || isTableDetailsLoading}
             onMouseDown={() => setFocusedNodeId(node.id)}
             onDoubleClick={async () => {
@@ -1245,7 +1261,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
             ) : (
               <span className="w-3" />
             )}
-            {isDbLoading || isServerConnecting ? <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--color-accent)]" /> : getIcon(node.icon, isExpanded, node.providerType)}
+            {isDbLoading || isServerConnecting ? <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--color-accent)]" /> : getIcon(node.icon, isExpanded, node.providerType, node.color)}
             <span className={`truncate ${node.icon === 'server' ? 'text-[var(--text-primary)] font-bold' : node.icon === 'database' ? 'text-[var(--text-secondary)] font-semibold' : 'text-[var(--text-primary)] opacity-90'}`}>
               {node.name}
               {node.icon === 'server' && activeConnection?.id === node.contextMenuId && <span className="ml-2 inline-block w-1.5 h-1.5 bg-[var(--color-success)] rounded-full" title="Connected" />}
@@ -1395,18 +1411,19 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
     }
   };
 
-  const getProviderIcon = (providerType?: string) => {
+  const getProviderIcon = (providerType?: string, color?: string) => {
     const p = PROVIDERS.find(pr => pr.id === providerType);
+    const style = color ? { color } : undefined;
     if (p?.icon) {
       const Icon = p.icon;
-      return <Icon className="w-3.5 h-3.5" />;
+      return <Icon className="w-3.5 h-3.5" style={style} />;
     }
-    return <Database className="w-3.5 h-3.5 text-blue-400" />;
+    return <Database className="w-3.5 h-3.5" style={style || { color: '#60a5fa' }} />;
   };
 
-  const getIcon = (type: TreeNode["icon"], isExpanded: boolean, providerType?: string) => {
+  const getIcon = (type: TreeNode["icon"], isExpanded: boolean, providerType?: string, color?: string) => {
     if (type === "server") {
-      return getProviderIcon(providerType);
+      return getProviderIcon(providerType, color);
     }
     switch (type) {
       case "database": return <Database className="w-3.5 h-3.5 text-cyan-500" />;

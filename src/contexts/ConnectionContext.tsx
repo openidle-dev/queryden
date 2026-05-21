@@ -432,6 +432,12 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
 
   const updateConnection = (id: string, updates: Partial<DatabaseConnection>) => {
     setConnections((prev) => prev.map((c) => (c.id === id ? { ...c, ...updates } : c)));
+    setActiveConnection((current) => {
+      if (current && current.id === id) {
+        return { ...current, ...updates };
+      }
+      return current;
+    });
   };
 
   // ── Folder CRUD (#104) ────────────────────────────────────────────────
