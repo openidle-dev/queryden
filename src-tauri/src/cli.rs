@@ -2,14 +2,13 @@
 //!
 //! ## Architecture
 //!
-//! CLI tools are cached **per major version** (e.g. `postgresql-16`, `postgresql-17`).
-//! This ensures pg_dump/pg_restore binaries exactly match the server version.
+//! CLI tools are cached **per major version** (e.g. `mysql-9`, `mongosh-2.3`).
 //!
 //! ## Download sources
 //!
-//! - **PostgreSQL**: https://ftp.postgresql.org/pub/disttar/
-//!   - All major versions available as `postgresql-{version}.tar.gz`
-//!   - Includes: psql, pg_dump, pg_restore, pg_dumpall
+//! - **PostgreSQL**: Auto-download removed. Users must install psql via their
+//!   system package manager or from https://www.postgresql.org/download/.
+//!   QueryDen detects the system psql on PATH automatically.
 //! - **MySQL**: https://dev.mysql.com/get/Downloads/
 //!   - Archives: mysql-{version}-macos{arch}.tar.gz, etc.
 //! - **MongoDB**: GitHub releases (mongosh)
@@ -19,9 +18,10 @@
 //!
 //! 1. User connects via libpq → server responds `SELECT version()`
 //! 2. App parses server version (e.g. "PostgreSQL 16.5")
-//! 3. App checks if ~/queryden/cli-tools/postgresql-16/ has the binaries
-//! 4. If not → dialog asks user to confirm download
-//! 5. Download + extract → cache forever under the versioned path
+//! 3. For psql: checks system PATH. If not found, shows install guide.
+//! 4. For other tools: checks ~/queryden/cli-tools/{tool}-{version}/ for cached binaries
+//! 5. If not cached → dialog asks user to confirm download
+//! 6. Download + extract → cache forever under the versioned path
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -70,11 +70,13 @@ impl ToolKind {
 
     fn system_install_hint(&self) -> &'static str {
         match self {
-            ToolKind::Psql => "PostgreSQL client not found.\n\n\
+            ToolKind::Psql => "PostgreSQL client (psql) is required for the psql console.\n\n\
+                Download: https://www.postgresql.org/download/\n\n\
                 Linux (Debian/Ubuntu): sudo apt install postgresql-client\n\
                 Linux (Fedora/RHEL):   sudo dnf install postgresql\n\
                 macOS:                 brew install libpq\n\
-                Windows:              Download from postgresql.org",
+                Windows:              https://www.postgresql.org/download/windows/\n\n\
+                After installation, restart QueryDen.",
             ToolKind::MySql => "MySQL client not found.\n\n\
                 Linux (Debian/Ubuntu): sudo apt install mysql-client\n\
                 Linux (Fedora/RHEL):   sudo dnf install mysql\n\
@@ -89,18 +91,7 @@ impl ToolKind {
     }
 }
 
-// Known PostgreSQL patch releases with exact filenames.
-// Used as a fallback when we have the exact download URL.
-// For unknown versions (>= 19 or gaps), URL is constructed dynamically.
-const KNOWN_PG_RELEASES: &[(u32, &str)] = &[
-    (18, "postgresql-18.0.0.tar.gz"),
-    (17, "postgresql-17.4.tar.gz"),
-    (16, "postgresql-16.8.tar.gz"),
-    (15, "postgresql-15.7.tar.gz"),
-    (14, "postgresql-14.12.tar.gz"),
-    (13, "postgresql-13.15.tar.gz"),
-    (12, "postgresql-12.17.tar.gz"),
-];
+
 
 impl std::fmt::Display for ToolKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -115,31 +106,15 @@ struct DownloadSpec {
     is_archive: bool,
 }
 
-/// Returns a known filename for a given PostgreSQL major version, if we have it.
-fn known_pg_filename(major: u32) -> Option<&'static str> {
-    KNOWN_PG_RELEASES.iter().find(|(v, _)| *v == major).map(|(_, f)| *f)
-}
 
 /// Returns a download spec for a tool at a specific major version.
-/// For PostgreSQL: always generates a URL (known or constructed).
+/// PostgreSQL auto-download has been removed — users must install psql via their
+/// system package manager or the official installer.
 /// For MongoDB/Redis: uses hardcoded GitHub URLs.
 /// For MySQL: uses hardcoded URLs.
-fn download_spec(kind: ToolKind, major_version: Option<u32>) -> Option<DownloadSpec> {
+fn download_spec(kind: ToolKind, _major_version: Option<u32>) -> Option<DownloadSpec> {
     match kind {
-        ToolKind::Psql => {
-            let maj = major_version.unwrap_or(0);
-            if maj == 0 {
-                return None;
-            }
-            // Try known exact filename first, otherwise construct dynamically
-            let filename = known_pg_filename(maj)
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| format!("postgresql-{}.0.0.tar.gz", maj));
-            Some(DownloadSpec {
-                url: format!("https://ftp.postgresql.org/pub/disttar/{}", filename),
-                is_archive: true,
-            })
-        }
+        ToolKind::Psql => None,
         ToolKind::Mongo => {
             // mongosh publishes platform binaries on GitHub
             let url = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
@@ -255,18 +230,8 @@ impl CliManager {
 
     /// Download and extract a versioned CLI tool.
     async fn download_versioned(&self, kind: ToolKind, major_version: u32) -> Result<PathBuf, String> {
-        // For unknown major versions (e.g. PostgreSQL 19+ not in KNOWN_PG_RELEASES),
-        // resolve the exact filename from the FTP server directory listing.
-        let resolved_filename = if let Some(known) = known_pg_filename(major_version) {
-            known.to_string()
-        } else {
-            self.resolve_pg_filename(major_version).await?
-        };
-
-        let spec = DownloadSpec {
-            url: format!("https://ftp.postgresql.org/pub/disttar/{}", resolved_filename),
-            is_archive: true,
-        };
+        let spec = download_spec(kind, Some(major_version))
+            .ok_or_else(|| format!("Download not available for {} {}", kind, major_version))?;
 
         let dest_dir = self.versioned_dir(kind, major_version);
         let bin_dir = dest_dir.join("bin");
@@ -391,66 +356,6 @@ impl CliManager {
         }
 
         Ok(())
-    }
-
-    /// Fetch the FTP directory listing and find the actual download filename for a
-    /// PostgreSQL major version. Falls back to `postgresql-{maj}.0.0.tar.gz` if the
-    /// listing can't be fetched.
-    async fn resolve_pg_filename(&self, major_version: u32) -> Result<String, String> {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .map_err(|e| e.to_string())?;
-
-        let listing_url = "https://ftp.postgresql.org/pub/disttar/";
-        let response = client
-            .get(listing_url)
-            .send()
-            .await
-            .map_err(|e| format!("Failed to fetch FTP directory: {}", e))?;
-
-        if !response.status().is_success() {
-            return Ok(format!("postgresql-{}.0.0.tar.gz", major_version));
-        }
-
-        let body = response
-            .text()
-            .await
-            .map_err(|e| e.to_string())?;
-
-        let prefix = format!("postgresql-{}.", major_version);
-        let candidates: Vec<&str> = body
-            .split('\n')
-            .filter_map(|line| {
-                let trimmed = line.trim();
-                if trimmed.starts_with(&prefix) && trimmed.ends_with(".tar.gz") {
-                    Some(trimmed)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        if candidates.is_empty() {
-            return Ok(format!("postgresql-{}.0.0.tar.gz", major_version));
-        }
-
-        // Pick the latest patch version (highest number after the major)
-        let latest = candidates
-            .iter()
-            .max_by_key(|name| {
-                // e.g. "postgresql-19.0.1.tar.gz" → extract "0.1" → parse for sorting
-                let after = name.strip_prefix(&prefix).unwrap_or("0.0");
-                let patch = after.trim_end_matches(".tar.gz");
-                let parts: Vec<u32> = patch
-                    .split('.')
-                    .filter_map(|s| s.parse().ok())
-                    .collect();
-                parts.first().copied().unwrap_or(0)
-            })
-            .unwrap();
-
-        Ok(latest.to_string())
     }
 }
 
@@ -622,6 +527,16 @@ pub async fn cli_download_version(
         }
     }
 
+    // Guard: refuse to download if there's no spec for this tool
+    if download_spec(kind, Some(major_version)).is_none() {
+        return Err(format!(
+            "Auto-download is not available for {} {}. {}",
+            tool_kind,
+            major_version,
+            kind.system_install_hint()
+        ));
+    }
+
     let _ = app.emit("cli-download-progress", serde_json::json!({
         "tool": tool_kind,
         "version": major_version,
@@ -640,9 +555,8 @@ pub async fn cli_download_version(
 }
 
 /// Check what a CLI tool's status is for a given version.
-/// Returns { available, path, needsDownload, downloadUrl, downloadFilename }.
+/// Returns { available, path, needsDownload, downloadUrl, downloadFilename, installHint }.
 /// Does NOT auto-download — lets the frontend decide whether to prompt the user.
-/// If version > 0, always returns a download spec even if not in KNOWN_PG_RELEASES.
 #[tauri::command]
 pub async fn cli_check_tool(
     tool_kind: String,
@@ -672,18 +586,27 @@ pub async fn cli_check_tool(
         // Cached but wrong version — treat as not matching
     }
 
-    // No exact match — see if we can provide a download spec
-    let spec = download_spec(kind, Some(major_version))
-        .ok_or_else(|| "Download not available for this platform".to_string())?;
-
-    Ok(serde_json::json!({
-        "available": false,
-        "path": serde_json::Value::Null,
-        "needsDownload": true,
-        "downloadUrl": spec.url,
-        "downloadFilename": spec.url.rsplit('/').next().unwrap_or(""),
-        "cachedVersion": serde_json::Value::Null,
-    }))
+    // No exact match — see if we can provide a download spec or install hint
+    match download_spec(kind, Some(major_version)) {
+        Some(spec) => Ok(serde_json::json!({
+            "available": false,
+            "path": serde_json::Value::Null,
+            "needsDownload": true,
+            "downloadUrl": spec.url,
+            "downloadFilename": spec.url.rsplit('/').next().unwrap_or(""),
+            "cachedVersion": serde_json::Value::Null,
+            "installHint": serde_json::Value::Null,
+        })),
+        None => Ok(serde_json::json!({
+            "available": false,
+            "path": serde_json::Value::Null,
+            "needsDownload": false,
+            "downloadUrl": serde_json::Value::Null,
+            "downloadFilename": serde_json::Value::Null,
+            "cachedVersion": serde_json::Value::Null,
+            "installHint": kind.system_install_hint(),
+        })),
+    }
 }
 
 /// Check system PATH only for a tool kind. Used when server version is unknown
@@ -1110,11 +1033,4 @@ pub async fn cli_list_databases(
     Ok(stdout.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
 }
 
-/// Get all available PostgreSQL major versions with known filenames.
-#[tauri::command]
-pub fn cli_get_pg_versions() -> Vec<(u32, String)> {
-    KNOWN_PG_RELEASES
-        .iter()
-        .map(|(v, f)| (*v, f.to_string()))
-        .collect()
-}
+

@@ -137,6 +137,7 @@ export interface CheckToolResult {
   downloadUrl: string | null;
   downloadFilename: string | null;
   cachedVersion: number | null;
+  installHint?: string | null;
 }
 
 /** Shape returned by `cli_check_system_tool` (camelCase via `json!`). */
@@ -293,7 +294,6 @@ export interface IpcCommands {
     };
     result: number;
   };
-  cli_get_pg_versions: { args: void; result: Array<[number, string]> };
   cli_execute_query: {
     args: {
       toolKind: string;

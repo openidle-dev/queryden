@@ -45,7 +45,6 @@ interface CliStore {
     username: string,
     password: string
   ) => Promise<number>;
-  getPgVersions: () => Promise<Array<[number, string]>>;
   executeQuery: (
     kind: string,
     query: string,
@@ -145,8 +144,6 @@ export const useCliStore = create<CliStore>((set, get) => ({
 
   detectPgVersion: (host, port, database, username, password) =>
     invokeCmd("cli_detect_pg_version", { host, port, database, username, password }),
-
-  getPgVersions: () => invokeCmd("cli_get_pg_versions"),
 
   executeQuery: (kind, query, host, port, database, username, password, majorVersion, expandedDisplay) =>
     invokeCmd("cli_execute_query", {

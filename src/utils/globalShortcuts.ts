@@ -17,6 +17,7 @@ export type GlobalShortcutAction =
 
 export interface ShortcutKeyEvent {
   ctrlKey: boolean;
+  metaKey: boolean;
   shiftKey: boolean;
   altKey: boolean;
   key: string;
@@ -25,21 +26,32 @@ export interface ShortcutKeyEvent {
 export function matchGlobalShortcut(
   e: ShortcutKeyEvent
 ): GlobalShortcutAction | null {
-  // Ctrl+H — Help
-  if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key === "h") {
+  const isMod = e.ctrlKey || e.metaKey;
+  const keyLower = e.key.toLowerCase();
+
+  // Ctrl+H or Cmd+H — Help
+  // Note: On Mac, Cmd+H hides the window, but Ctrl+H is still matched.
+  if (isMod && !e.altKey && !e.shiftKey && keyLower === "h") {
     return { type: "open-help" };
   }
 
-  // Ctrl+Alt+S — Settings
-  if (e.ctrlKey && e.altKey && e.key === "S") {
+  // Ctrl+Alt+S or Cmd+Option+S — Settings
+  if (isMod && e.altKey && !e.shiftKey && keyLower === "s") {
     return { type: "open-settings" };
   }
 
-  // Ctrl+Shift+L — Format SQL.
-  // NOTE: the event name MUST be "format-sql" — that is what
-  // QueryEditor.tsx listens for. Issue #9 was a mismatch where this used to
-  // dispatch "format-code", so the shortcut silently did nothing.
-  if (e.ctrlKey && e.shiftKey && e.key === "L") {
+  // Ctrl+Shift+E or Cmd+Shift+E — Toggle Database Explorer
+  if (isMod && e.shiftKey && !e.altKey && keyLower === "e") {
+    return { type: "dispatch-event", name: "toggle-explorer" };
+  }
+
+  // Ctrl+Shift+F or Cmd+Shift+F — Toggle Search
+  if (isMod && e.shiftKey && !e.altKey && keyLower === "f") {
+    return { type: "dispatch-event", name: "toggle-search" };
+  }
+
+  // Ctrl+Shift+L or Cmd+Shift+L — Format SQL
+  if (isMod && e.shiftKey && !e.altKey && keyLower === "l") {
     return { type: "dispatch-event", name: "format-sql" };
   }
 

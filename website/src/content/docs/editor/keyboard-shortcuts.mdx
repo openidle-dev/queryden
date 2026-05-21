@@ -3,7 +3,7 @@ title: Keyboard shortcuts
 description: Default keymap. Edit the JSON in Settings to customize per feature.
 section: editor
 order: 10
-updated: 2026-05-13
+updated: 2026-05-21
 ---
 
 QueryDen is keyboard-first. The defaults below are wired in `src/App.tsx` (global) and the per-feature stores. Bindings can be remapped per feature in **Settings → Keymap**.
@@ -13,11 +13,14 @@ QueryDen is keyboard-first. The defaults below are wired in `src/App.tsx` (globa
 | Shortcut | Action |
 |----------|--------|
 | `Ctrl+Enter` | Run statement under cursor (statement-aware) |
-| `Ctrl+T` | New query tab |
-| `Ctrl+W` | Close current tab |
-| `Ctrl+H` | Open help |
+| `Ctrl+Shift+Enter` | Run all statements |
+| `Ctrl+N` | New query tab |
+| `Ctrl+S` | Save current query |
+| `Ctrl+Shift+L` | Format SQL |
+| `Ctrl+Shift+F` | Toggle global search bar |
+| `Ctrl+Shift+E` | Toggle Database Explorer pane |
 | `Ctrl+Alt+S` | Open settings |
-| `Ctrl+\` | Toggle Database Explorer pane |
+| `Ctrl+H` | Open help |
 
 ## In the editor
 
@@ -26,25 +29,28 @@ QueryDen is keyboard-first. The defaults below are wired in `src/App.tsx` (globa
 | `Ctrl+Click` on an identifier | Jump to definition |
 | Hover an identifier | Live `CREATE TABLE` tooltip with columns |
 | `Alt+Enter` | Intention actions (JetBrains-style refactor popup) |
-| `Ctrl+Shift+F` | Format the current SQL document |
 | `Ctrl+Space` | Trigger autocomplete |
 | `Ctrl+/` | Toggle line comment |
-| `Ctrl+Alt+L` | Duplicate line |
+| `Ctrl+D` | Duplicate line / add selection to next occurrence |
+| `Ctrl+Y` | Delete line |
+| `Ctrl+W` | Expand selection |
+| `Ctrl+Shift+W` | Shrink selection |
+| `Alt+Shift+Up/Down` | Move line up/down |
 
 ## In the results grid
 
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl+S` | Export visible rows (CSV / TSV / JSON) |
-| `Ctrl+F` | Filter |
+| `Ctrl+S` | Save pending edits |
+| `Escape` | Close overlays / menus |
 | Arrow keys | Cell navigation |
 | `Ctrl+C` | Copy cell value (or selection) |
 
-## Why some bindings are missing
+## Keymap presets
 
-QueryDen ships a **DataGrip-flavored preset** in addition to the defaults. Bindings advertised in that preset that aren't yet wired (e.g. `Shift Shift` global search, `F4` console, `Ctrl+B` go-to-definition, `Shift+F6` rename, `Alt+Left/Right` tab cycling) are tracked in [issue #11](https://github.com/openidle-dev/queryden/issues/11).
+The default "DataGrip" preset includes bindings for features still being wired (e.g. `Shift Shift` global search, `Ctrl+Shift+C` console, `Ctrl+B` go-to-definition, `Shift+F6` rename, `Ctrl+PageUp/PageDown` tab cycling). These are tracked in [issue #11](https://github.com/openidle-dev/queryden/issues/11).
 
-> If a shortcut feels missing, check the issue tracker before customizing — it may already be on the roadmap.
+> Shortcuts that conflict with operating system behavior (such as Ctrl+W closing the window, Ctrl+\ sending SIGQUIT on Linux, or F4 being captured by macOS) are avoided. The keymap uses Ctrl+Shift+E for the Database Explorer and Ctrl+PageUp/PageDown for tab navigation to prevent these conflicts.
 
 ## Customizing
 
