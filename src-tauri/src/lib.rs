@@ -82,7 +82,6 @@ pub fn run() {
             cli::cli_execute_query,
             cli::cli_list_databases,
             cli::cli_test_connection,
-            cli::cli_get_pg_versions,
             ssh::create_ssh_tunnel,
             ssh::close_ssh_tunnel,
             ssh::get_tunnel_status,

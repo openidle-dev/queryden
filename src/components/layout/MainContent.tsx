@@ -134,6 +134,11 @@ export function MainContent() {
   // Ref for latest activeTab to avoid stale closures in executeQuery
   const activeTabRef = useRef<QueryTab | undefined>(undefined);
   const activeTabIdRef = useRef<string | undefined>(undefined);
+  // Refs for activeConnection/selectedDatabase to avoid stale closures in addNewTab
+  const activeConnRef = useRef(activeConnection);
+  const selectedDbRef = useRef(selectedDatabase);
+  useEffect(() => { activeConnRef.current = activeConnection; }, [activeConnection]);
+  useEffect(() => { selectedDbRef.current = selectedDatabase; }, [selectedDatabase]);
   const [activeTableName, setActiveTableName] = useState<string | null>(null);
   // Suppresses auto-tab-switching to messages when a save/delete refresh is in progress
   const [suppressTabSwitch, setSuppressTabSwitch] = useState(false);
@@ -268,7 +273,7 @@ export function MainContent() {
   // Global Ctrl+S handler for saving queries
   useEffect(() => {
     const handleKeyDown = async (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
         
         // Prioritize saving data grid changes if any are pending
@@ -340,10 +345,12 @@ export function MainContent() {
 
     // Resolve which connection/database to target:
     // 1. Explicit params from context-menu events (most reliable)
-    // 2. Currently selected in the sidebar as fallback
-    const resolvedConnectionId = explicitConnectionId || activeConnection?.id;
-    const resolvedConnectionName = explicitConnectionName || activeConnection?.name;
-    const resolvedDatabase = explicitDatabase || selectedDatabase;
+    // 2. Currently selected in the sidebar as fallback (via ref to avoid stale closure)
+    const activeConn = activeConnRef.current;
+    const selectedDb = selectedDbRef.current;
+    const resolvedConnectionId = explicitConnectionId || activeConn?.id;
+    const resolvedConnectionName = explicitConnectionName || activeConn?.name;
+    const resolvedDatabase = explicitDatabase || selectedDb;
 
     const newTab: QueryTab = {
       id: crypto.randomUUID(),
@@ -632,28 +639,25 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         logger.debug("[CLI Path] Tool status (checkTool):", toolStatus);
 
         if (toolStatus.needsDownload) {
-          const filename = toolStatus.downloadFilename || `postgresql-${majorVersion}.tar.gz`;
+          // Auto-download is available (MySQL, Mongo, Redis) — prompt user
+          const filename = toolStatus.downloadFilename || `psql-${majorVersion}.tar.gz`;
           const confirmed = await confirmDialog.confirm({
-            title: "Download psql",
-            message: `The psql CLI for PostgreSQL ${majorVersion} is not installed.\n\n\
-QueryDen needs the psql version to match your server (${majorVersion}) to avoid compatibility issues.\n\n\
-Download "${filename}" (~80MB)?`,
+            title: "Download CLI Tool",
+            message: `The CLI tool for version ${majorVersion} is not installed.\n\nDownload "${filename}"?`,
             confirmLabel: "Download",
             type: "info",
           });
           if (!confirmed) {
-            const msg = "psql download cancelled — cannot run queries without the CLI tool.";
-            appendPsqlOutput([`ERROR: ${msg}`]);
-            setError(msg);
+            appendPsqlOutput([`ERROR: CLI tool download cancelled.`]);
+            setError("CLI tool download cancelled.");
             setIsExecuting(false);
       isExecutingRef.current = false;
             return;
           }
-          // User confirmed — download
-          appendPsqlOutput([`Downloading psql ${majorVersion}...`]);
+          appendPsqlOutput([`Downloading CLI tool ${majorVersion}...`]);
           try {
             await cliStore.downloadVersion("postgresql", majorVersion);
-            appendPsqlOutput([`psql ${majorVersion} downloaded and ready.`]);
+            appendPsqlOutput([`CLI tool ${majorVersion} downloaded and ready.`]);
           } catch (dlErr: any) {
             const msg = `Download failed: ${dlErr.message || String(dlErr)}`;
             appendPsqlOutput([`ERROR: ${msg}`]);
@@ -663,9 +667,26 @@ Download "${filename}" (~80MB)?`,
             return;
           }
         } else if (!toolStatus.available) {
-          // System install hint (platform doesn't support download)
-          const hint = `PostgreSQL ${majorVersion} client not found and auto-download is not available for your platform.\n\nInstall the PostgreSQL client for version ${majorVersion} and try again.`;
-          setError(hint);
+          // Tool not available and cannot be auto-downloaded — show install guide
+          const installHint = toolStatus.installHint || "PostgreSQL client (psql) not found. Please install it and restart QueryDen.";
+          const confirmed = await confirmDialog.confirm({
+            title: "psql Not Found",
+            message: installHint,
+            confirmLabel: "Open Download Page",
+            type: "info",
+          });
+          if (confirmed) {
+            try {
+              const { openUrl } = await import("@tauri-apps/plugin-opener");
+              await openUrl("https://www.postgresql.org/download/");
+            } catch (e) {
+              logger.error("[CLI Path] Failed to open URL:", e);
+            }
+          }
+          appendPsqlOutput([`ERROR: ${installHint}`]);
+          setError("psql not found");
+          setIsExecuting(false);
+      isExecutingRef.current = false;
           return;
         }
         
@@ -1385,7 +1406,10 @@ Download "${filename}" (~80MB)?`,
 
   // Listen for open-query-window event and keyboard shortcuts
   useEffect(() => {
-    const handleNewTabWrapper = () => addNewTab();
+    const handleNewTabWrapper = (e: Event) => {
+      const detail = (e as CustomEvent<{ connectionId?: string; connectionName?: string; database?: string }>).detail || {};
+      addNewTab("", "", false, detail.connectionId, detail.connectionName, detail.database);
+    };
 
     const handleNewTabPsql = (e: Event) => {
       const detail = (e as CustomEvent<{ connectionId?: string; connectionName?: string; database?: string }>).detail || {};
@@ -1405,8 +1429,9 @@ Download "${filename}" (~80MB)?`,
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ctrl+N - New query tab
-      if (e.ctrlKey && e.key === "n") {
+      const isMod = e.ctrlKey || e.metaKey;
+      // Ctrl+N or Cmd+N - New query tab
+      if (isMod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "n") {
         e.preventDefault();
         addNewTab();
       }

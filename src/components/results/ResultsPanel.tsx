@@ -226,7 +226,7 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
   // Keyboard shortcut for Save (Ctrl+S)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
         if (editingCell) {
           saveEdit(editingCell.value);

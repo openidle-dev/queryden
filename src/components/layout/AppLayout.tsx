@@ -99,28 +99,17 @@ export function AppLayout() {
     setSearchQuery("");
   };
 
-  // Handle keyboard shortcuts (Ctrl+Alt+S is owned by App.tsx)
+  // Listen for global shortcut events dispatched from App.tsx
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Ctrl+\ - Database Explorer toggle.
-      // Issue #13: previously Ctrl+D, which collided with Monaco's built-in
-      // "add selection to next occurrence" (multi-cursor) when focus was in
-      // the editor. Ctrl+\ matches the VS Code / DataGrip sidebar-toggle
-      // convention and doesn't shadow any Monaco default binding.
-      if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key === "\\") {
-        e.preventDefault();
-        setShowExplorer((prev) => !prev);
-      }
+    const handleToggleExplorer = () => setShowExplorer((prev) => !prev);
+    const handleToggleSearch = () => setShowSearch((prev) => !prev);
 
-      // Ctrl+Shift+F - Search
-      if (e.ctrlKey && e.shiftKey && e.key === "F") {
-        e.preventDefault();
-        setShowSearch((prev) => !prev);
-      }
+    window.addEventListener("toggle-explorer", handleToggleExplorer);
+    window.addEventListener("toggle-search", handleToggleSearch);
+    return () => {
+      window.removeEventListener("toggle-explorer", handleToggleExplorer);
+      window.removeEventListener("toggle-search", handleToggleSearch);
     };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
   return (

@@ -586,11 +586,6 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
       beginConnect(conn.id);
       try {
         await connectToDatabase(conn.id);
-        // Automatically open a query window and focus it
-        window.dispatchEvent(new CustomEvent("open-query-window"));
-        setTimeout(() => {
-          window.dispatchEvent(new CustomEvent("focus-editor"));
-        }, 100);
       } catch (error: any) {
         console.error("Connection failed:", error);
         confirmDialog.dialog({
@@ -1913,7 +1908,9 @@ Note: "version" must be a number (e.g. 2), not a string like "0.1.0".`
             <>
               <button
                 onClick={() => {
-                  window.dispatchEvent(new CustomEvent("open-query-window"));
+                  window.dispatchEvent(new CustomEvent("open-query-window", {
+                    detail: { connectionId: activeConnection?.id, connectionName: activeConnection?.name, database: schemaContextMenu.node.name }
+                  }));
                   closeContextMenu();
                 }}
                 className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"

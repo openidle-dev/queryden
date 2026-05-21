@@ -11,6 +11,7 @@ describe("matchGlobalShortcut", () => {
   it("maps Ctrl+Shift+L to a 'format-sql' window event (regression: #9)", () => {
     const action = matchGlobalShortcut({
       ctrlKey: true,
+      metaKey: false,
       shiftKey: true,
       altKey: false,
       key: "L",
@@ -22,6 +23,7 @@ describe("matchGlobalShortcut", () => {
     expect(
       matchGlobalShortcut({
         ctrlKey: true,
+        metaKey: false,
         shiftKey: false,
         altKey: false,
         key: "h",
@@ -33,6 +35,7 @@ describe("matchGlobalShortcut", () => {
     expect(
       matchGlobalShortcut({
         ctrlKey: true,
+        metaKey: false,
         shiftKey: false,
         altKey: true,
         key: "S",
@@ -40,27 +43,78 @@ describe("matchGlobalShortcut", () => {
     ).toEqual({ type: "open-settings" });
   });
 
-  // Regression test for issue #12:
-  // Ctrl+Shift+F used to be double-bound — Monaco's editor swallowed it for
-  // format-document while AppLayout also wanted it for global search. We
-  // dropped the Monaco binding so the keystroke bubbles to AppLayout. This
-  // test pins down that `matchGlobalShortcut` does NOT claim Ctrl+Shift+F
-  // as a format-sql action — Ctrl+Shift+L is the canonical formatter, and
-  // Ctrl+Shift+F is reserved for AppLayout's global search handler.
-  it("does not claim Ctrl+Shift+F (reserved for global search; regression: #12)", () => {
+  it("maps Cmd+Shift+L to format-sql on macOS", () => {
+    const action = matchGlobalShortcut({
+      ctrlKey: false,
+      metaKey: true,
+      shiftKey: true,
+      altKey: false,
+      key: "L",
+    });
+    expect(action).toEqual({ type: "dispatch-event", name: "format-sql" });
+  });
+
+  it("maps Cmd+H to open-help on macOS", () => {
+    expect(
+      matchGlobalShortcut({
+        ctrlKey: false,
+        metaKey: true,
+        shiftKey: false,
+        altKey: false,
+        key: "h",
+      })
+    ).toEqual({ type: "open-help" });
+  });
+
+  it("maps Ctrl+Shift+F to toggle-search", () => {
     const action = matchGlobalShortcut({
       ctrlKey: true,
+      metaKey: false,
       shiftKey: true,
       altKey: false,
       key: "F",
     });
-    expect(action).toBeNull();
+    expect(action).toEqual({ type: "dispatch-event", name: "toggle-search" });
+  });
+
+  it("maps Ctrl+Shift+E to toggle-explorer", () => {
+    const action = matchGlobalShortcut({
+      ctrlKey: true,
+      metaKey: false,
+      shiftKey: true,
+      altKey: false,
+      key: "E",
+    });
+    expect(action).toEqual({ type: "dispatch-event", name: "toggle-explorer" });
+  });
+
+  it("maps Cmd+Shift+F to toggle-search on macOS", () => {
+    const action = matchGlobalShortcut({
+      ctrlKey: false,
+      metaKey: true,
+      shiftKey: true,
+      altKey: false,
+      key: "F",
+    });
+    expect(action).toEqual({ type: "dispatch-event", name: "toggle-search" });
+  });
+
+  it("maps Cmd+Shift+E to toggle-explorer on macOS", () => {
+    const action = matchGlobalShortcut({
+      ctrlKey: false,
+      metaKey: true,
+      shiftKey: true,
+      altKey: false,
+      key: "E",
+    });
+    expect(action).toEqual({ type: "dispatch-event", name: "toggle-explorer" });
   });
 
   it("returns null for unrelated keys", () => {
     expect(
       matchGlobalShortcut({
         ctrlKey: false,
+        metaKey: false,
         shiftKey: false,
         altKey: false,
         key: "a",
@@ -69,6 +123,7 @@ describe("matchGlobalShortcut", () => {
     expect(
       matchGlobalShortcut({
         ctrlKey: true,
+        metaKey: false,
         shiftKey: false,
         altKey: false,
         key: "L",
@@ -80,7 +135,7 @@ describe("matchGlobalShortcut", () => {
   // Ctrl+D used to toggle the Database Explorer (wired locally in
   // AppLayout.tsx), but it shadowed Monaco's "add selection to next
   // occurrence" multi-cursor binding inside the SQL editor. The explorer
-  // toggle now lives on Ctrl+\ (handled in AppLayout). This test pins down
+  // toggle now lives on Ctrl+Shift+E (handled in AppLayout). This test pins down
   // the contract that no global shortcut handler reclaims Ctrl+D — if a
   // future change wires it back into the global table, this test should
   // flip red so the regression is caught before merge.
@@ -88,6 +143,7 @@ describe("matchGlobalShortcut", () => {
     expect(
       matchGlobalShortcut({
         ctrlKey: true,
+        metaKey: false,
         shiftKey: false,
         altKey: false,
         key: "d",
@@ -96,6 +152,7 @@ describe("matchGlobalShortcut", () => {
     expect(
       matchGlobalShortcut({
         ctrlKey: true,
+        metaKey: false,
         shiftKey: false,
         altKey: false,
         key: "D",
