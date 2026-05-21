@@ -10,6 +10,28 @@ import { getDefaultDatabaseName } from "../../config/app";
 import { filterProviders, getComingSoonCount } from "./filterProviders";
 import { invokeCmd } from "../../lib/ipc";
 
+const getValidHexColor = (color: string): string => {
+  if (!color) return "#06b6d4";
+  const trimmed = color.trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(trimmed)) return trimmed;
+  if (/^#[0-9a-f]{3}$/.test(trimmed)) {
+    return '#' + trimmed[1] + trimmed[1] + trimmed[2] + trimmed[2] + trimmed[3] + trimmed[3];
+  }
+  // Parse rgb(r, g, b)
+  const rgbMatch = trimmed.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*[\d.]+)?\)$/);
+  if (rgbMatch) {
+    const r = parseInt(rgbMatch[1], 10);
+    const g = parseInt(rgbMatch[2], 10);
+    const b = parseInt(rgbMatch[3], 10);
+    const toHex = (c: number) => {
+      const hex = Math.max(0, Math.min(255, c)).toString(16);
+      return hex.length === 1 ? '0' + hex : hex;
+    };
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+  }
+  return "#06b6d4"; // default fallback for HTML color input
+};
+
 export function ConnectionDialog({ connection, onClose }: { connection?: DatabaseConnection; onClose: () => void }) {
   const { addConnection, updateConnection, removeConnection, vaultCredentials } = useConnections();
   const [step, setStep] = useState<"driver" | "details">(connection ? "details" : "driver");
@@ -536,30 +558,51 @@ export function ConnectionDialog({ connection, onClose }: { connection?: Databas
                         </div>
 
                         {/* Connection Color */}
-                        <div className="flex items-center gap-2">
-                          <label className="text-[11px] font-bold text-[var(--text-primary)] shrink-0">Color</label>
-                          <input
-                            type="color"
-                            value={formData.color}
-                            onChange={(e) => setFormData({ ...formData, color: e.target.value })}
-                            className="w-7 h-7 rounded cursor-pointer border border-[#444] bg-transparent"
-                            title="Pick a color"
-                          />
-                          {[
-                            "#06b6d4", "#3b82f6", "#8b5cf6", "#ec4899",
-                            "#ef4444", "#f97316", "#eab308", "#22c55e",
-                            "#14b8a6", "#64748b", "#1e293b", "#ffffff",
-                          ].map((color) => (
-                            <button
-                              key={color}
-                              type="button"
-                              onClick={() => setFormData({ ...formData, color })}
-                              className={`w-5 h-5 rounded-full border transition-all ${
-                                formData.color === color ? "border-white scale-110" : "border-transparent hover:scale-105"
-                              }`}
-                              style={{ backgroundColor: color }}
-                            />
-                          ))}
+                        <div className="space-y-1.5">
+                          <label className="block text-[11px] font-bold text-[var(--text-primary)]">Connection Color</label>
+                          <div className="flex items-center gap-3 flex-wrap">
+                            <div className="flex items-center gap-2 bg-[#2d2d2d] border border-[#444] rounded-lg px-2.5 py-1.5 focus-within:border-[var(--color-accent)] focus-within:bg-[#333] transition-colors shadow-inner w-44">
+                              <div 
+                                className="relative w-5 h-5 rounded-full border border-white/20 shadow-sm shrink-0 cursor-pointer overflow-hidden transition-all hover:scale-105" 
+                                style={{ backgroundColor: getValidHexColor(formData.color) }}
+                              >
+                                <input
+                                  type="color"
+                                  value={getValidHexColor(formData.color)}
+                                  onChange={(e) => setFormData({ ...formData, color: e.target.value })}
+                                  className="absolute inset-0 opacity-0 cursor-pointer w-full h-full scale-150"
+                                  title="Pick custom color"
+                                />
+                              </div>
+                              <input
+                                type="text"
+                                value={formData.color}
+                                onChange={(e) => setFormData({ ...formData, color: e.target.value })}
+                                className="w-full bg-transparent text-xs outline-none font-mono text-white"
+                                placeholder="#06b6d4"
+                                title="Custom HEX or RGB color"
+                              />
+                            </div>
+                            
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {[
+                                "#06b6d4", "#3b82f6", "#8b5cf6", "#ec4899",
+                                "#ef4444", "#f97316", "#eab308", "#22c55e",
+                                "#14b8a6", "#64748b", "#1e293b", "#ffffff",
+                              ].map((color) => (
+                                <button
+                                  key={color}
+                                  type="button"
+                                  onClick={() => setFormData({ ...formData, color })}
+                                  className={`w-5 h-5 rounded-full border transition-all ${
+                                    formData.color === color ? "border-white scale-110" : "border-transparent hover:scale-105"
+                                  }`}
+                                  style={{ backgroundColor: color }}
+                                  title={color}
+                                />
+                              ))}
+                            </div>
+                          </div>
                         </div>
                         
                         {formData.type === "sqlite" ? (
