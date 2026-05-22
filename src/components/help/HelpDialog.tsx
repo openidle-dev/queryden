@@ -1,18 +1,24 @@
-import React, { useState, useEffect } from "react";
-import { X, Info, BookOpen, Terminal, Cpu, HardDrive, Github, Bug, Send, CheckCircle, Paperclip } from "lucide-react";
+import React, { useState, useEffect, useMemo } from "react";
+import { X, Info, BookOpen, Terminal, Cpu, HardDrive, Github, Bug, Send, CheckCircle, Paperclip, FileText } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { useConnections } from "../../contexts/useConnections";
 import { invokeCmd, SystemInfoDto } from "../../lib/ipc";
 import { logger } from "../../utils/logger";
 import { useAppInfo } from "../../hooks/useAppInfo";
 import { useUpdateStore } from "../../store/updateStore";
 import { useSettings } from "../../store/settingsStore";
+import { parseChangelog } from "../../utils/parseChangelog";
+// Bundled CHANGELOG.md from the repo root via Vite's `?raw` loader. Locked to
+// the build's installed version — newer versions land via auto-update.
+import changelogRaw from "../../../CHANGELOG.md?raw";
 
 interface HelpDialogProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-type HelpTab = "about" | "report";
+type HelpTab = "about" | "changelog" | "report";
 
 type SystemInfo = SystemInfoDto;
 
@@ -56,14 +62,20 @@ export function HelpDialog({ isOpen, onClose }: HelpDialogProps) {
             </div>
             
             <nav className="space-y-1.5">
-              <TabButton 
-                active={activeTab === "about"} 
+              <TabButton
+                active={activeTab === "about"}
                 onClick={() => setActiveTab("about")}
                 icon={<Info className="w-4 h-4" />}
                 label="About"
               />
-              <TabButton 
-                active={activeTab === "report"} 
+              <TabButton
+                active={activeTab === "changelog"}
+                onClick={() => setActiveTab("changelog")}
+                icon={<FileText className="w-4 h-4" />}
+                label="What's New"
+              />
+              <TabButton
+                active={activeTab === "report"}
                 onClick={() => setActiveTab("report")}
                 icon={<Bug className="w-4 h-4" />}
                 label="Log New Issue"
@@ -88,6 +100,7 @@ export function HelpDialog({ isOpen, onClose }: HelpDialogProps) {
           <div className="h-14 px-6 border-b border-[var(--border)] flex items-center justify-between bg-[var(--surface)]">
             <h3 className="font-bold text-sm uppercase tracking-widest opacity-80">
               {activeTab === "about" && "Application Info"}
+              {activeTab === "changelog" && "What's New"}
               {activeTab === "report" && "Report an Issue"}
             </h3>
             <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-colors group">
@@ -149,6 +162,10 @@ export function HelpDialog({ isOpen, onClose }: HelpDialogProps) {
               </div>
             )}
 
+            {activeTab === "changelog" && (
+              <ChangelogPanel installedVersion={appVersion} />
+            )}
+
             {activeTab === "report" && (
               <IssueReporter
                 appVersion={appVersion}
@@ -161,6 +178,71 @@ export function HelpDialog({ isOpen, onClose }: HelpDialogProps) {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Changelog Panel ────────────────────────────────────────────────
+//
+// Renders the bundled CHANGELOG.md (Keep-a-Changelog format) as a list of
+// version blocks, newest first. Version sections are parsed once and memoized.
+// "Current" badge marks the version the user is running, so they can spot
+// what they're on at a glance. See #144.
+
+function ChangelogPanel({ installedVersion }: { installedVersion: string }) {
+  const entries = useMemo(() => parseChangelog(changelogRaw), []);
+  const prose =
+    "max-w-none text-sm text-[var(--text-secondary)] leading-relaxed " +
+    "[&_h2]:hidden " + // version heading rendered separately above
+    "[&_h3]:text-xs [&_h3]:font-bold [&_h3]:uppercase [&_h3]:tracking-widest [&_h3]:opacity-60 [&_h3]:mt-4 [&_h3]:mb-2 [&_h3]:text-[var(--text-primary)] " +
+    "[&_ul]:list-disc [&_ul]:pl-5 [&_ul]:space-y-2 [&_li]:text-[13px] " +
+    "[&_p]:mb-3 " +
+    "[&_strong]:text-[var(--text-primary)] " +
+    "[&_code]:bg-white/10 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[12px] [&_code]:text-blue-300 " +
+    "[&_a]:text-blue-400 [&_a]:underline hover:[&_a]:text-blue-300";
+
+  if (entries.length === 0) {
+    return (
+      <div className="text-sm text-[var(--text-secondary)] italic">
+        No changelog content is available.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+      <p className="text-xs text-[var(--text-secondary)] opacity-70">
+        Release notes for QueryDen. Newer versions arrive via auto-update — open this dialog after updating to see what changed.
+      </p>
+      {entries.map((entry) => {
+        const isCurrent = entry.version === installedVersion;
+        const isUnreleased = entry.version.toLowerCase() === "unreleased";
+        return (
+          <section
+            key={entry.version}
+            className="p-5 bg-[var(--surface-raised)] rounded-2xl border border-[var(--border)]"
+          >
+            <header className="flex items-baseline gap-3 mb-3">
+              <h2 className="text-lg font-black tracking-tight">
+                {isUnreleased ? "Unreleased" : `v${entry.version}`}
+              </h2>
+              {entry.date && (
+                <span className="text-[10px] uppercase font-bold tracking-widest text-[var(--text-secondary)] opacity-60">
+                  {entry.date}
+                </span>
+              )}
+              {isCurrent && (
+                <span className="text-[10px] uppercase font-bold tracking-widest text-[var(--color-accent)] bg-[var(--color-accent)]/15 px-2 py-0.5 rounded-full">
+                  Current
+                </span>
+              )}
+            </header>
+            <div className={prose}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.body}</ReactMarkdown>
+            </div>
+          </section>
+        );
+      })}
     </div>
   );
 }
