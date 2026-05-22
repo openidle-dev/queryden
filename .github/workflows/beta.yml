@@ -1,9 +1,12 @@
 name: Beta build
 
-# Manual trigger only for now. Once we're confident in the pipeline we can
-# switch this to `push: branches: [main]` (or a schedule) — but every fire
-# of this workflow burns the full Win/Mac/Linux matrix + signing, so we
-# keep it dispatch-only until that cost is worth it.
+# Triggers:
+#   - workflow_dispatch: explicit human-driven build. Always runs the full
+#     matrix (the `should-build` gate fails open for manual fires).
+#   - schedule (03:00 UTC daily): nightly beta build from main. The
+#     `should-build` job short-circuits when main has no new commits since
+#     the commit `beta-latest` currently points to, so cron at 03:00 UTC
+#     doesn't burn the Win/Mac/Linux matrix on idle days. See #140.
 on:
   workflow_dispatch:
     inputs:
@@ -11,6 +14,10 @@ on:
         description: "Branch or commit to build (defaults to main)"
         required: false
         default: "main"
+  schedule:
+    # 03:00 UTC daily. European morning review window; lower GHA runner
+    # contention than 00:00 UTC where most cron workflows fire.
+    - cron: "0 3 * * *"
 
 # Default to read-only at the workflow level; the build job inherits this and
 # only the `publish` job opts in to `contents: write` (it deletes/recreates the
@@ -19,8 +26,68 @@ permissions:
   contents: read
 
 jobs:
+  should-build:
+    name: Decide whether to build
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Need history + tags to compare main HEAD against the commit
+          # `beta-latest` points at. Default checkout is shallow and tagless.
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - id: decide
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Fail-open policy: any non-`schedule` trigger always builds.
+          # The user explicitly asked for a build (manual dispatch), or some
+          # future trigger we haven't designed around yet — don't silently skip.
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "Trigger is ${{ github.event_name }} — always build."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Scheduled run: skip if main HEAD already matches the commit
+          # `beta-latest` points to. Resolves the tag locally if it was
+          # fetched, else queries the release API as a fallback.
+          HEAD_SHA=$(git rev-parse HEAD)
+          LAST_BETA_SHA=""
+          if git rev-parse --verify beta-latest >/dev/null 2>&1; then
+            LAST_BETA_SHA=$(git rev-parse beta-latest)
+          else
+            # Tag missing locally (shouldn't happen with fetch-tags: true,
+            # but cover the case anyway via the GH API).
+            LAST_BETA_SHA=$(gh release view beta-latest \
+              --repo ${{ github.repository }} \
+              --json targetCommitish -q .targetCommitish 2>/dev/null || true)
+          fi
+
+          if [ -z "$LAST_BETA_SHA" ]; then
+            echo "No beta-latest reference found — first run, build."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$HEAD_SHA" = "$LAST_BETA_SHA" ]; then
+            echo "main HEAD ($HEAD_SHA) matches beta-latest ($LAST_BETA_SHA) — skip."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "main HEAD ($HEAD_SHA) differs from beta-latest ($LAST_BETA_SHA) — build."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
     name: Build beta (${{ matrix.platform }})
+    needs: should-build
+    if: needs.should-build.outputs.run == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -162,7 +229,8 @@ jobs:
 
   publish:
     name: Publish beta-latest pre-release
-    needs: build
+    needs: [should-build, build]
+    if: needs.should-build.outputs.run == 'true'
     runs-on: ubuntu-latest
     # Only the publish job needs write — it deletes/recreates the rolling
     # `beta-latest` tag and creates the release. Build inherits the
