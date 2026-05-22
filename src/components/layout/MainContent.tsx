@@ -40,6 +40,12 @@ export interface QueryTab {
   id: string;
   name: string;
   query: string;
+  /**
+   * Snapshot of `query` when the tab was opened or last saved.
+   * Used by `isTabDirty` (src/utils/editorDirty.ts) to gate the
+   * "you have unsaved queries" prompt on app exit (issue #121).
+   */
+  originalQuery?: string;
   target?: { connectionId: string, connectionName: string, database: string };
   /** When true, force query execution through the psql CLI binary instead of libpq */
   usePsql?: boolean;
@@ -343,6 +349,15 @@ export function MainContent() {
             queryToSave,
             `Saved: ${name} — ${activeConnection.name}`
           );
+          // Mark the active tab as in-sync with persisted state so the
+          // unsaved-changes prompt on app exit (#121) won't fire for it.
+          if (activeTabIdRef.current) {
+            setQueryTabs(prev => prev.map(t =>
+              t.id === activeTabIdRef.current
+                ? { ...t, name, originalQuery: queryToSave }
+                : t
+            ));
+          }
           setSuccess(`Query "${name}" saved successfully!`);
         }
       }
@@ -379,6 +394,10 @@ export function MainContent() {
       id: crypto.randomUUID(),
       name: name || `Query ${tabCounterRef.current}`,
       query,
+      // Snapshot original text so isTabDirty can detect unsaved edits.
+      // For blank tabs this is "" (empty stays clean until typed into);
+      // for tabs opened from a saved query this is the saved body.
+      originalQuery: query,
       usePsql,
       target: resolvedConnectionId && resolvedDatabase ? {
         connectionId: resolvedConnectionId,
@@ -1575,6 +1594,67 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       window.removeEventListener("tx-control", handleTxControl);
     };
   }, [addNewTab, executeQuery]);
+
+  // ── Unsaved queries: intercept window close (issue #121) ─────────────
+  // When the user triggers an OS-level close (X button, Alt+F4, Cmd+Q,
+  // taskbar Close) and any query editor tab is dirty, prompt before
+  // letting the window die. Standard untrusted-close pattern.
+  const queryTabsRef = useRef<QueryTab[]>([]);
+  useEffect(() => { queryTabsRef.current = queryTabs; }, [queryTabs]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        // Lazy import keeps editorDirty out of the cold-start chunk too.
+        const { getDirtyTabs } = await import("../../utils/editorDirty");
+        if (cancelled) return;
+        unlisten = await getCurrentWindow().onCloseRequested(async (event) => {
+          const dirty = getDirtyTabs(queryTabsRef.current);
+          if (dirty.length === 0) return; // let the window close
+
+          // Build a human-readable list of dirty tabs. Use the tab's name as-is
+          // (e.g. "Query 3") rather than guessing "Untitled" — the auto-numbered
+          // names ARE the user-facing identifiers in the tab strip.
+          const MAX = 5;
+          const names = dirty.slice(0, MAX).map(t => t.name || "Untitled").map(n => `  • ${n}`);
+          const remaining = dirty.length > MAX ? `\n  …and ${dirty.length - MAX} more` : "";
+          const body =
+            `You have unsaved changes in ${dirty.length} query tab${dirty.length === 1 ? "" : "s"}:\n\n` +
+            names.join("\n") + remaining + "\n\nDiscard them and exit?";
+
+          // Block the OS-level close until the user resolves the prompt.
+          event.preventDefault();
+
+          const discard = await confirmDialog.confirm({
+            title: "Unsaved queries",
+            message: body,
+            confirmLabel: "Discard",
+            cancelLabel: "Cancel",
+            type: "danger",
+          });
+
+          if (discard) {
+            try {
+              await getCurrentWindow().destroy();
+            } catch (err) {
+              logger.error("Failed to close window after Discard:", err);
+            }
+          }
+          // Cancel → do nothing; preventDefault above keeps the app alive.
+        });
+      } catch (err) {
+        // Outside Tauri (vitest, plain browser) — skip silently.
+        logger.debug("onCloseRequested not available:", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, [confirmDialog]);
 
   const formatSqlValue = (val: any): string => {
     if (val === null || val === undefined) return "NULL";
