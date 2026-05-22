@@ -26,6 +26,7 @@ export function AppLayout() {
   // removes the listener-timing race where the event fired before
   // DatabaseExplorer's listener had mounted.
   const [showAddConnectionDialog, setShowAddConnectionDialog] = useState(false);
+  const [defaultConnectionFolderId, setDefaultConnectionFolderId] = useState<string | undefined>(undefined);
   const openHelp = () => window.dispatchEvent(new CustomEvent("open-help-dialog"));
   const openSettings = () => window.dispatchEvent(new CustomEvent("open-settings-dialog"));
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -52,7 +53,8 @@ export function AppLayout() {
       setShowFiles(true);
       setShowExplorer(false);
     };
-    const handleOpenNewConnection = () => {
+    const handleOpenNewConnection = (e: Event) => {
+      setDefaultConnectionFolderId((e as CustomEvent).detail?.folderId);
       setShowAddConnectionDialog(true);
     };
     window.addEventListener("open-files-panel", handleOpenFiles);
@@ -459,7 +461,7 @@ export function AppLayout() {
 
       {/* Add Connection dialog — owned here, not in DatabaseExplorer (#84). */}
       {showAddConnectionDialog && (
-        <ConnectionDialog onClose={() => setShowAddConnectionDialog(false)} />
+        <ConnectionDialog onClose={() => { setShowAddConnectionDialog(false); setDefaultConnectionFolderId(undefined); }} defaultFolderId={defaultConnectionFolderId} />
       )}
     </div>
   );

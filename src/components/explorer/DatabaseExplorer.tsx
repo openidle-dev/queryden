@@ -1537,7 +1537,13 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
               <Upload className="w-4 h-4" />
             </button>
             <button
-              onClick={() => window.dispatchEvent(new CustomEvent("open-new-connection"))}
+              onClick={() => {
+                let folderId: string | undefined;
+                if (focusedNodeId?.startsWith("folder-")) {
+                  folderId = focusedNodeId.slice("folder-".length);
+                }
+                window.dispatchEvent(new CustomEvent("open-new-connection", { detail: { folderId } }));
+              }}
               className="p-1 rounded hover:bg-[var(--border)]"
               title="Add Connection"
             >
@@ -1677,6 +1683,15 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                   className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                 >
                   <Plus className="w-3 h-3 text-emerald-400" /> New subfolder
+                </button>
+                <button
+                  onClick={() => {
+                    window.dispatchEvent(new CustomEvent("open-new-connection", { detail: { folderId } }));
+                    closeContextMenu();
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
+                >
+                  <Database className="w-3 h-3 text-blue-400" /> New connection
                 </button>
                 <button
                   onClick={() => {
