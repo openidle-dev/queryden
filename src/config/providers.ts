@@ -1,16 +1,15 @@
 import { Server, Database, Search } from "lucide-react";
-import { 
-  SiPostgresql, 
-  SiMysql, 
-  SiSqlite, 
-  SiMongodb, 
-  SiRedis, 
-  SiSupabase, 
-  SiSnowflake, 
-  SiFirebase, 
-  SiNeo4J, 
-  SiCouchbase, 
-  SiInfluxdb, 
+import {
+  SiPostgresql,
+  SiMysql,
+  SiSqlite,
+  SiRedis,
+  SiSupabase,
+  SiSnowflake,
+  SiFirebase,
+  SiNeo4J,
+  SiCouchbase,
+  SiInfluxdb,
   SiApachecassandra,
   SiSinglestore,
   SiDuckdb
@@ -60,7 +59,10 @@ export const PROVIDERS: DatabaseProvider[] = [
   { id: "sqlserver", name: "SQL Server", icon: Database, color: "text-red-500", bg: "bg-red-500/10", type: "RDBMS", defaultPort: "1433", comingSoon: true },
   { id: "oracle", name: "Oracle", icon: GrOracle, color: "text-red-600", bg: "bg-red-600/10", type: "RDBMS", defaultPort: "1521", comingSoon: true },
   { id: "db2", name: "IBM DB2", icon: Database, color: "text-blue-800", bg: "bg-blue-800/10", type: "RDBMS", defaultPort: "50000", comingSoon: true },
-  { id: "mongo", name: "MongoDB", icon: SiMongodb, color: "text-green-500", bg: "bg-green-500/10", type: "NoSQL", defaultPort: "27017", comingSoon: true },
+  // MongoDB is intentionally absent from this connectable-engine list. QueryDen has no MongoDB
+  // driver / schema browser / results grid — only a `mongosh` CLI launch path (see #17). Adding
+  // it here as `comingSoon` would imply a first-class connected engine is planned via this picker,
+  // which it is not. The `mongosh` launch flow lives in `src-tauri/src/cli.rs` (ToolKind::Mongo).
   { id: "redis", name: "Redis", icon: SiRedis, color: "text-rose-500", bg: "bg-rose-500/10", type: "NoSQL", defaultPort: "6379", comingSoon: true },
   { id: "elasticsearch", name: "Elasticsearch", icon: Search, color: "text-yellow-500", bg: "bg-yellow-500/10", type: "NoSQL", defaultPort: "9200", comingSoon: true },
   { id: "snowflake", name: "Snowflake", icon: SiSnowflake, color: "text-blue-300", bg: "bg-blue-300/10", type: "Cloud", defaultPort: "443", comingSoon: true },
