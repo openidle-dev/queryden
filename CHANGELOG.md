@@ -4,6 +4,9 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 
 ## [Unreleased]
 
+### Fixed
+- **[#142](https://github.com/openidle-dev/queryden/issues/142) — Docs page "Edit on GitHub" link no longer 404s.** `website/src/pages/docs/[...slug].astro` was passing `sourcePath={entry.id}` to `DocsLayout`, but Astro 6's content collections no longer include the file extension in `entry.id` (the existing `.replace(/\.(md\|mdx)$/, '')` in `getStaticPaths` is a leftover no-op from earlier Astro versions). The resulting URL pointed at `…/docs/getting-started/install` instead of `…/docs/getting-started/install.mdx`, which GitHub couldn't resolve. Fix appends `.mdx` to the prop explicitly (and extracts the regex-stripped slug to a local so `currentSlug` and `sourcePath` stay in lockstep).
+
 ### Changed
 - **[#116](https://github.com/openidle-dev/queryden/issues/116) — Database Explorer view-mode is now a discoverable popover, not a 3-state cycle button.** Clicking the folder-icon button in the sidebar header now opens a small popover listing **Folders / By type / Flat** (radio dots show the active mode) plus a **+ New folder** action — replacing the previous click-to-cycle behavior where users had to click 2–3 times to discover that folders even existed. **Folders** is now the default view mode (was previously auto-detected from `folders.length`, with new users landing on Flat); with no folders defined the render degenerates to the same flat layout, so it's not a regression. The standalone **+** button that only appeared in Folders mode is removed — the popover is now the one place to come back to for both switching modes and creating folders. Docs page updated.
 
