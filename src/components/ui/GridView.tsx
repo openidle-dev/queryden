@@ -11,6 +11,7 @@ import DataEditor, {
 import "@glideapps/glide-data-grid/dist/index.css";
 import { useSettings } from "../../store/settingsStore";
 import { toNormalizedBytes, detectFileType, formatFileSize, detectBinaryColumns, FileType } from "../../utils/binaryUtils";
+import { isDateTimeType } from "../../utils/columnTypes";
 
 interface GridViewProps {
   data: any[];
@@ -29,6 +30,14 @@ interface GridViewProps {
   onColumnMoved?: (fromIdx: number, toIdx: number) => void;
   columnWidths?: Record<string, number>;
   isReadOnly?: boolean;
+  /**
+   * Optional map of column name -> SQL type (e.g. "TIMESTAMP", "TEXT").
+   * Used to decide which cells render the date/time overlay editor. When a
+   * column is missing from this map (e.g. ad-hoc query results without a
+   * table-level schema), we fall back to the column-name heuristic — see
+   * `isDateTimeType` and issue #51.
+   */
+  columnTypes?: Record<string, string>;
 }
 
 export interface GridViewRef {
@@ -80,7 +89,8 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
   onColumnMoved,
   columnWidths,
   onHeaderClicked,
-  isReadOnly = false
+  isReadOnly = false,
+  columnTypes
 }, ref) => {
   const editorRef = React.useRef<any>(null);
 
@@ -121,12 +131,12 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
     })
   ), [columns]);
 
+  // Issue #51: prefer the SQL type from schema introspection (when available);
+  // fall back to the legacy name heuristic when no type is known (ad-hoc query
+  // results). See `isDateTimeType`.
   const dateColumns = useMemo(() => new Set(
-    columns.filter(col => {
-      const low = col.toLowerCase();
-      return low.includes("date") || low.includes("time");
-    })
-  ), [columns]);
+    columns.filter(col => isDateTimeType(columnTypes?.[col], col))
+  ), [columns, columnTypes]);
 
   const binaryColumns = useMemo(() => detectBinaryColumns(data, columns), [data, columns]);
 

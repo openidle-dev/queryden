@@ -478,8 +478,9 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
     }
   };
   
-  const loadTableDetails = async (tableId: string) => {
-    if (tableDetails[tableId] || loadingTableDetails.has(tableId)) return;
+  const loadTableDetails = async (tableId: string): Promise<TableDetails | undefined> => {
+    if (tableDetails[tableId]) return tableDetails[tableId];
+    if (loadingTableDetails.has(tableId)) return undefined;
     let schemaName = 'public';
     let tableName = tableId;
     if (tableId.includes('.')) {
@@ -487,8 +488,8 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
       schemaName = parts[0];
       tableName = parts.slice(1).join('.');
     }
-    
-    if (!activeConnection || !currentDb) return;
+
+    if (!activeConnection || !currentDb) return undefined;
     
     setLoadingTableDetails(prev => new Set(prev).add(tableId));
     
@@ -570,8 +571,10 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
       }
       
       setTableDetails(prev => ({ ...prev, [tableId]: details }));
+      return details;
     } catch (e) {
       console.error("Failed to load table details:", e);
+      return undefined;
     } finally {
       setLoadingTableDetails(prev => {
         const next = new Set(prev);
@@ -1174,7 +1177,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
       return (
         <div key={node.id}>
           <button
-            onClick={() => {
+            onClick={async () => {
               // Left click: expand/collapse folders, trigger action for database and server
               if ((node.icon === "database" || node.icon === "server") && node.action) {
                 node.action();
@@ -1185,8 +1188,17 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
               if (node.icon === "table") {
                 const fullTableName = node.id.startsWith("table-") ? node.id.replace("table-", "") : node.name;
                 const query = `SELECT * FROM ${fullTableName} LIMIT 1000`;
-                window.dispatchEvent(new CustomEvent("run-specific-query", { 
-                  detail: { query, name: fullTableName, lineNumber: 1 } 
+                // Issue #51: ensure the table's column types are loaded so the
+                // data grid can pick the date/time overlay editor by real SQL
+                // type instead of by column-name substring. `loadTableDetails`
+                // returns the cached/freshly-loaded details so we don't have to
+                // wait for a re-render to read them from state.
+                const details = await loadTableDetails(fullTableName);
+                const columnTypes: Record<string, string> | undefined = details
+                  ? Object.fromEntries(details.columns.map(c => [c.name, c.type]))
+                  : undefined;
+                window.dispatchEvent(new CustomEvent("run-specific-query", {
+                  detail: { query, name: fullTableName, lineNumber: 1, columnTypes }
                 }));
               }
             }}
@@ -2162,8 +2174,14 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                   onClick={async () => {
                     const fullTableName = schemaContextMenu.node.id.replace(/^(table|view)-/, "");
                     const sql = await generateStatement("select", fullTableName);
-                    window.dispatchEvent(new CustomEvent("run-specific-query", { 
-                      detail: { query: sql, name: fullTableName, lineNumber: 1 } 
+                    // Issue #51: pass column SQL types so the grid picks the
+                    // date/time overlay editor by type rather than by name.
+                    const details = await loadTableDetails(fullTableName);
+                    const columnTypes: Record<string, string> | undefined = details
+                      ? Object.fromEntries(details.columns.map(c => [c.name, c.type]))
+                      : undefined;
+                    window.dispatchEvent(new CustomEvent("run-specific-query", {
+                      detail: { query: sql, name: fullTableName, lineNumber: 1, columnTypes }
                     }));
                     closeContextMenu();
                   }}
