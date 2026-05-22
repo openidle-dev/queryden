@@ -59,8 +59,6 @@ jobs:
         with:
           workspaces: "src-tauri -> target"
 
-      - uses: mozilla-actions/sccache-action@1583d6b38d7be47f593cb472781bbb21cab4321e
-
       - name: Install Linux deps
         if: matrix.platform == 'ubuntu-latest'
         run: |
@@ -83,8 +81,6 @@ jobs:
           # pubkey baked into the app at build time.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
         run: npm run tauri build -- --target ${{ matrix.target }}
 
       - name: Generate SHA256 companion files
