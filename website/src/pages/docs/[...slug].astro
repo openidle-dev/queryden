@@ -12,15 +12,21 @@ export async function getStaticPaths() {
 
 const { entry } = Astro.props;
 const { Content, headings } = await render(entry);
+
+// In Astro 6's content collections, `entry.id` no longer includes the file
+// extension — the .replace below is now a no-op kept for forward compatibility
+// in case the loader behavior changes again. The .mdx suffix is what makes
+// GitHub resolve the path; without it, the Edit-on-GitHub link 404s. See #142.
+const slug = entry.id.replace(/\.(md|mdx)$/, '');
 ---
 <DocsLayout
   title={entry.data.title}
   description={entry.data.description}
   section={entry.data.section}
-  currentSlug={entry.id.replace(/\.(md|mdx)$/, '')}
+  currentSlug={slug}
   updated={entry.data.updated}
   headings={headings}
-  sourcePath={entry.id}
+  sourcePath={`${slug}.mdx`}
 >
   <Content />
 </DocsLayout>
