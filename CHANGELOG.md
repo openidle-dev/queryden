@@ -5,6 +5,9 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 ## [Unreleased]
 
 ### Changed
+- **[#140](https://github.com/openidle-dev/queryden/issues/140) — Beta builds now run nightly from `main` (03:00 UTC), instead of only when manually dispatched.** Added a `schedule: cron "0 3 * * *"` trigger to `.github/workflows/beta.yml` plus a tiny `should-build` gate job that runs before the Win/Mac/Linux matrix. The gate skips the build when `main` HEAD already matches the commit `beta-latest` points to — so idle days don't burn ~3 platform-runs of CI for an unchanged manifest. Manual `workflow_dispatch` always bypasses the skip (the user explicitly asked for a build). No change to the manifest URL, the channel UX, or the version scheme — beta-opted users start receiving daily builds instead of waiting for a maintainer to fire the workflow.
+
+
 - **[#116](https://github.com/openidle-dev/queryden/issues/116) — Database Explorer view-mode is now a discoverable popover, not a 3-state cycle button.** Clicking the folder-icon button in the sidebar header now opens a small popover listing **Folders / By type / Flat** (radio dots show the active mode) plus a **+ New folder** action — replacing the previous click-to-cycle behavior where users had to click 2–3 times to discover that folders even existed. **Folders** is now the default view mode (was previously auto-detected from `folders.length`, with new users landing on Flat); with no folders defined the render degenerates to the same flat layout, so it's not a regression. The standalone **+** button that only appeared in Folders mode is removed — the popover is now the one place to come back to for both switching modes and creating folders. Docs page updated.
 
 ### Fixed
