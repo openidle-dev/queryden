@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from "react";
-import { X, Info, BookOpen, Terminal, Cpu, HardDrive, Github, Bug, Send, Camera, CheckCircle, Loader2, Image, Trash2 } from "lucide-react";
+import React, { useState, useEffect } from "react";
+import { X, Info, BookOpen, Terminal, Cpu, HardDrive, Github, Bug, Send, CheckCircle, Paperclip } from "lucide-react";
 import { useConnections } from "../../contexts/useConnections";
 import { invokeCmd, SystemInfoDto } from "../../lib/ipc";
 import { logger } from "../../utils/logger";
@@ -179,81 +179,12 @@ function IssueReporter({ appVersion, buildDate, updateChannel, sysInfo, activeCo
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [severity, setSeverity] = useState<"bug" | "enhancement" | "question">("bug");
-  const [screenshot, setScreenshot] = useState<string | null>(null);
-  const [isCapturing, setIsCapturing] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [useEmail, setUseEmail] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const captureScreenshot = async () => {
-    setIsCapturing(true);
-    try {
-      const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d");
-      const appEl = document.querySelector('[class*="theme-"]') as HTMLElement;
-      if (!appEl || !ctx) throw new Error("Could not find app element");
-
-      const rect = appEl.getBoundingClientRect();
-      canvas.width = rect.width * (window.devicePixelRatio || 1);
-      canvas.height = rect.height * (window.devicePixelRatio || 1);
-      ctx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
-
-      const svgData = `
-        <svg xmlns="http://www.w3.org/2000/svg" width="${rect.width}" height="${rect.height}">
-          <foreignObject width="100%" height="100%">
-            <div xmlns="http://www.w3.org/1999/xhtml">
-              <style>body { margin: 0; }</style>
-              ${appEl.outerHTML}
-            </div>
-          </foreignObject>
-        </svg>`;
-      
-      const svgBlob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
-      const url = URL.createObjectURL(svgBlob);
-      const img = new window.Image();
-      
-      await new Promise<void>((resolve, reject) => {
-        img.onload = () => {
-          ctx.drawImage(img, 0, 0);
-          URL.revokeObjectURL(url);
-          resolve();
-        };
-        img.onerror = () => {
-          URL.revokeObjectURL(url);
-          reject(new Error("Failed to render screenshot"));
-        };
-        img.src = url;
-      });
-
-      setScreenshot(canvas.toDataURL("image/png"));
-
-      try {
-        canvas.toBlob(async (blob) => {
-          if (blob) {
-            await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-          }
-        });
-      } catch { }
-    } catch (err) {
-      console.error("Screenshot capture failed:", err);
-      fileInputRef.current?.click();
-    } finally {
-      setIsCapturing(false);
-    }
-  };
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => setScreenshot(reader.result as string);
-    reader.readAsDataURL(file);
-  };
 
   const buildIssueBody = (isPlaintext = false) => {
     let body = "";
     if (description) body += isPlaintext ? `Description:\n${description}\n\n` : `## Description\n${description}\n\n`;
-    if (screenshot) body += isPlaintext ? `Note: A screenshot is copied to the clipboard. Please attach it.\n\n` : `## Screenshot\n> ⚠️ Screenshot captured & copied to clipboard. Paste it here.\n\n`;
     body += "---\n\n";
     body += isPlaintext ? `Environment:\n` : `## Environment\n`;
     const channelLabel = updateChannel === "beta" ? "Beta" : "Stable";
@@ -277,15 +208,19 @@ function IssueReporter({ appVersion, buildDate, updateChannel, sysInfo, activeCo
       try { (await import("@tauri-apps/plugin-opener")).openUrl(url); } catch { window.open(url, "_blank"); }
     }
     setIsSubmitted(true);
-    setTimeout(() => { setIsSubmitted(false); setTitle(""); setDescription(""); setScreenshot(null); }, 3000);
+    setTimeout(() => { setIsSubmitted(false); setTitle(""); setDescription(""); }, 4000);
   };
 
   if (isSubmitted) {
     return (
       <div className="flex flex-col items-center justify-center py-10 animate-in fade-in duration-300">
         <CheckCircle className="w-12 h-12 text-green-400 mb-4" />
-        <h3 className="text-lg font-bold mb-1">{useEmail ? "Email Opened!" : "GitHub Opened!"}</h3>
-        <p className="text-xs text-[var(--text-secondary)] text-center opacity-60">Paste your screenshot if needed.</p>
+        <h3 className="text-lg font-bold mb-1">{useEmail ? "Email Opened" : "GitHub Opened"}</h3>
+        <p className="text-xs text-[var(--text-secondary)] text-center opacity-70 max-w-xs leading-relaxed">
+          {useEmail
+            ? "To attach a screenshot, drag-and-drop it into your email client."
+            : "To attach a screenshot, drag-and-drop or paste it into the GitHub issue page that just opened."}
+        </p>
       </div>
     );
   }
@@ -335,23 +270,15 @@ function IssueReporter({ appVersion, buildDate, updateChannel, sysInfo, activeCo
 
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <label className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] opacity-50">Screenshot (Optional)</label>
-            {screenshot ? (
-              <div className="relative group rounded-lg overflow-hidden border border-[var(--border)] h-[90px] bg-black/20">
-                <img src={screenshot} alt="Preview" className="w-full h-full object-contain" />
-                <button onClick={() => setScreenshot(null)} className="absolute inset-0 bg-red-500/80 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 className="w-5 h-5 text-white" /></button>
-              </div>
-            ) : (
-              <div className="flex gap-2 h-[90px]">
-                <button onClick={captureScreenshot} className="flex-1 flex flex-col items-center justify-center gap-1.5 bg-[var(--surface-raised)] border border-[var(--border)] rounded-lg text-[10px] font-bold hover:border-blue-500/30 transition-all">
-                  {isCapturing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Camera className="w-4 h-4 opacity-60" />} <span>Capture</span>
-                </button>
-                <button onClick={() => fileInputRef.current?.click()} className="flex-1 flex flex-col items-center justify-center gap-1.5 bg-[var(--surface-raised)] border border-[var(--border)] rounded-lg text-[10px] font-bold hover:border-blue-500/30 transition-all">
-                  <Image className="w-4 h-4 opacity-60" /> <span>Upload</span>
-                </button>
-                <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileSelect} />
-              </div>
-            )}
+            <div className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] opacity-50">Attach an image?</div>
+            <div className="h-[90px] p-3 bg-[var(--surface-raised)] border border-dashed border-[var(--border)] rounded-lg flex items-start gap-2.5">
+              <Paperclip className="w-3.5 h-3.5 text-blue-400 shrink-0 mt-0.5 opacity-80" />
+              <p className="text-[10px] text-[var(--text-secondary)] leading-snug">
+                {useEmail
+                  ? "After we open your email client, drag-and-drop the image into the message."
+                  : "After we open the GitHub page, drag-and-drop or paste the image into the issue body."}
+              </p>
+            </div>
           </div>
 
           <div className="flex flex-col justify-end gap-3">
@@ -359,7 +286,7 @@ function IssueReporter({ appVersion, buildDate, updateChannel, sysInfo, activeCo
               <div><span className="opacity-50">App:</span> v{appVersion} ({buildDate?.slice(0, 7) || "dev"})</div>
               <div><span className="opacity-50">OS:</span> {sysInfo?.os_name?.toString().split(' ')[0] || "?"}</div>
             </div>
-            <button 
+            <button
               onClick={submitIssue} disabled={!title.trim()}
               className={`w-full py-2.5 rounded-lg text-xs font-bold text-white shadow-lg transition-all ${useEmail ? 'bg-purple-500' : 'bg-green-500'} disabled:opacity-20`}
             >
