@@ -24,6 +24,14 @@ export interface KeymapSettings {
   getShortcut: (actionId: string) => string | undefined;
 }
 
+// NOTE: This preset only lists bindings that the app actually wires today.
+// DataGrip-flavored bindings that the app does not yet implement
+// (globalSearch "Shift Shift", openConsole, newConsole, localHistory,
+// clipboardHistory, rename Shift+F6, goToDefinition Ctrl+B, structureView
+// Ctrl+F12, nextTab/previousTab Ctrl+PageUp/Down) were intentionally removed
+// to stop surfacing shortcuts that do nothing when pressed. See issue #11.
+// When one of those features ships, add its binding back here and wire a
+// handler (globalShortcuts.ts for app-wide; per-component otherwise).
 const defaultKeymaps: KeymapPreset[] = [
   {
     id: "default",
@@ -32,15 +40,10 @@ const defaultKeymaps: KeymapPreset[] = [
       "execute": "Ctrl+Enter",
       "executeAll": "Ctrl+Shift+Enter",
       "format": "Ctrl+Shift+L",
-      "newConsole": "Ctrl+Shift+N",
-      "openConsole": "Ctrl+Shift+C",
       "databaseExplorer": "Ctrl+Shift+E",
       "settings": "Ctrl+Alt+S",
       "find": "Ctrl+F",
       "findInFiles": "Ctrl+Shift+F",
-      "globalSearch": "Shift Shift",
-      "localHistory": "Ctrl+Shift+H",
-      "clipboardHistory": "Ctrl+Shift+V",
       "formatCode": "Ctrl+Shift+L",
       "toggleComment": "Ctrl+/",
       "duplicateLine": "Ctrl+D",
@@ -49,12 +52,7 @@ const defaultKeymaps: KeymapPreset[] = [
       "moveLineDown": "Alt+Shift+Down",
       "expandSelection": "Ctrl+W",
       "shrinkSelection": "Ctrl+Shift+W",
-      "rename": "Shift+F6",
       "quickFix": "Alt+Enter",
-      "goToDefinition": "Ctrl+B",
-      "structureView": "Ctrl+F12",
-      "nextTab": "Ctrl+PageDown",
-      "previousTab": "Ctrl+PageUp",
     }
   }
 ];
