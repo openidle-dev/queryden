@@ -77,7 +77,7 @@ Three files must stay in sync: `package.json`, `src-tauri/Cargo.toml`, `src-taur
 
 - Linux WebKitGTK workaround is set in `lib.rs` before WebKit init (`WEBKIT_DISABLE_COMPOSITING_MODE`, `WEBKIT_DISABLE_DMABUF_RENDERER`). Do not remove.
 - Cross-compiling to Windows from Linux: see `BUILD_WINDOWS.md`. Requires `cargo-xwin`, `lld`, `llvm-lib`, and `nsis`. The repo recommends GitHub Actions (`.github/workflows/release.yml`) for reliable Windows builds.
-- Release profile uses `lto = "thin"`, `codegen-units = 16`, `panic = "abort"`.
+- Release profile uses `lto = "thin"`, `codegen-units = 1`, `strip = true`, `panic = "abort"`.
 
 ## Website + documentation (`website/`)
 

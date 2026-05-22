@@ -54,7 +54,7 @@ tauri-plugin-sql = { path = "patches/tauri-plugin-sql" }
 
 [profile.release]
 strip = true
-lto = "fat"          # Whole-program LTO: smaller binary, longer compile
-codegen-units = 1    # One codegen unit: maximizes LTO/inlining opportunities
-incremental = false  # Explicitly disable; incremental defeats LTO and is off by default in release
+lto = "thin"         # Thin LTO: near-identical size to fat, 2-5x faster link
+codegen-units = 1    # One codegen unit: maximizes inlining within crates
+incremental = false
 panic = "abort"
