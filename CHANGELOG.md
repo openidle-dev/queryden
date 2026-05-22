@@ -4,6 +4,9 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 
 ## [Unreleased]
 
+### Added
+- **[#144](https://github.com/openidle-dev/queryden/issues/144) — In-app "What's New" tab in the Help dialog.** Help → What's New now shows the bundled CHANGELOG.md as a list of per-version cards, newest first, with a "Current" badge on the version the user is running. CHANGELOG.md is bundled into the build via Vite's `?raw` loader and parsed by a new pure helper `src/utils/parseChangelog.ts` (7 Vitest cases). Each version block renders via the existing `react-markdown` + `remark-gfm` deps that the updater prompt already uses, so opening a new external dep was unnecessary. Pairs with #143 — the updater prompt was already rendering `update.body` as markdown (lines 175-186 of `UpdateNotification.tsx`); #143 fills the manifest's `notes` field with real CHANGELOG content, and this PR adds the standalone browse surface.
+
 ### Changed
 - **[#116](https://github.com/openidle-dev/queryden/issues/116) — Database Explorer view-mode is now a discoverable popover, not a 3-state cycle button.** Clicking the folder-icon button in the sidebar header now opens a small popover listing **Folders / By type / Flat** (radio dots show the active mode) plus a **+ New folder** action — replacing the previous click-to-cycle behavior where users had to click 2–3 times to discover that folders even existed. **Folders** is now the default view mode (was previously auto-detected from `folders.length`, with new users landing on Flat); with no folders defined the render degenerates to the same flat layout, so it's not a regression. The standalone **+** button that only appeared in Folders mode is removed — the popover is now the one place to come back to for both switching modes and creating folders. Docs page updated.
 
