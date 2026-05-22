@@ -146,6 +146,19 @@ export function MainContent() {
   useEffect(() => { activeConnRef.current = activeConnection; }, [activeConnection]);
   useEffect(() => { selectedDbRef.current = selectedDatabase; }, [selectedDatabase]);
   const [activeTableName, setActiveTableName] = useState<string | null>(null);
+  /**
+   * Column name -> SQL type for the current table-backed result set, plus the
+   * table name those types belong to. Populated when the explorer opens a
+   * known table (the explorer dispatches `run-specific-query` with a
+   * `columnTypes` payload). When the active table later changes to something
+   * else (e.g. user ran an ad-hoc query targeting a different table), the
+   * types are invalidated by a useEffect below so the grid falls back to
+   * the column-name heuristic rather than mislabeling unrelated columns.
+   * See issue #51.
+   */
+  const [tableColumnTypes, setTableColumnTypes] = useState<
+    { tableName: string; types: Record<string, string> } | undefined
+  >(undefined);
   // Suppresses auto-tab-switching to messages when a save/delete refresh is in progress
   const [suppressTabSwitch, setSuppressTabSwitch] = useState(false);
   // Transaction state
@@ -234,6 +247,16 @@ export function MainContent() {
     activeTabRef.current = activeTab;
     activeTabIdRef.current = activeTabId ?? undefined;
   });
+
+  // Issue #51: invalidate the cached column-types when the active table
+  // changes away from the one those types were collected for. An ad-hoc
+  // query targeting a different table will reset `activeTableName` via
+  // `executeQuery`; without this clear, stale types would mislabel cells.
+  useEffect(() => {
+    if (tableColumnTypes && tableColumnTypes.tableName !== activeTableName) {
+      setTableColumnTypes(undefined);
+    }
+  }, [activeTableName, tableColumnTypes]);
 
   useEffect(() => {
     if (activeTab?.target?.connectionId) {
@@ -1530,10 +1553,21 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       const detail = (e as CustomEvent).detail;
       if (detail && detail.name && detail.query) {
         setActiveTableName(detail.name);
+        // Issue #51: when the explorer opens a known table it passes the
+        // column -> SQL type map so the data grid can pick the date/time
+        // overlay editor by real type rather than by column-name substring.
+        // Tag the types with the table they belong to so a later table change
+        // invalidates them (see effect on `activeTableName` below).
+        if (detail.columnTypes) {
+          setTableColumnTypes({ tableName: detail.name, types: detail.columnTypes });
+        } else {
+          setTableColumnTypes(undefined);
+        }
         lastSelectQueryRef.current = detail.query;
         executeQuery(detail.query);
       } else {
         setActiveTableName(null);
+        setTableColumnTypes(undefined);
         lastSelectQueryRef.current = "";
       }
     };
@@ -2570,6 +2604,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
             isLoading={isExecuting}
             executionTime={executionTime}
             tableName={activeTableName || undefined}
+            columnTypes={tableColumnTypes?.types}
             forcedColumns={lastColumns}
             onUpdateRow={handleUpdateRow}
             onDeleteRow={handleDeleteRow}

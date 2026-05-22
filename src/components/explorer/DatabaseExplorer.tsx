@@ -248,8 +248,9 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
               
               const getTableChildren = (schemaName: string, tableName: string) => {
                 const tableId = `${schemaName}.${tableName}`;
-                const details = tableDetails[tableId];
-                const isLoading = loadingTableDetails.has(tableId);
+                const cacheKey = tableDetailsCacheKey(tableId);
+                const details = cacheKey ? tableDetails[cacheKey] : undefined;
+                const isLoading = cacheKey ? loadingTableDetails.has(cacheKey) : false;
                 
                 const children: TreeNode[] = [];
                 
@@ -258,7 +259,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                   id: `cols-${tableId}`, 
                   name: "Columns", 
                   icon: "folder",
-                  children: details?.columns?.length > 0 ? details.columns.map(c => ({
+                  children: (details?.columns?.length ?? 0) > 0 ? details!.columns!.map(c => ({
                     id: `col-${tableId}-${c.name}`,
                     name: `${c.name} (${c.type}${c.nullable ? '' : ' NOT NULL'})`,
                     icon: "column"
@@ -271,7 +272,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                     id: `idxs-${tableId}`,
                     name: "Indexes",
                     icon: "folder",
-                    children: details?.indexes?.length > 0 ? details.indexes.map(i => ({
+                    children: (details?.indexes?.length ?? 0) > 0 ? details!.indexes!.map(i => ({
                       id: `idx-${tableId}-${i.name}`,
                       name: `${i.name} (${i.columns.join(', ')}${i.unique ? ' UNIQUE' : ''})`,
                       icon: "index"
@@ -285,7 +286,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                     id: `trigs-${tableId}`,
                     name: "Triggers",
                     icon: "folder",
-                    children: details?.triggers?.length > 0 ? details.triggers.map(t => ({
+                    children: (details?.triggers?.length ?? 0) > 0 ? details!.triggers!.map(t => ({
                       id: `trig-${tableId}-${t}`,
                       name: t,
                       icon: "trigger"
@@ -298,7 +299,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                   id: `fks-${tableId}`,
                   name: "Foreign Keys",
                   icon: "folder",
-                  children: details?.foreignKeys?.length > 0 ? details.foreignKeys.map(fk => ({
+                  children: (details?.foreignKeys?.length ?? 0) > 0 ? details!.foreignKeys!.map(fk => ({
                     id: `fk-${tableId}-${fk.refTable}`,
                     name: `${fk.refTable} (${fk.columns.join(', ')})`,
                     icon: "folder"
@@ -478,8 +479,20 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
     }
   };
   
-  const loadTableDetails = async (tableId: string) => {
-    if (tableDetails[tableId] || loadingTableDetails.has(tableId)) return;
+  // Cache keys are scoped by connection+database so a `public.users` table in
+  // connection A doesn't share metadata with a same-named table in connection B
+  // (or in a different database on the same connection). Without this scoping
+  // the cache could hand back stale `columnTypes` for a different schema.
+  const tableDetailsCacheKey = (tableId: string): string | null => {
+    if (!activeConnection || !selectedDatabase) return null;
+    return `${activeConnection.id}::${selectedDatabase}::${tableId}`;
+  };
+
+  const loadTableDetails = async (tableId: string): Promise<TableDetails | undefined> => {
+    const key = tableDetailsCacheKey(tableId);
+    if (!key) return undefined;
+    if (tableDetails[key]) return tableDetails[key];
+    if (loadingTableDetails.has(key)) return undefined;
     let schemaName = 'public';
     let tableName = tableId;
     if (tableId.includes('.')) {
@@ -487,10 +500,10 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
       schemaName = parts[0];
       tableName = parts.slice(1).join('.');
     }
-    
-    if (!activeConnection || !currentDb) return;
-    
-    setLoadingTableDetails(prev => new Set(prev).add(tableId));
+
+    if (!activeConnection || !currentDb) return undefined;
+
+    setLoadingTableDetails(prev => new Set(prev).add(key));
     
     try {
       const details: TableDetails = { columns: [], constraints: [], foreignKeys: [], indexes: [], triggers: [] };
@@ -569,13 +582,15 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
         }));
       }
       
-      setTableDetails(prev => ({ ...prev, [tableId]: details }));
+      setTableDetails(prev => ({ ...prev, [key]: details }));
+      return details;
     } catch (e) {
       console.error("Failed to load table details:", e);
+      return undefined;
     } finally {
       setLoadingTableDetails(prev => {
         const next = new Set(prev);
-        next.delete(tableId);
+        next.delete(key);
         return next;
       });
     }
@@ -1169,12 +1184,13 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
       const isSchemaLoading = node.icon === "database" && selectedDatabase === node.name && isLoadingSchema;
       const isSchemasLoading = node.id.startsWith("schemas-root-") && isLoadingSchema;
       const tableDetailId = node.id.replace(/^(cols|idxs|trigs|fks|cons|deps|refs|parts|ruls|polic)-/, "");
-      const isTableDetailsLoading = node.icon === "folder" && tableDetailId !== node.id && loadingTableDetails.has(tableDetailId);
+      const tableDetailCacheKey = tableDetailId !== node.id ? tableDetailsCacheKey(tableDetailId) : null;
+      const isTableDetailsLoading = node.icon === "folder" && !!tableDetailCacheKey && loadingTableDetails.has(tableDetailCacheKey);
 
       return (
         <div key={node.id}>
           <button
-            onClick={() => {
+            onClick={async () => {
               // Left click: expand/collapse folders, trigger action for database and server
               if ((node.icon === "database" || node.icon === "server") && node.action) {
                 node.action();
@@ -1185,8 +1201,17 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
               if (node.icon === "table") {
                 const fullTableName = node.id.startsWith("table-") ? node.id.replace("table-", "") : node.name;
                 const query = `SELECT * FROM ${fullTableName} LIMIT 1000`;
-                window.dispatchEvent(new CustomEvent("run-specific-query", { 
-                  detail: { query, name: fullTableName, lineNumber: 1 } 
+                // Issue #51: ensure the table's column types are loaded so the
+                // data grid can pick the date/time overlay editor by real SQL
+                // type instead of by column-name substring. `loadTableDetails`
+                // returns the cached/freshly-loaded details so we don't have to
+                // wait for a re-render to read them from state.
+                const details = await loadTableDetails(fullTableName);
+                const columnTypes: Record<string, string> | undefined = details
+                  ? Object.fromEntries(details.columns.map(c => [c.name, c.type]))
+                  : undefined;
+                window.dispatchEvent(new CustomEvent("run-specific-query", {
+                  detail: { query, name: fullTableName, lineNumber: 1, columnTypes }
                 }));
               }
             }}
@@ -2162,8 +2187,14 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                   onClick={async () => {
                     const fullTableName = schemaContextMenu.node.id.replace(/^(table|view)-/, "");
                     const sql = await generateStatement("select", fullTableName);
-                    window.dispatchEvent(new CustomEvent("run-specific-query", { 
-                      detail: { query: sql, name: fullTableName, lineNumber: 1 } 
+                    // Issue #51: pass column SQL types so the grid picks the
+                    // date/time overlay editor by type rather than by name.
+                    const details = await loadTableDetails(fullTableName);
+                    const columnTypes: Record<string, string> | undefined = details
+                      ? Object.fromEntries(details.columns.map(c => [c.name, c.type]))
+                      : undefined;
+                    window.dispatchEvent(new CustomEvent("run-specific-query", {
+                      detail: { query: sql, name: fullTableName, lineNumber: 1, columnTypes }
                     }));
                     closeContextMenu();
                   }}

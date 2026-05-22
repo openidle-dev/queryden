@@ -31,6 +31,14 @@ interface ResultsPanelProps {
   onDiscard?: () => void;
   successMessage?: string | null;
   forcedColumns?: string[];
+  /**
+   * Optional column name -> SQL type map for the current result set, used by
+   * `GridView` to pick the date/time overlay editor by real type instead of
+   * name substring (issue #51). Only populated when the result corresponds to
+   * a known table; ad-hoc query results pass through as undefined and the
+   * grid falls back to the legacy name heuristic.
+   */
+  columnTypes?: Record<string, string>;
   optimizerData?: any;
   onApplyFix?: (sql: string) => void;
   isReadOnly?: boolean;
@@ -51,7 +59,7 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
  export const ResultsPanel = memo(function ResultsPanel({ 
   results, error, isLoading, executionTime = 0, tableName,
   onUpdateRow, onDeleteRow, onAddRow, onResultsChange, onRefresh,
-  successMessage, forcedColumns, optimizerData, onApplyFix, onSave, onDiscard,
+  successMessage, forcedColumns, columnTypes, optimizerData, onApplyFix, onSave, onDiscard,
   multiResults, isReadOnly = false, suppressTabSwitch = false
 }: ResultsPanelProps) {
   const settings = useSettings();
@@ -1100,6 +1108,7 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
                 ref={gridRef}
                 data={sortedResults}
                 columns={displayColumns || columns}
+                columnTypes={columnTypes}
                 isProductionMode={isProductionMode}
                 isReadOnly={isReadOnly}
                 onBinaryCellClick={handleBinaryCellClick}
