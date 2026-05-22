@@ -66,6 +66,16 @@ export interface FolderDto {
   order: number;
 }
 
+/** Mirrors `storage.rs::ImportAdvancedResult`. */
+export interface ImportAdvancedResultDto {
+  imported: number;
+  updated: number;
+  skipped: number;
+  connections: StoredConnectionDto[];
+  vault_credentials: VaultCredentialDto[];
+  folders: FolderDto[];
+}
+
 /** Mirrors `storage.rs::VaultCredential`. */
 export interface VaultCredentialDto {
   id: string;
@@ -197,6 +207,15 @@ export interface IpcCommands {
   import_connections: {
     args: { path: string; vaultPassword: string | null };
     result: number;
+  };
+  import_connections_advanced: {
+    args: {
+      connections: StoredConnectionDto[];
+      vaultCredentials: VaultCredentialDto[] | null;
+      mode: string;
+      vaultPassword: string | null;
+    };
+    result: ImportAdvancedResultDto;
   };
 
   // storage — settings / keymaps / templates (arbitrary user JSON)
