@@ -1,9 +1,12 @@
 name: Beta build
 
-# Manual trigger only for now. Once we're confident in the pipeline we can
-# switch this to `push: branches: [main]` (or a schedule) — but every fire
-# of this workflow burns the full Win/Mac/Linux matrix + signing, so we
-# keep it dispatch-only until that cost is worth it.
+# Triggers:
+#   - workflow_dispatch: explicit human-driven build. Always runs the full
+#     matrix (the `should-build` gate fails open for manual fires).
+#   - schedule (03:00 UTC daily): nightly beta build from main. The
+#     `should-build` job short-circuits when main has no new commits since
+#     the commit `beta-latest` currently points to, so cron at 03:00 UTC
+#     doesn't burn the Win/Mac/Linux matrix on idle days. See #140.
 on:
   workflow_dispatch:
     inputs:
@@ -11,6 +14,10 @@ on:
         description: "Branch or commit to build (defaults to main)"
         required: false
         default: "main"
+  schedule:
+    # 03:00 UTC daily. European morning review window; lower GHA runner
+    # contention than 00:00 UTC where most cron workflows fire.
+    - cron: "0 3 * * *"
 
 # Default to read-only at the workflow level; the build job inherits this and
 # only the `publish` job opts in to `contents: write` (it deletes/recreates the
@@ -19,8 +26,68 @@ permissions:
   contents: read
 
 jobs:
+  should-build:
+    name: Decide whether to build
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Need history + tags to compare main HEAD against the commit
+          # `beta-latest` points at. Default checkout is shallow and tagless.
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - id: decide
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Fail-open policy: any non-`schedule` trigger always builds.
+          # The user explicitly asked for a build (manual dispatch), or some
+          # future trigger we haven't designed around yet — don't silently skip.
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "Trigger is ${{ github.event_name }} — always build."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Scheduled run: skip if main HEAD already matches the commit
+          # `beta-latest` points to. Resolves the tag locally if it was
+          # fetched, else queries the release API as a fallback.
+          HEAD_SHA=$(git rev-parse HEAD)
+          LAST_BETA_SHA=""
+          if git rev-parse --verify beta-latest >/dev/null 2>&1; then
+            LAST_BETA_SHA=$(git rev-parse beta-latest)
+          else
+            # Tag missing locally (shouldn't happen with fetch-tags: true,
+            # but cover the case anyway via the GH API).
+            LAST_BETA_SHA=$(gh release view beta-latest \
+              --repo ${{ github.repository }} \
+              --json targetCommitish -q .targetCommitish 2>/dev/null || true)
+          fi
+
+          if [ -z "$LAST_BETA_SHA" ]; then
+            echo "No beta-latest reference found — first run, build."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$HEAD_SHA" = "$LAST_BETA_SHA" ]; then
+            echo "main HEAD ($HEAD_SHA) matches beta-latest ($LAST_BETA_SHA) — skip."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "main HEAD ($HEAD_SHA) differs from beta-latest ($LAST_BETA_SHA) — build."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
     name: Build beta (${{ matrix.platform }})
+    needs: should-build
+    if: needs.should-build.outputs.run == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -162,7 +229,8 @@ jobs:
 
   publish:
     name: Publish beta-latest pre-release
-    needs: build
+    needs: [should-build, build]
+    if: needs.should-build.outputs.run == 'true'
     runs-on: ubuntu-latest
     # Only the publish job needs write — it deletes/recreates the rolling
     # `beta-latest` tag and creates the release. Build inherits the
@@ -218,6 +286,70 @@ jobs:
           echo "version=${BETA}" >> "$GITHUB_OUTPUT"
           echo "Publishing beta manifest for: ${BETA}"
 
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        shell: bash
+        env:
+          BETA_VERSION: ${{ steps.betaver.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Pull everything between `## [Unreleased]` and the next `## [`
+          # version header out of CHANGELOG.md. This becomes the notes payload
+          # for both the GitHub release body and beta.json's `notes` field —
+          # so the in-app updater can show users what's actually in the build
+          # instead of a generic "see commits on main" placeholder. See #143.
+          UNRELEASED=$(awk '
+            /^## \[Unreleased\]/ { flag=1; next }
+            /^## \[/             { flag=0 }
+            flag
+          ' CHANGELOG.md)
+
+          # An empty Unreleased block (or one with only `### Fixed` / `### Added`
+          # section headers but no entries) is not useful. Detect this by
+          # stripping blank lines and `### `-prefixed lines and checking
+          # whether anything substantive remains.
+          MEANINGFUL=$(echo "$UNRELEASED" | grep -v -E '^\s*$' | grep -v -E '^###' || true)
+
+          if [ -n "$MEANINGFUL" ]; then
+            BODY="$UNRELEASED"
+            echo "Using CHANGELOG.md [Unreleased] section."
+          else
+            echo "[Unreleased] block is empty — falling back to git log since beta-latest."
+            git fetch origin "refs/tags/beta-latest:refs/tags/beta-latest" 2>/dev/null || true
+            if git rev-parse --verify beta-latest >/dev/null 2>&1; then
+              COMMITS=$(git log --format='- %s' beta-latest..HEAD)
+            else
+              COMMITS=$(git log --format='- %s' -n 20 HEAD)
+            fi
+            if [ -z "$COMMITS" ]; then
+              BODY="_No changes since the last beta build._"
+            else
+              BODY=$(printf "### Recent commits\n\n%s\n" "$COMMITS")
+            fi
+          fi
+
+          # Manifest notes: just the body — this is what the updater dialog
+          # surfaces to opted-in beta users.
+          printf "%s\n" "$BODY" > release-notes-manifest.md
+
+          # Release body: prepend the rolling-tag disclaimer so anyone landing
+          # on the GitHub release page knows what they're looking at.
+          {
+            printf "Rolling beta channel. This tag/release is recreated on every successful beta build — the URL \`beta-latest\` is what the in-app updater points at when the user opts into the beta channel.\n\n"
+            printf "**Do not** treat this like a versioned release: contents are replaced without notice. The \`version\` field inside \`beta.json\` is the source of truth for what's currently published.\n\n"
+            printf "**Version:** \`%s\`\n\n" "$BETA_VERSION"
+            printf "---\n\n"
+            printf "## Changes\n\n"
+            cat release-notes-manifest.md
+          } > release-notes-body.md
+
+          echo "::group::beta.json notes"
+          cat release-notes-manifest.md
+          echo "::endgroup::"
+          echo "::group::GitHub release body"
+          cat release-notes-body.md
+          echo "::endgroup::"
+
       - name: Generate beta.json (tauri-plugin-updater manifest)
         shell: bash
         env:
@@ -268,7 +400,7 @@ jobs:
           jq -n \
             --arg version "$BETA_VERSION" \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --arg notes "Beta build from main. See https://github.com/${{ github.repository }}/commits/main for changes." \
+            --rawfile notes release-notes-manifest.md \
             --argjson platforms "$PLATFORMS" \
             '{version: $version, notes: $notes, pub_date: $pub_date, platforms: $platforms}' \
             > release/beta.json
@@ -294,8 +426,5 @@ jobs:
           name: "Beta (rolling)"
           prerelease: true
           fail_on_unmatched_files: true
-          body: |
-            Rolling beta channel. This tag/release is recreated on every successful beta build — the URL `beta-latest` is what the in-app updater points at when the user opts into the beta channel.
-
-            **Do not** treat this like a versioned release: contents are replaced without notice. The `version` field inside `beta.json` is the source of truth for what's currently published.
+          body_path: release-notes-body.md
           files: release/*
