@@ -286,6 +286,70 @@ jobs:
           echo "version=${BETA}" >> "$GITHUB_OUTPUT"
           echo "Publishing beta manifest for: ${BETA}"
 
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        shell: bash
+        env:
+          BETA_VERSION: ${{ steps.betaver.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Pull everything between `## [Unreleased]` and the next `## [`
+          # version header out of CHANGELOG.md. This becomes the notes payload
+          # for both the GitHub release body and beta.json's `notes` field —
+          # so the in-app updater can show users what's actually in the build
+          # instead of a generic "see commits on main" placeholder. See #143.
+          UNRELEASED=$(awk '
+            /^## \[Unreleased\]/ { flag=1; next }
+            /^## \[/             { flag=0 }
+            flag
+          ' CHANGELOG.md)
+
+          # An empty Unreleased block (or one with only `### Fixed` / `### Added`
+          # section headers but no entries) is not useful. Detect this by
+          # stripping blank lines and `### `-prefixed lines and checking
+          # whether anything substantive remains.
+          MEANINGFUL=$(echo "$UNRELEASED" | grep -v -E '^\s*$' | grep -v -E '^###' || true)
+
+          if [ -n "$MEANINGFUL" ]; then
+            BODY="$UNRELEASED"
+            echo "Using CHANGELOG.md [Unreleased] section."
+          else
+            echo "[Unreleased] block is empty — falling back to git log since beta-latest."
+            git fetch origin "refs/tags/beta-latest:refs/tags/beta-latest" 2>/dev/null || true
+            if git rev-parse --verify beta-latest >/dev/null 2>&1; then
+              COMMITS=$(git log --format='- %s' beta-latest..HEAD)
+            else
+              COMMITS=$(git log --format='- %s' -n 20 HEAD)
+            fi
+            if [ -z "$COMMITS" ]; then
+              BODY="_No changes since the last beta build._"
+            else
+              BODY=$(printf "### Recent commits\n\n%s\n" "$COMMITS")
+            fi
+          fi
+
+          # Manifest notes: just the body — this is what the updater dialog
+          # surfaces to opted-in beta users.
+          printf "%s\n" "$BODY" > release-notes-manifest.md
+
+          # Release body: prepend the rolling-tag disclaimer so anyone landing
+          # on the GitHub release page knows what they're looking at.
+          {
+            printf "Rolling beta channel. This tag/release is recreated on every successful beta build — the URL \`beta-latest\` is what the in-app updater points at when the user opts into the beta channel.\n\n"
+            printf "**Do not** treat this like a versioned release: contents are replaced without notice. The \`version\` field inside \`beta.json\` is the source of truth for what's currently published.\n\n"
+            printf "**Version:** \`%s\`\n\n" "$BETA_VERSION"
+            printf "---\n\n"
+            printf "## Changes\n\n"
+            cat release-notes-manifest.md
+          } > release-notes-body.md
+
+          echo "::group::beta.json notes"
+          cat release-notes-manifest.md
+          echo "::endgroup::"
+          echo "::group::GitHub release body"
+          cat release-notes-body.md
+          echo "::endgroup::"
+
       - name: Generate beta.json (tauri-plugin-updater manifest)
         shell: bash
         env:
@@ -336,7 +400,7 @@ jobs:
           jq -n \
             --arg version "$BETA_VERSION" \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --arg notes "Beta build from main. See https://github.com/${{ github.repository }}/commits/main for changes." \
+            --rawfile notes release-notes-manifest.md \
             --argjson platforms "$PLATFORMS" \
             '{version: $version, notes: $notes, pub_date: $pub_date, platforms: $platforms}' \
             > release/beta.json
@@ -362,8 +426,5 @@ jobs:
           name: "Beta (rolling)"
           prerelease: true
           fail_on_unmatched_files: true
-          body: |
-            Rolling beta channel. This tag/release is recreated on every successful beta build — the URL `beta-latest` is what the in-app updater points at when the user opts into the beta channel.
-
-            **Do not** treat this like a versioned release: contents are replaced without notice. The `version` field inside `beta.json` is the source of truth for what's currently published.
+          body_path: release-notes-body.md
           files: release/*
