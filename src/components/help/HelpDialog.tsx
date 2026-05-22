@@ -270,7 +270,7 @@ function IssueReporter({ appVersion, buildDate, updateChannel, sysInfo, activeCo
 
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <label className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] opacity-50">Attach an image?</label>
+            <div className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] opacity-50">Attach an image?</div>
             <div className="h-[90px] p-3 bg-[var(--surface-raised)] border border-dashed border-[var(--border)] rounded-lg flex items-start gap-2.5">
               <Paperclip className="w-3.5 h-3.5 text-blue-400 shrink-0 mt-0.5 opacity-80" />
               <p className="text-[10px] text-[var(--text-secondary)] leading-snug">
