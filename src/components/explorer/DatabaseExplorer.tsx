@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { ChevronRight, ChevronDown, Database, Table, Folder, FolderOpen, Plus, Search, Server, Columns, Hash, Eye, Variable, Trash2, Edit2, Play, Zap, Code, Download, Upload, Loader2, Terminal, Check, AlertCircle, Square, X } from "lucide-react";
+import { ImportExportDialog } from "./ImportExportDialog";
 import { PROVIDERS } from "../../config/providers";
 import { DatabaseConnection } from "../../contexts/ConnectionContext";
 import { useConnections } from "../../contexts/useConnections";
@@ -7,7 +8,6 @@ import { useSettings } from "../../store/settingsStore";
 import { ConnectionDialog } from "./ConnectionDialog";
 import { useConfirmDialog } from "../ui/ConfirmDialog";
 import { save, open } from "@tauri-apps/plugin-dialog";
-import { getConnectionsFileName } from "../../config/app";
 import { SchemaSelectionDialog } from "./SchemaSelectionDialog";
 import { CreateTableDialog } from "./CreateTableDialog";
 import { CreateDatabaseDialog } from "./CreateDatabaseDialog";
@@ -41,7 +41,7 @@ interface DatabaseExplorerProps {
 }
 
 export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: DatabaseExplorerProps = {}) {
-  const { connections, activeConnection, selectedDatabase, databases, removeConnection, updateConnection, connectToDatabase, schemaItems, loadSchema, getDDL, generateStatement, isLoadingSchema, currentDb, schemaProgress, dropDatabase, createDatabase, createTable, exportConnections, importConnections, vaultCredentials, initialLoadDone, getSelectedSchemas, folders, addFolder, renameFolder, removeFolder, moveConnectionToFolder, moveFolder } = useConnections();
+  const { connections, activeConnection, selectedDatabase, databases, removeConnection, updateConnection, connectToDatabase, schemaItems, loadSchema, getDDL, generateStatement, isLoadingSchema, currentDb, schemaProgress, dropDatabase, createDatabase, createTable, vaultCredentials, initialLoadDone, getSelectedSchemas, folders, addFolder, renameFolder, removeFolder, moveConnectionToFolder, moveFolder } = useConnections();
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [editingConnection, setEditingConnection] = useState<DatabaseConnection | null>(null);
@@ -78,6 +78,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
   const [backupLoading, setBackupLoading] = useState(false);
   const [restoreLoading, setRestoreLoading] = useState(false);
   const [backupStatus, setBackupStatus] = useState("");
+  const [showImportExport, setShowImportExport] = useState(false);
   const [showSchemaDialog, setShowSchemaDialog] = useState(false);
   const [schemaDialogInfo, setSchemaDialogInfo] = useState<{connectionId: string, connectionName: string, databaseName: string, selectedSchemas: string[]} | null>(null);
   /**
@@ -1529,84 +1530,9 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
             </div>
 
             <button
-              onClick={async () => {
-                try {
-                  const path = await save({
-                    filters: [{ name: 'JSON', extensions: ['json'] }],
-                    defaultPath: getConnectionsFileName()
-                  });
-
-                  // If path is null, user canceled (e.g. pressed ESC)
-                  if (!path) return;
-
-                  await exportConnections(path, false);
-                  confirmDialog.dialog({
-                    title: "Export Successful",
-                    message: `Connections exported to ${path}`,
-                    confirmLabel: "OK",
-                    type: "success"
-                  });
-                } catch (e: any) {
-                  confirmDialog.dialog({
-                    title: "Export Failed",
-                    message: "Failed to export connections: " + String(e.message || e),
-                    confirmLabel: "OK",
-                    type: "danger"
-                  });
-                }
-              }}
+              onClick={() => setShowImportExport(true)}
               className="p-1 rounded hover:bg-[var(--border)]"
-              title="Export Connections"
-            >
-              <Download className="w-4 h-4" />
-            </button>
-            <button
-              onClick={async () => {
-                try {
-                  const path = await open({
-                    multiple: false,
-                    filters: [{ name: 'JSON', extensions: ['json'] }]
-                  });
-                  
-                  // If path is null, user canceled (e.g. pressed ESC)
-                  if (!path) return;
-
-                  const count = await importConnections(path as string);
-                  confirmDialog.dialog({
-                    title: "Import Successful",
-                    message: `Imported ${count} connections from backup file. Passwords have been skipped for security.`,
-                    confirmLabel: "Awesome",
-                    type: "success"
-                  });
-                } catch (e: any) {
-                  confirmDialog.dialog({
-                    title: "Import Failed",
-                    message: "The connection file format is invalid: " + String(e),
-                    confirmLabel: "OK",
-                    type: "danger",
-                    helpInstructions: `Your backup file must be a JSON object with the following structure:
-
-{
-  "connections": [
-    {
-      "id": "<unique-string>",
-      "name": "<connection name>",
-      "db_type": "postgres",
-      "host": "<hostname>",
-      "port": 5432,
-      "database": "<database name>",
-      "username": "<username>"
-    }
-  ],
-  "version": 2
-}
-
-Note: "version" must be a number (e.g. 2), not a string like "0.1.0".`
-                  });
-                }
-              }}
-              className="p-1 rounded hover:bg-[var(--border)]"
-              title="Import Connections"
+              title="Import / Export Connections"
             >
               <Upload className="w-4 h-4" />
             </button>
@@ -2680,6 +2606,8 @@ Note: "version" must be a number (e.g. 2), not a string like "0.1.0".`
         }}
         dbType={activeConnection?.type || "postgres"}
       />
+
+      {showImportExport && <ImportExportDialog onClose={() => setShowImportExport(false)} />}
     </div>
   );
 }

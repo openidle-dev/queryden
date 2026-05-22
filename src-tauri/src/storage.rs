@@ -460,16 +460,30 @@ impl StoredConnection {
         } else {
             None
         };
-        let ssh_password = if encrypt_passwords {
-            self.ssh_password.clone()
-        } else {
-            None
-        };
-        let ssh_key_passphrase = if encrypt_passwords {
-            self.ssh_key_passphrase.clone()
-        } else {
-            None
-        };
+        let (ssh_enabled, ssh_host, ssh_port, ssh_username, ssh_password, ssh_key_path, ssh_key_passphrase) =
+            if encrypt_passwords {
+                (
+                    self.ssh_enabled,
+                    self.ssh_host.clone(),
+                    self.ssh_port,
+                    self.ssh_username.clone(),
+                    self.ssh_password.clone(),
+                    self.ssh_key_path.clone(),
+                    self.ssh_key_passphrase.clone(),
+                )
+            } else {
+                // Keep non-secret SSH metadata so re-import can recreate tunnels.
+                // Only drop the secrets.
+                (
+                    self.ssh_enabled,
+                    self.ssh_host.clone(),
+                    self.ssh_port,
+                    self.ssh_username.clone(),
+                    None, // ssh_password
+                    self.ssh_key_path.clone(),
+                    None, // ssh_key_passphrase
+                )
+            };
         Self {
             id: self.id.clone(),
             name: self.name.clone(),
@@ -483,12 +497,12 @@ impl StoredConnection {
             color: self.color.clone(),
             is_vault: self.is_vault,
             vault_credential_id: self.vault_credential_id.clone(),
-            ssh_enabled: self.ssh_enabled,
-            ssh_host: self.ssh_host.clone(),
-            ssh_port: self.ssh_port,
-            ssh_username: self.ssh_username.clone(),
+            ssh_enabled,
+            ssh_host,
+            ssh_port,
+            ssh_username,
             ssh_password,
-            ssh_key_path: self.ssh_key_path.clone(),
+            ssh_key_path,
             ssh_key_passphrase,
             folder_id: self.folder_id.clone(),
         }
@@ -733,6 +747,154 @@ pub fn import_connections(app: tauri::AppHandle, path: String, vault_password: O
     all.extend(new_conns);
     save_connections(app, all, vault_password)?;
     Ok(count)
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ImportAdvancedResult {
+    pub imported: usize,
+    pub updated: usize,
+    pub skipped: usize,
+    pub connections: Vec<StoredConnection>,
+    pub vault_credentials: Vec<VaultCredential>,
+    pub folders: Vec<Folder>,
+}
+
+#[tauri::command]
+pub fn import_connections_advanced(
+    app: tauri::AppHandle,
+    connections: Vec<StoredConnection>,
+    vault_credentials: Option<Vec<VaultCredential>>,
+    mode: String,
+    vault_password: Option<String>,
+) -> Result<ImportAdvancedResult, String> {
+    let sanitized: Vec<StoredConnection> = connections
+        .into_iter()
+        .map(|mut c| {
+            if c.vault_credential_id.is_none() {
+                c.password = None;
+            }
+            // Always strip SSH secrets on import for safety.
+            c.ssh_password = None;
+            c.ssh_key_passphrase = None;
+            c
+        })
+        .collect();
+
+    let dir = ensure_app_dir(&app)?;
+
+    let (final_conns, imported, updated, skipped) = match mode.as_str() {
+        "override" => {
+            let count = sanitized.len();
+            let encrypted: Vec<StoredConnection> = encrypt_connection_fields(sanitized.clone(), vault_password.as_deref(), &dir)?;
+            write_connection_data(&dir, encrypted)?;
+            save_folders_inner(&dir, vec![])?;
+            (sanitized, count, 0usize, 0usize)
+        }
+        "upsert" => {
+            let existing = load_connections(app.clone(), vault_password.clone())?;
+            let mut result: Vec<StoredConnection> = existing.clone();
+            let mut updated_count = 0usize;
+            let mut imported_count = 0usize;
+
+            for new_conn in &sanitized {
+                let match_idx = result.iter().position(|c| c.host == new_conn.host && c.port == new_conn.port && c.database == new_conn.database);
+                if let Some(idx) = match_idx {
+                    let mut cloned = new_conn.clone();
+                    cloned.id = result[idx].id.clone();
+                    cloned.folder_id = result[idx].folder_id.clone();
+                    result[idx] = cloned;
+                    updated_count += 1;
+                } else {
+                    result.push(new_conn.clone());
+                    imported_count += 1;
+                }
+            }
+
+            let encrypted = encrypt_connection_fields(result.clone(), vault_password.as_deref(), &dir)?;
+            write_connection_data(&dir, encrypted)?;
+            (result, imported_count, updated_count, 0usize)
+        }
+        _ => {
+            return Err(format!("Unknown import mode: '{}'. Expected one of: override, upsert, skip.", mode));
+        }
+    };
+
+    let vault_creds = if let Some(vcs) = vault_credentials {
+        let mut existing_creds = load_vault_credentials(app.clone(), vault_password.clone())?;
+        let existing_ids: std::collections::HashSet<String> = existing_creds.iter().map(|vc| vc.id.clone()).collect();
+        for vc in &vcs {
+            if !existing_ids.contains(&vc.id) {
+                existing_creds.push(vc.clone());
+            }
+        }
+        save_vault_credentials(app.clone(), existing_creds.clone(), vault_password)?;
+        existing_creds
+    } else {
+        load_vault_credentials(app.clone(), vault_password)?
+    };
+
+    let folders = match mode.as_str() {
+        "override" => vec![],
+        _ => load_folders(app)?,
+    };
+
+    Ok(ImportAdvancedResult {
+        imported,
+        updated,
+        skipped,
+        connections: final_conns,
+        vault_credentials: vault_creds,
+        folders,
+    })
+}
+
+fn encrypt_connection_fields(
+    connections: Vec<StoredConnection>,
+    vault_password: Option<&str>,
+    dir: &std::path::Path,
+) -> Result<Vec<StoredConnection>, String> {
+    connections
+        .into_iter()
+        .map(|c| {
+            let use_vault = c.is_vault.unwrap_or(false);
+            let pwd = if use_vault { vault_password } else { None };
+            let password = c.password.map(|p| encrypt(&p, pwd, dir)).transpose()?;
+            let ssh_password = c.ssh_password.map(|p| encrypt(&p, pwd, dir)).transpose()?;
+            let ssh_key_passphrase = c.ssh_key_passphrase.map(|p| encrypt(&p, pwd, dir)).transpose()?;
+            Ok(StoredConnection {
+                password,
+                ssh_password,
+                ssh_key_passphrase,
+                ..c
+            })
+        })
+        .collect()
+}
+
+fn write_connection_data(dir: &std::path::Path, connections: Vec<StoredConnection>) -> Result<(), String> {
+    let data = ConnectionData {
+        connections,
+        version: 1,
+        vault_credentials: None,
+        machine_fingerprint: get_machine_fingerprint(),
+    };
+    let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
+    let path = dir.join("connections.json");
+    fs::write(&path, json).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn save_folders_inner(dir: &std::path::Path, folders: Vec<Folder>) -> Result<(), String> {
+    let data = FoldersData {
+        folders,
+        version: 1,
+        machine_fingerprint: get_machine_fingerprint(),
+    };
+    let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
+    let encrypted = encrypt(&json, None, dir)?;
+    let path = dir.join("folders.json");
+    fs::write(&path, encrypted).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize)]

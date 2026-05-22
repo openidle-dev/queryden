@@ -51,6 +51,7 @@ pub fn run() {
             storage::load_connections,
             storage::export_connections,
             storage::import_connections,
+            storage::import_connections_advanced,
             storage::save_settings,
             storage::load_settings,
             storage::save_query_history,
