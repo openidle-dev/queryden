@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { DatabaseConnection } from "../../contexts/ConnectionContext";
 import { useConnections } from "../../contexts/useConnections";
 import { X, CheckCircle, Database, ServerCrash, Search, Settings, Shield } from "lucide-react";
@@ -32,8 +32,8 @@ const getValidHexColor = (color: string): string => {
   return "#06b6d4"; // default fallback for HTML color input
 };
 
-export function ConnectionDialog({ connection, onClose }: { connection?: DatabaseConnection; onClose: () => void }) {
-  const { addConnection, updateConnection, removeConnection, vaultCredentials } = useConnections();
+export function ConnectionDialog({ connection, onClose, defaultFolderId }: { connection?: DatabaseConnection; onClose: () => void; defaultFolderId?: string }) {
+  const { addConnection, updateConnection, removeConnection, vaultCredentials, folders } = useConnections();
   const [step, setStep] = useState<"driver" | "details">(connection ? "details" : "driver");
   const [searchFilter, setSearchFilter] = useState("");
   const [driverCategory, setDriverCategory] = useState("All");
@@ -62,6 +62,7 @@ export function ConnectionDialog({ connection, onClose }: { connection?: Databas
     sshKeyPath: connection?.sshKeyPath || "",
     sshKeyPassphrase: connection?.sshKeyPassphrase || "",
     sshAuthMethod: connection?.sshKeyPath ? "key" : "password",
+    selectedFolderId: connection?.folderId || defaultFolderId || "",
   });
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,6 +70,21 @@ export function ConnectionDialog({ connection, onClose }: { connection?: Databas
   const [isTestingSsh, setIsTestingSsh] = useState(false);
   const [sshTestResult, setSshTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const confirmDialog = useConfirmDialog();
+
+  const flatFolders = useMemo(() => {
+    const flat: { folder: typeof folders[0]; depth: number }[] = [];
+    const walk = (parentId: string | null, depth: number) => {
+      const siblings = folders
+        .filter((f) => (f.parentId ?? null) === parentId)
+        .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+      for (const f of siblings) {
+        flat.push({ folder: f, depth });
+        walk(f.id, depth + 1);
+      }
+    };
+    walk(null, 0);
+    return flat;
+  }, [folders]);
 
   // Focus effect when switching steps
   useEffect(() => {
@@ -245,6 +261,7 @@ export function ConnectionDialog({ connection, onClose }: { connection?: Databas
       sshPassword: formData.sshEnabled && formData.sshAuthMethod === "password" ? formData.sshPassword : undefined,
       sshKeyPath: formData.sshEnabled && formData.sshAuthMethod === "key" ? formData.sshKeyPath : undefined,
       sshKeyPassphrase: formData.sshEnabled && formData.sshAuthMethod === "key" ? formData.sshKeyPassphrase : undefined,
+      folderId: formData.selectedFolderId || null,
     };
 
     if (connection) {
@@ -545,16 +562,37 @@ export function ConnectionDialog({ connection, onClose }: { connection?: Databas
                       <div className="space-y-2.5">
                         <h4 className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] pb-1.5 border-b border-[var(--border)]">General Settings</h4>
                         
-                        <div>
-                          <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Connection Name</label>
-                          <input
-                            type="text"
-                            value={formData.name}
-                            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                            className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-medium shadow-inner"
-                            placeholder="Production Database"
-                            required
-                          />
+                        <div className={folders.length > 0 ? "grid grid-cols-2 gap-2.5" : ""}>
+                          <div>
+                            <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Connection Name</label>
+                            <input
+                              type="text"
+                              value={formData.name}
+                              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                              className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-medium shadow-inner"
+                              placeholder="Production Database"
+                              required
+                            />
+                          </div>
+
+                          {/* Folder */}
+                          {folders.length > 0 && (
+                            <div>
+                              <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Folder</label>
+                              <select
+                                value={formData.selectedFolderId}
+                                onChange={(e) => setFormData({ ...formData, selectedFolderId: e.target.value })}
+                                className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none shadow-inner text-white"
+                              >
+                                <option value="">Root (no folder)</option>
+                                {flatFolders.map(({ folder, depth }) => (
+                                  <option key={folder.id} value={folder.id}>
+                                    {"\u00A0".repeat(depth * 2)}{folder.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
                         </div>
 
                         {/* Connection Color */}
