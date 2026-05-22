@@ -3,7 +3,7 @@ title: Keyboard shortcuts
 description: Default keymap. Edit the JSON in Settings to customize per feature.
 section: editor
 order: 10
-updated: 2026-05-21
+updated: 2026-05-22
 ---
 
 QueryDen is keyboard-first. The defaults below are wired in `src/App.tsx` (global) and the per-feature stores. Bindings can be remapped per feature in **Settings → Keymap**.
@@ -48,9 +48,9 @@ QueryDen is keyboard-first. The defaults below are wired in `src/App.tsx` (globa
 
 ## Keymap presets
 
-The default "DataGrip" preset includes bindings for features still being wired (e.g. `Shift Shift` global search, `Ctrl+Shift+C` console, `Ctrl+B` go-to-definition, `Shift+F6` rename, `Ctrl+PageUp/PageDown` tab cycling). These are tracked in [issue #11](https://github.com/openidle-dev/queryden/issues/11).
+The default "DataGrip" preset only lists bindings the app actually wires. DataGrip-flavored shortcuts whose handlers don't exist yet (global search, in-app console, go-to-definition keybinding, rename, structure view, tab cycling, local/clipboard history) are intentionally omitted — they'll come back as each feature lands. Previously [issue #11](https://github.com/openidle-dev/queryden/issues/11) tracked the fact that the preset advertised these as available when pressing them did nothing.
 
-> Shortcuts that conflict with operating system behavior (such as Ctrl+W closing the window, Ctrl+\ sending SIGQUIT on Linux, or F4 being captured by macOS) are avoided. The keymap uses Ctrl+Shift+E for the Database Explorer and Ctrl+PageUp/PageDown for tab navigation to prevent these conflicts.
+> Shortcuts that conflict with operating system behavior (such as Ctrl+W closing the window, Ctrl+\ sending SIGQUIT on Linux, or F4 being captured by macOS) are avoided. The keymap uses Ctrl+Shift+E for the Database Explorer to prevent these conflicts.
 
 ## Customizing
 
