@@ -55,6 +55,6 @@ tauri-plugin-sql = { path = "patches/tauri-plugin-sql" }
 [profile.release]
 strip = true
 lto = "thin"         # Thin LTO: near-identical size to fat, 2-5x faster link
-codegen-units = 1    # One codegen unit: maximizes inlining within crates
+codegen-units = 16   # Balance build speed with inlining; on fast CPUs fewer units is fine
 incremental = false
 panic = "abort"

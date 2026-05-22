@@ -55,8 +55,6 @@ jobs:
         with:
           workspaces: "src-tauri -> target"
 
-      - uses: mozilla-actions/sccache-action@1583d6b38d7be47f593cb472781bbb21cab4321e
-
       - name: Install Linux deps
         if: matrix.platform == 'ubuntu-latest'
         run: |
@@ -109,23 +107,17 @@ jobs:
           node -e "const f='package.json';const j=require('./'+f);j.version=process.env.BETA_VERSION;require('fs').writeFileSync(f, JSON.stringify(j,null,2)+'\n');"
           # tauri.conf.json — same trick.
           node -e "const f='src-tauri/tauri.conf.json';const j=require('./'+f);j.version=process.env.BETA_VERSION;require('fs').writeFileSync(f, JSON.stringify(j,null,2)+'\n');"
-          # Cargo.toml — sed is fine because the package version line is unique.
-          # Note: build metadata (the part after +) is not valid in Cargo's
-          # version field, so we strip it for Cargo only. The Tauri-side
-          # version (which the updater uses) keeps the full string.
-          CARGO_VER="${BETA_VERSION%+*}"
-          sed -i.bak -E "s/^version = \"[^\"]+\"/version = \"${CARGO_VER}\"/" src-tauri/Cargo.toml
-          rm -f src-tauri/Cargo.toml.bak
+          # Cargo.toml is intentionally NOT stamped — keeping its version stable
+          # keeps the Cargo.lock hash stable, which lets rust-cache achieve
+          # full cache hits. The Tauri-side version (package.json + tauri.conf.json)
+          # is what the updater uses; Cargo's version only controls --version output.
           echo "--- package.json ---"; jq .version package.json
           echo "--- tauri.conf.json ---"; jq .version src-tauri/tauri.conf.json
-          echo "--- Cargo.toml ---"; grep '^version' src-tauri/Cargo.toml | head -1
 
       - name: Build app
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
         run: npm run tauri build -- --target ${{ matrix.target }}
 
       - name: Generate SHA256 companion files
