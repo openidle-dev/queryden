@@ -74,7 +74,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       data-loading={loading || undefined}
       className={cn(
         "inline-flex items-center justify-center font-medium leading-none",
-        "transition-colors select-none whitespace-nowrap",
+        "transition-colors select-none whitespace-nowrap cursor-pointer",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-8)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--surface-base)]",
         "disabled:cursor-not-allowed",
         sizeClasses[size],

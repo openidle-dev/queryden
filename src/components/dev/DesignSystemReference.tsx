@@ -26,7 +26,7 @@ export function DesignSystemReference({ onClose }: { onClose: () => void }) {
   const [showPassword, setShowPassword] = useState(false);
 
   return (
-    <div className="fixed inset-0 z-[1000] bg-[var(--surface-base)] text-[var(--neutral-12)] overflow-auto">
+    <div className="fixed inset-0 z-[100] bg-[var(--surface-base)] text-[var(--neutral-12)] overflow-auto">
       <header className="sticky top-0 z-10 bg-[var(--surface-panel)] border-b border-[var(--neutral-6)] px-6 h-12 flex items-center gap-3">
         <h1 className="text-sm font-semibold flex-1">QueryDen Design System — Phase 1</h1>
         <span className="text-[11px] text-[var(--neutral-11)]">
@@ -121,10 +121,11 @@ export function DesignSystemReference({ onClose }: { onClose: () => void }) {
         </Section>
 
         {/* ───── Selects ───── */}
-        <Section title="Select" subtitle="Native select with our chrome. Custom dropdowns belong in a follow-up phase.">
+        <Section title="Select" subtitle="Radix-based dropdown — portal-rendered, keyboard-navigable, theme-aware (the Windows native dropdown breaks dark mode, hence #151).">
           <div className="grid grid-cols-2 gap-6 max-w-2xl">
             <Select
               label="Database engine"
+              defaultValue="postgres"
               options={[
                 { label: "PostgreSQL", value: "postgres" },
                 { label: "MySQL", value: "mysql" },
@@ -144,12 +145,17 @@ export function DesignSystemReference({ onClose }: { onClose: () => void }) {
             <Select
               label="Disabled"
               disabled
+              defaultValue="x"
               options={[{ label: "Locked", value: "x" }]}
             />
             <Select
               label="With error"
+              placeholder="Choose…"
               error="Connection profile required"
-              options={[{ label: "Choose…", value: "" }]}
+              options={[
+                { label: "Profile A", value: "a" },
+                { label: "Profile B", value: "b" },
+              ]}
             />
           </div>
         </Section>
