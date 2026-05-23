@@ -11,6 +11,7 @@ import "./styles/globals.css";
 
 const SettingsDialog = lazy(() => import("./components/settings/SettingsDialog").then(m => ({ default: m.SettingsDialog })));
 const HelpDialog = lazy(() => import("./components/help/HelpDialog").then(m => ({ default: m.HelpDialog })));
+const DesignSystemReference = lazy(() => import("./components/dev/DesignSystemReference").then(m => ({ default: m.DesignSystemReference })));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -24,6 +25,26 @@ const queryClient = new QueryClient({
 function AppContent() {
   const [showSettings, setShowSettings] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [showDesignSystem, setShowDesignSystem] = useState(
+    () => typeof window !== "undefined" && window.location.hash === "#design-system"
+  );
+
+  // Listen for hash changes so users can open the design system reference
+  // with `#design-system` appended to the URL without reloading.
+  useEffect(() => {
+    const handleHashChange = () => {
+      setShowDesignSystem(window.location.hash === "#design-system");
+    };
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, []);
+
+  const closeDesignSystem = () => {
+    if (window.location.hash === "#design-system") {
+      history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+    setShowDesignSystem(false);
+  };
 
   // Global keyboard shortcut handler
   useEffect(() => {
@@ -69,10 +90,13 @@ function AppContent() {
                 isOpen={showSettings} 
                 onClose={() => setShowSettings(false)} 
               />
-              <HelpDialog 
-                isOpen={showHelp} 
-                onClose={() => setShowHelp(false)} 
+              <HelpDialog
+                isOpen={showHelp}
+                onClose={() => setShowHelp(false)}
               />
+              {showDesignSystem && (
+                <DesignSystemReference onClose={closeDesignSystem} />
+              )}
             </Suspense>
           </ConfirmDialogProvider>
         </ThemeProvider>
