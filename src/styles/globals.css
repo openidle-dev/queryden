@@ -145,7 +145,9 @@
      ---------------------------------------------------------------- */
   --background:        var(--surface-base);
   --surface:           var(--surface-elevated);
-  --surface-hover:     var(--neutral-4);   /* was undefined — fix for ConfirmDialog */
+  --surface-hover:     var(--neutral-4);       /* was undefined — fix for ConfirmDialog */
+  --surface-light:     var(--surface-elevated); /* was undefined — used by Create/Toolbar headers */
+  --input-bg:          var(--surface-base);     /* was undefined — used by DatabaseExplorer + Create dialogs */
   --border:            var(--neutral-6);
   --text-primary:      var(--neutral-12);
   --text-secondary:    var(--neutral-11);

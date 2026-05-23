@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef } from "react";
-import { X, Database, Check, Search, ChevronDown, ChevronRight } from "lucide-react";
+import { Database, Check, Search, ChevronDown, ChevronRight } from "lucide-react";
 import { useConnections } from "../../contexts/useConnections";
+import { Dialog } from "../ui/Dialog";
+import { Input } from "../ui/Input";
+import { Button } from "../ui/Button";
 
 interface SchemaSelectionDialogProps {
   isOpen: boolean;
@@ -20,7 +23,6 @@ export function SchemaSelectionDialog({ isOpen, onClose, onApply, connectionId, 
   const [searchTerm, setSearchTerm] = useState("");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(["selected"]));
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -71,27 +73,24 @@ export function SchemaSelectionDialog({ isOpen, onClose, onApply, connectionId, 
   const userSchemas = filteredSchemas.filter(s => !systemSchemas.includes(s));
   const systemSchemasFiltered = filteredSchemas.filter(s => systemSchemas.includes(s));
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Escape") onClose();
-  };
-
-  if (!isOpen) return null;
-
+  // Per-schema row: clickable button representing a list item, not chrome.
+  // Keeps the raw <button> because Button/IconButton would change the
+  // checkbox+label compound semantic. Tokens are cleaned up though.
   const renderSchemaItem = (schema: string, showCheckbox = true) => (
     <button
       key={schema}
       onClick={() => toggleSchema(schema)}
-      className={`w-full flex items-center gap-2 px-2 py-1 rounded transition-all text-left text-xs group ${
+      className={`w-full flex items-center gap-2 px-2 py-1 rounded transition-all text-left text-xs group cursor-pointer ${
         selectedSchemas.includes(schema)
-          ? "bg-[var(--color-accent)]/10 text-[var(--color-accent)]"
-          : "hover:bg-[var(--surface-raised)] text-[var(--text-primary)]"
+          ? "bg-[var(--accent-3)] text-[var(--accent-11)]"
+          : "hover:bg-[var(--neutral-3)] text-[var(--neutral-12)]"
       }`}
     >
       {showCheckbox && (
         <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${
           selectedSchemas.includes(schema)
-            ? "bg-[var(--color-accent)] border-[var(--color-accent)]"
-            : "border-[var(--border)] group-hover:border-[var(--text-secondary)]"
+            ? "bg-[var(--accent-9)] border-[var(--accent-9)]"
+            : "border-[var(--neutral-7)] group-hover:border-[var(--neutral-11)]"
         }`}>
           {selectedSchemas.includes(schema) && (
             <Check className="w-2.5 h-2.5 text-white" />
@@ -100,7 +99,7 @@ export function SchemaSelectionDialog({ isOpen, onClose, onApply, connectionId, 
       )}
       <span className="flex-1 font-mono truncate">{schema}</span>
       {selectedSchemas.includes(schema) && (
-        <span className="text-[9px] text-[var(--color-accent)] font-bold shrink-0">ACTIVE</span>
+        <span className="text-[9px] text-[var(--accent-11)] font-bold shrink-0">ACTIVE</span>
       )}
     </button>
   );
@@ -113,11 +112,11 @@ export function SchemaSelectionDialog({ isOpen, onClose, onApply, connectionId, 
       <div key={groupKey} className="mb-1">
         <button
           onClick={() => toggleGroup(groupKey)}
-          className="w-full flex items-center gap-1.5 px-2 py-1 rounded hover:bg-[var(--surface-raised)] text-left"
+          className="w-full flex items-center gap-1.5 px-2 py-1 rounded hover:bg-[var(--neutral-3)] text-left cursor-pointer"
         >
-          {isExpanded ? <ChevronDown className="w-3 h-3 text-[var(--text-secondary)]" /> : <ChevronRight className="w-3 h-3 text-[var(--text-secondary)]" />}
-          <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)]">{title}</span>
-          <span className="text-[9px] text-[var(--text-secondary)] ml-auto">{items.length}</span>
+          {isExpanded ? <ChevronDown className="w-3 h-3 text-[var(--neutral-11)]" /> : <ChevronRight className="w-3 h-3 text-[var(--neutral-11)]" />}
+          <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--neutral-11)]">{title}</span>
+          <span className="text-[9px] text-[var(--neutral-11)] ml-auto">{items.length}</span>
         </button>
         {isExpanded && (
           <div className="ml-4 mt-0.5 space-y-0.5">
@@ -129,80 +128,56 @@ export function SchemaSelectionDialog({ isOpen, onClose, onApply, connectionId, 
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[200] backdrop-blur-[1px]" onKeyDown={handleKeyDown}>
-      <div className="bg-[var(--surface)] rounded-xl shadow-2xl w-[550px] max-h-[700px] flex flex-col overflow-hidden border border-[var(--border)] animate-in fade-in zoom-in duration-100">
-        {/* Header */}
-        <div className="p-4 border-b border-[var(--border)] bg-gradient-to-r from-[var(--surface-raised)] to-[var(--surface)]">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <div className="p-1.5 bg-[var(--color-accent)]/20 rounded">
-                <Database className="w-4 h-4 text-[var(--color-accent)]" />
-              </div>
-              <div>
-                <h3 className="text-sm font-bold tracking-wide">Select Schemas</h3>
-                <p className="text-[10px] text-[var(--text-secondary)]">{databaseName} on {connectionName}</p>
-              </div>
-            </div>
-            <button onClick={onClose} className="p-1.5 rounded-full hover:bg-[var(--border)] transition-all">
-              <X className="w-4 h-4" />
-            </button>
+    <Dialog open={isOpen} onClose={onClose} size="lg" className="max-h-[700px]">
+      <Dialog.Title onClose={onClose}>
+        <span className="inline-flex items-center gap-2">
+          <div className="p-1 bg-[var(--accent-3)] rounded">
+            <Database className="w-3.5 h-3.5 text-[var(--accent-11)]" />
           </div>
+          <span className="flex flex-col leading-tight">
+            <span>Select schemas</span>
+            <span className="text-[10px] font-normal text-[var(--neutral-11)]">{databaseName} on {connectionName}</span>
+          </span>
+        </span>
+      </Dialog.Title>
 
-          {/* Search */}
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--text-secondary)]" />
-            <input
-              ref={searchInputRef}
-              type="text"
-              placeholder="Filter schemas..."
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 text-xs rounded-lg bg-[#111111] border border-[var(--border)] outline-none focus:border-[var(--color-accent)] text-white placeholder:text-[var(--text-secondary)]"
-            />
-          </div>
-        </div>
+      <Dialog.Body className="flex flex-col gap-3 min-h-0">
+        <Input
+          ref={searchInputRef}
+          placeholder="Filter schemas…"
+          value={searchTerm}
+          onChange={e => setSearchTerm(e.target.value)}
+          inputSize="sm"
+          leftIcon={<Search />}
+        />
 
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-3 custom-scrollbar" ref={listRef}>
+        <div className="flex-1 overflow-y-auto -mx-1 px-1">
           {isLoading ? (
             <div className="flex items-center justify-center py-12">
-              <div className="animate-spin w-5 h-5 border-2 border-[var(--color-accent)] border-t-transparent rounded-full" />
-              <span className="ml-3 text-sm text-[var(--text-secondary)]">Loading schemas...</span>
+              <div className="animate-spin w-5 h-5 border-2 border-[var(--accent-9)] border-t-transparent rounded-full" />
+              <span className="ml-3 text-sm text-[var(--neutral-11)]">Loading schemas…</span>
             </div>
           ) : availableSchemas.length === 0 ? (
-            <div className="text-center py-12 text-sm text-[var(--text-secondary)]">
+            <div className="text-center py-12 text-sm text-[var(--neutral-11)]">
               <Database className="w-8 h-8 mx-auto mb-3 opacity-30" />
               No schemas found
             </div>
           ) : (
             <>
-              {/* Quick actions */}
               <div className="flex items-center justify-between mb-3 px-1">
-                <span className="text-[10px] text-[var(--text-secondary)]">
+                <span className="text-[10px] text-[var(--neutral-11)]">
                   {selectedSchemas.length} of {availableSchemas.length} selected
                 </span>
                 <div className="flex gap-1">
-                  <button
-                    onClick={selectAll}
-                    className="text-[10px] px-2 py-1 rounded hover:bg-[var(--border)] font-bold"
-                  >
-                    Select All
-                  </button>
-                  <button
-                    onClick={deselectAll}
-                    className="text-[10px] px-2 py-1 rounded hover:bg-[var(--border)] font-bold"
-                  >
-                    Clear
-                  </button>
+                  <Button variant="ghost" size="xs" onClick={selectAll}>Select all</Button>
+                  <Button variant="ghost" size="xs" onClick={deselectAll}>Clear</Button>
                 </div>
               </div>
 
-              {/* Grouped schema list */}
               {searchTerm ? (
-                /* Flat list when searching */
                 <div className="space-y-0.5">
                   {filteredSchemas.length === 0 ? (
-                    <div className="text-center py-6 text-xs text-[var(--text-secondary)]">
+                    <div className="text-center py-6 text-xs text-[var(--neutral-11)]">
                       No schemas match "{searchTerm}"
                     </div>
                   ) : (
@@ -210,34 +185,25 @@ export function SchemaSelectionDialog({ isOpen, onClose, onApply, connectionId, 
                   )}
                 </div>
               ) : (
-                /* Grouped view when not searching */
                 <>
                   {renderGroup("Selected", selectedFiltered, "selected")}
-                  {renderGroup("User Schemas", userSchemas.filter(s => !selectedSchemas.includes(s)), "user")}
-                  {renderGroup("System Schemas", systemSchemasFiltered, "system", true)}
+                  {renderGroup("User schemas", userSchemas.filter(s => !selectedSchemas.includes(s)), "user")}
+                  {renderGroup("System schemas", systemSchemasFiltered, "system", true)}
                 </>
               )}
             </>
           )}
         </div>
+      </Dialog.Body>
 
-        {/* Footer */}
-        <div className="px-4 py-3 border-t border-[var(--border)] bg-[var(--surface-raised)] flex justify-end gap-2">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-xs font-bold rounded-lg border border-[var(--border)] bg-[var(--surface)] hover:bg-[#333] transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={isLoading}
-            className="px-6 py-2 text-xs font-bold rounded-lg bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-hover)] transition-all shadow-lg shadow-[var(--color-accent)]/20 disabled:opacity-50"
-          >
-            Apply & Refresh
-          </button>
-        </div>
-      </div>
-    </div>
+      <Dialog.Footer>
+        <Button variant="ghost" size="sm" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button variant="primary" size="sm" disabled={isLoading} onClick={handleSave}>
+          Apply &amp; refresh
+        </Button>
+      </Dialog.Footer>
+    </Dialog>
   );
 }
