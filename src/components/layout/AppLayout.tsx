@@ -10,6 +10,15 @@ import { useSettings } from "../../store/settingsStore";
 import { Database, Files, Settings, Search, X, HelpCircle, Table, Eye, Variable, BookOpen, AlertTriangle, CheckCircle, ChevronRight } from "lucide-react";
 import { UpdateNotification } from "../help/UpdateNotification";
 import { useAppInfo } from "../../hooks/useAppInfo";
+import { Button } from "../ui/Button";
+import { IconButton } from "../ui/IconButton";
+import { cn } from "../../lib/cn";
+
+// Active state for the header's tool-window toggles (Database Explorer, Files,
+// Search). Uses Button's ghost variant as the base and tints it with the
+// accent-3/accent-11 pair when the window is open — matches the rest of the
+// chrome's restraint while still being unambiguous.
+const toolToggleActiveClass = "bg-[var(--accent-3)] text-[var(--accent-11)] hover:bg-[var(--accent-4)]";
 
 export function AppLayout() {
   const { theme } = useTheme();
@@ -117,48 +126,44 @@ export function AppLayout() {
   return (
     <div className={`theme-${theme} ${settings.compactMode ? 'compact-mode' : ''} h-screen flex flex-col bg-[var(--background)] text-[var(--text-primary)]`}>
       {/* Top Tool Window Bar - DataGrip Style */}
-      <header className="h-11 flex items-center justify-between px-2 bg-[var(--surface)] border-b border-[var(--border)]">
+      <header className="h-11 flex items-center justify-between px-2 bg-[var(--surface-panel)] border-b border-[var(--neutral-6)]">
         {/* Left: Tool Window Buttons */}
         <div className="flex items-center gap-1">
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
+            leftIcon={<Database className="w-4 h-4" />}
             onClick={() => {
               setShowExplorer(!showExplorer);
               if (!showExplorer) setShowFiles(false);
             }}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm transition-colors ${
-              showExplorer 
-                ? "bg-[var(--color-accent)]/20 text-[var(--color-accent)]" 
-                : "hover:bg-[var(--border)]"
-            }`}
-            title="Database Explorer (Ctrl+\)"
+            className={cn(showExplorer && toolToggleActiveClass)}
+            title="Database Explorer (Ctrl+\\)"
           >
-            <Database className="w-4 h-4" />
             Database Explorer
-          </button>
-          
-          <button 
+          </Button>
+
+          <Button
+            variant="ghost"
+            size="sm"
+            leftIcon={<Files className="w-4 h-4" />}
             onClick={() => {
               setShowFiles(!showFiles);
               if (!showFiles) setShowExplorer(false);
             }}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm transition-colors ${
-              showFiles 
-                ? "bg-[var(--color-accent)]/20 text-[var(--color-accent)]" 
-                : "hover:bg-[var(--border)]"
-            }`}
+            className={cn(showFiles && toolToggleActiveClass)}
             title="Files"
           >
-            <Files className="w-4 h-4" />
             Files
-          </button>
+          </Button>
         </div>
-        
+
         {/* Center: App Title */}
         <div className="flex items-center gap-2">
           <img src="/tauri.svg" alt="QueryDen" className="w-6 h-6" />
           <span className="text-sm font-semibold">{appName}</span>
           {activeConnection && (
-            <span className="text-xs px-2 py-0.5 rounded bg-[var(--color-accent)]/20 text-[var(--color-accent)]">
+            <span className="text-xs px-2 py-0.5 rounded bg-[var(--accent-3)] text-[var(--accent-11)]">
               {activeConnection.name}
             </span>
           )}
@@ -166,35 +171,32 @@ export function AppLayout() {
 
         {/* Right: Search & Settings */}
         <div className="flex items-center gap-1">
-          <button
+          <IconButton
+            icon={<Search />}
+            label="Search (Ctrl+Shift+F)"
+            variant="ghost"
+            size="sm"
             onClick={() => setShowSearch(!showSearch)}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm transition-colors ${
-              showSearch 
-                ? "bg-[var(--color-accent)]/20 text-[var(--color-accent)]" 
-                : "hover:bg-[var(--border)]"
-            }`}
-            title="Search (Ctrl+Shift+F)"
-          >
-            <Search className="w-4 h-4" />
-          </button>
+            className={cn(showSearch && toolToggleActiveClass)}
+          />
 
           <UpdateNotification />
-          
-          <button
-            onClick={openHelp}
-            className="flex items-center gap-2 px-3 py-1.5 rounded text-sm hover:bg-[var(--border)] transition-colors group"
-            title="Help & Documentation (Ctrl+H)"
-          >
-            <HelpCircle className="w-4 h-4 group-hover:text-[var(--color-accent)]" />
-          </button>
 
-          <button
+          <IconButton
+            icon={<HelpCircle />}
+            label="Help & Documentation (Ctrl+H)"
+            variant="ghost"
+            size="sm"
+            onClick={openHelp}
+          />
+
+          <IconButton
+            icon={<Settings />}
+            label="Settings (Ctrl+Alt+S)"
+            variant="ghost"
+            size="sm"
             onClick={openSettings}
-            className="flex items-center gap-2 px-3 py-1.5 rounded text-sm hover:bg-[var(--border)]"
-            title="Settings (Ctrl+Alt+S)"
-          >
-            <Settings className="w-4 h-4" />
-          </button>
+          />
         </div>
       </header>
 
@@ -227,14 +229,18 @@ export function AppLayout() {
               autoFocus
             />
             {searchQuery && (
-              <button onClick={() => setSearchQuery("")} className="p-1 hover:bg-white/5 rounded">
-                <X className="w-3.5 h-3.5 text-[var(--text-secondary)]" />
-              </button>
+              <IconButton
+                icon={<X />}
+                label="Clear search"
+                variant="ghost"
+                size="xs"
+                onClick={() => setSearchQuery("")}
+              />
             )}
-            <div className="w-px h-4 bg-[var(--border)] mx-1" />
-            <button onClick={() => setShowSearch(false)} className="text-xs font-medium text-[var(--text-secondary)] hover:text-white px-2">
+            <div className="w-px h-4 bg-[var(--neutral-6)] mx-1" />
+            <Button variant="ghost" size="xs" onClick={() => setShowSearch(false)}>
               Close
-            </button>
+            </Button>
           </div>
           
           {searchQuery && (
@@ -307,16 +313,17 @@ export function AppLayout() {
                       </div>
 
                       <div className="flex gap-2 justify-center">
-                        <button
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          leftIcon={<BookOpen className="w-3.5 h-3.5" />}
                           onClick={() => {
                             openHelp();
                             setShowSearch(false);
                           }}
-                          className="px-4 py-2 bg-[var(--color-accent)] text-white text-xs font-bold rounded-lg hover:bg-[var(--color-accent-hover)] transition-colors flex items-center gap-2 shadow-lg shadow-[var(--color-accent)]/20"
                         >
-                          <BookOpen className="w-3.5 h-3.5" />
                           View Detailed Help
-                        </button>
+                        </Button>
                       </div>
                     </div>
                   ) : (
@@ -329,23 +336,25 @@ export function AppLayout() {
                         We couldn't find anything matching your search in the current database.
                       </p>
                       <div className="mt-6 flex gap-2">
-                        <button
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          leftIcon={<BookOpen className="w-3.5 h-3.5" />}
                           onClick={() => {
                             openHelp();
                             setShowSearch(false);
                             setSearchQuery("");
                           }}
-                          className="px-4 py-2 bg-[var(--color-accent)] text-white text-xs font-bold rounded-lg hover:bg-[var(--color-accent-hover)] transition-colors flex items-center gap-2"
                         >
-                          <BookOpen className="w-3.5 h-3.5" />
                           Search Documentation
-                        </button>
-                        <button 
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          size="sm"
                           onClick={() => setSearchQuery("")}
-                          className="px-4 py-2 bg-[var(--surface-raised)] text-xs font-bold rounded-lg hover:bg-[var(--border)] transition-colors"
                         >
                           Clear Search
-                        </button>
+                        </Button>
                       </div>
                     </>
                   )}
