@@ -1,22 +1,239 @@
 @import "tailwindcss";
 
+/*
+  QueryDen Design System — Phase 1
+  See .lazyweb/design-research/queryden-design-system-2026-05-23/report.md
+  and GitHub issue #149.
+
+  Architecture:
+    - 5 color families × 12 steps (Radix-style semantic scale)
+    - 4 surface elevations (Linear-style: base → panel → elevated → overlay)
+    - Theme switching via .theme-dark / .theme-light overrides
+    - Tailwind v4 @theme block exposes scale steps as utilities (bg-neutral-3, text-accent-11, etc.)
+    - Legacy variables (--background, --surface, --color-accent, etc.) kept as semantic
+      aliases pointing at the new scale — old components keep working unchanged
+
+  Step semantics:
+     1  App background                  9  Solid bg (rest)
+     2  Subtle background              10  Solid bg (hover)
+     3  UI element bg (rest)           11  Low-contrast text
+     4  UI element bg (hover)          12  High-contrast text
+     5  UI element bg (active)
+     6  Subtle border / separator
+     7  UI element border / focus ring
+     8  Hovered UI element border
+*/
+
 @theme {
-  --color-primary: #1e3a5f;
-  --color-primary-light: #2d5a8f;
-  --color-accent: #06b6d4;
-  --color-accent-hover: #0891b2;
-  
-  --color-surface-dark: #1e293b;
-  --color-surface-light: #ffffff;
-  --color-background-dark: #0f172a;
-  --color-background-light: #f8fafc;
-  
-  --color-border-dark: #334155;
-  --color-border-light: #e2e8f0;
-  
-  --font-sans: system-ui, -apple-system, sans-serif;
+  --color-neutral-1:  var(--neutral-1);
+  --color-neutral-2:  var(--neutral-2);
+  --color-neutral-3:  var(--neutral-3);
+  --color-neutral-4:  var(--neutral-4);
+  --color-neutral-5:  var(--neutral-5);
+  --color-neutral-6:  var(--neutral-6);
+  --color-neutral-7:  var(--neutral-7);
+  --color-neutral-8:  var(--neutral-8);
+  --color-neutral-9:  var(--neutral-9);
+  --color-neutral-10: var(--neutral-10);
+  --color-neutral-11: var(--neutral-11);
+  --color-neutral-12: var(--neutral-12);
+
+  --color-accent-1:  var(--accent-1);
+  --color-accent-2:  var(--accent-2);
+  --color-accent-3:  var(--accent-3);
+  --color-accent-4:  var(--accent-4);
+  --color-accent-5:  var(--accent-5);
+  --color-accent-6:  var(--accent-6);
+  --color-accent-7:  var(--accent-7);
+  --color-accent-8:  var(--accent-8);
+  --color-accent-9:  var(--accent-9);
+  --color-accent-10: var(--accent-10);
+  --color-accent-11: var(--accent-11);
+  --color-accent-12: var(--accent-12);
+
+  --color-success-3:  var(--success-3);
+  --color-success-6:  var(--success-6);
+  --color-success-9:  var(--success-9);
+  --color-success-10: var(--success-10);
+  --color-success-11: var(--success-11);
+
+  --color-warning-3:  var(--warning-3);
+  --color-warning-6:  var(--warning-6);
+  --color-warning-9:  var(--warning-9);
+  --color-warning-10: var(--warning-10);
+  --color-warning-11: var(--warning-11);
+
+  --color-danger-3:  var(--danger-3);
+  --color-danger-6:  var(--danger-6);
+  --color-danger-9:  var(--danger-9);
+  --color-danger-10: var(--danger-10);
+  --color-danger-11: var(--danger-11);
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", Inter, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
 }
 
+/* ------------------------------------------------------------------
+   DARK THEME (default)
+   ------------------------------------------------------------------ */
+:root,
+.theme-dark {
+  color-scheme: dark;
+
+  /* Neutral / slate scale (Radix Slate Dark) */
+  --neutral-1:  #111113;
+  --neutral-2:  #18191b;
+  --neutral-3:  #212225;
+  --neutral-4:  #272a2d;
+  --neutral-5:  #2e3135;
+  --neutral-6:  #363a3f;
+  --neutral-7:  #43484e;
+  --neutral-8:  #5a6169;
+  --neutral-9:  #696e77;
+  --neutral-10: #777b84;
+  --neutral-11: #b0b4ba;
+  --neutral-12: #edeef0;
+
+  /* Accent / cyan scale (Radix Cyan Dark) — QueryDen's brand accent */
+  --accent-1:  #07191d;
+  --accent-2:  #061e24;
+  --accent-3:  #072830;
+  --accent-4:  #07303b;
+  --accent-5:  #073a47;
+  --accent-6:  #084552;
+  --accent-7:  #085361;
+  --accent-8:  #0a6e83;
+  --accent-9:  #00a2c7;
+  --accent-10: #23afd0;
+  --accent-11: #4ccce6;
+  --accent-12: #b6ecf7;
+
+  /* Success / green (Radix Grass Dark, key steps) */
+  --success-3:  #132d1c;
+  --success-6:  #2b5d3e;
+  --success-9:  #46a758;
+  --success-10: #55b467;
+  --success-11: #63c174;
+
+  /* Warning / amber (Radix Amber Dark, key steps) */
+  --warning-3:  #2f1b00;
+  --warning-6:  #5c3d00;
+  --warning-9:  #ffb224;
+  --warning-10: #ffcb47;
+  --warning-11: #f1a10d;
+
+  /* Danger / red (Radix Red Dark, key steps) */
+  --danger-3:  #3b1219;
+  --danger-6:  #671e22;
+  --danger-9:  #e5484d;
+  --danger-10: #ec5d5e;
+  --danger-11: #ff6369;
+
+  /* 4-step surface elevation (Linear-style) */
+  --surface-base:     var(--neutral-1);
+  --surface-panel:    var(--neutral-2);
+  --surface-elevated: var(--neutral-3);
+  --surface-overlay:  var(--neutral-4);
+
+  /* ----------------------------------------------------------------
+     Legacy aliases — keep until all consumers migrate
+     ---------------------------------------------------------------- */
+  --background:        var(--surface-base);
+  --surface:           var(--surface-elevated);
+  --surface-hover:     var(--neutral-4);   /* was undefined — fix for ConfirmDialog */
+  --border:            var(--neutral-6);
+  --text-primary:      var(--neutral-12);
+  --text-secondary:    var(--neutral-11);
+
+  --color-primary:       var(--accent-9);
+  --color-primary-light: var(--accent-10);
+  --color-accent:        var(--accent-9);
+  --color-accent-hover:  var(--accent-10);
+
+  --color-surface-dark:    var(--surface-elevated);
+  --color-surface-light:   var(--surface-base);
+  --color-background-dark: var(--surface-base);
+  --color-background-light: var(--surface-base);
+  --color-border-dark:     var(--neutral-6);
+  --color-border-light:    var(--neutral-6);
+
+  --color-success:    var(--success-9);
+  --color-success-bg: var(--success-3);
+  --color-error:      var(--danger-9);
+  --color-error-bg:   var(--danger-3);
+  --color-warning:    var(--warning-9);
+  --color-warning-bg: var(--warning-3);
+  --color-info:       var(--accent-9);
+  --color-info-bg:    var(--accent-3);
+}
+
+/* ------------------------------------------------------------------
+   LIGHT THEME
+   ------------------------------------------------------------------ */
+.theme-light {
+  color-scheme: light;
+
+  /* Neutral / slate scale (Radix Slate Light) */
+  --neutral-1:  #fcfcfd;
+  --neutral-2:  #f9f9fb;
+  --neutral-3:  #eff0f3;
+  --neutral-4:  #e7e8ec;
+  --neutral-5:  #e0e1e6;
+  --neutral-6:  #d8d9e0;
+  --neutral-7:  #cdced7;
+  --neutral-8:  #b9bbc6;
+  --neutral-9:  #8b8d98;
+  --neutral-10: #80828d;
+  --neutral-11: #60646c;
+  --neutral-12: #1c2024;
+
+  /* Accent / cyan scale (Radix Cyan Light) */
+  --accent-1:  #fafdfe;
+  --accent-2:  #f2fafb;
+  --accent-3:  #def7f9;
+  --accent-4:  #caf1f6;
+  --accent-5:  #b5e9f0;
+  --accent-6:  #9ddde7;
+  --accent-7:  #7dcedc;
+  --accent-8:  #3db9cf;
+  --accent-9:  #00a2c7;
+  --accent-10: #0797b9;
+  --accent-11: #107d98;
+  --accent-12: #0d3c48;
+
+  --success-3:  #dcefd6;
+  --success-6:  #a4d290;
+  --success-9:  #46a758;
+  --success-10: #3d9a4e;
+  --success-11: #2a7e3b;
+
+  --warning-3:  #fff1c2;
+  --warning-6:  #f0c050;
+  --warning-9:  #ffb224;
+  --warning-10: #f0a000;
+  --warning-11: #ad5700;
+
+  --danger-3:  #ffe5e5;
+  --danger-6:  #f9b8b8;
+  --danger-9:  #e5484d;
+  --danger-10: #d63a3f;
+  --danger-11: #c62a2f;
+
+  /* Light theme inverts the elevation: lighter = higher */
+  --surface-base:     var(--neutral-2);
+  --surface-panel:    var(--neutral-1);
+  --surface-elevated: #ffffff;
+  --surface-overlay:  #ffffff;
+}
+
+/* ------------------------------------------------------------------
+   Base
+   ------------------------------------------------------------------ */
 :root {
   font-family: var(--font-sans);
   font-synthesis: none;
@@ -32,151 +249,72 @@ html, body, #root {
   overflow: hidden;
 }
 
-.theme-dark {
-  color-scheme: dark;
-  --background: var(--color-background-dark);
-  --surface: var(--color-surface-dark);
-  --border: var(--color-border-dark);
-  --text-primary: #f1f5f9;
-  --text-secondary: #94a3b8;
-  --color-success: #22c55e;
-  --color-success-bg: #14532d;
-  --color-error: #ef4444;
-  --color-error-bg: #7f1d1d;
-  --color-warning: #f59e0b;
-  --color-warning-bg: #78350f;
-  --color-info: #3b82f6;
-  --color-info-bg: #1e3a8a;
-  
-  --glass-bg: rgba(30, 41, 59, 0.7);
-  --glass-border: rgba(255, 255, 255, 0.1);
-  --glass-blur: blur(12px);
-  
-  --premium-gradient: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-  --accent-gradient: linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%);
-}
-
-.theme-light {
-  color-scheme: light;
-  --background: var(--color-background-light);
-  --surface: var(--color-surface-light);
-  --border: var(--color-border-light);
-  --text-primary: #0f172a;
-  --text-secondary: #64748b;
-  --color-success: #16a34a;
-  --color-success-bg: #dcfce7;
-  --color-error: #dc2626;
-  --color-error-bg: #fee2e2;
-  --color-warning: #d97706;
-  --color-warning-bg: #fef3c7;
-  --color-info: #2563eb;
-  --color-info-bg: #dbeafe;
-}
-
-/* Premium Glassmorphism */
-.glass {
-  background: var(--glass-bg);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  border: 1px solid var(--glass-border);
-}
-
-.premium-bg {
-  background: var(--premium-gradient);
-}
-
-.accent-bg {
-  background: var(--accent-gradient);
-}
-
-@keyframes shimmer {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(300%); }
-}
-
-.animate-shimmer {
-  animation: shimmer 1.5s infinite linear;
-}
-
-/* Custom Scrollbar for a cleaner look */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: var(--text-secondary);
-  opacity: 0.2;
+  background: var(--neutral-7);
   border-radius: 10px;
   border: 4px solid transparent;
   background-clip: content-box;
 }
-
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--text-secondary);
-  opacity: 0.4;
+  background: var(--neutral-9);
   background-clip: content-box;
 }
 
-/* Hide scrollbar but allow scrolling */
-.no-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
 
-.no-scrollbar::-webkit-scrollbar {
-  display: none;
-}
-
-/* Monaco Editor Statement Indicators - Gutter Icons */
+/* Monaco statement indicators */
 .statement-glyph-running {
   background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="%23f59e0b" opacity="0.8"/></svg>') no-repeat center center;
   background-size: 12px;
 }
-
 .statement-glyph-success {
   background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="%2322c55e" opacity="0.9"/><path d="M5 8l2 2 4-4" stroke="white" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>') no-repeat center center;
   background-size: 12px;
 }
-
 .statement-glyph-error {
   background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="%23ef4444" opacity="0.9"/><path d="M5 5l6 6M11 5l-6 6" stroke="white" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>') no-repeat center center;
   background-size: 12px;
 }
 
-/* Line highlight for the executed statement */
 .statement-indicator-running {
   background-color: rgba(245, 158, 11, 0.1) !important;
   border-left: 3px solid #f59e0b !important;
 }
-
 .statement-indicator-success {
   background-color: rgba(34, 197, 94, 0.1) !important;
   border-left: 3px solid #22c55e !important;
 }
+.statement-indicator-error {
+  background-color: rgba(239, 68, 68, 0.1) !important;
+  border-left: 3px solid #ef4444 !important;
+}
 
-/* Compact mode — reduces all toolbar/header heights */
+/* Compact mode */
 .compact-mode .app-header { height: 28px !important; }
 .compact-mode header { height: 28px !important; }
 .compact-mode .h-10 { height: 28px !important; }
 .compact-mode .h-11 { height: 32px !important; }
 
+/* Monaco query variable highlighting */
 .monaco-editor .query-var {
   color: #a78bfa !important;
   font-style: italic;
   font-weight: 500;
 }
-
 .monaco-editor .query-var-highlight {
   background-color: rgba(167, 139, 250, 0.15) !important;
   border-radius: 2px;
 }
 
-.statement-indicator-error {
-  background-color: rgba(239, 68, 68, 0.1) !important;
-  border-left: 3px solid #ef4444 !important;
+/* Shimmer animation (used by loading skeletons) */
+@keyframes shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+.animate-shimmer {
+  animation: shimmer 1.5s infinite linear;
 }
