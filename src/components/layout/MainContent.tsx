@@ -15,6 +15,9 @@ import { splitStatements } from "../../utils/splitStatements";
 import { applyQueryLimit } from "../../utils/applyQueryLimit";
 import { VariableSubstitutionDialog, extractVariables, substituteVariables, VariableValues } from "../ui/VariableSubstitutionDialog";
 import { useLocalHistory } from "../../store/localHistoryStore";
+import { Button } from "../ui/Button";
+import { IconButton } from "../ui/IconButton";
+import { Select } from "../ui/Select";
 
 // Lazy-loaded editor — Monaco (core + SQL contribution) is the single
 // heaviest dependency in the app. Pulling QueryEditor out of the cold-start
@@ -2203,7 +2206,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
   });
 
   return (
-    <div className="flex-1 flex flex-col min-w-0 h-full bg-[var(--background)]">
+    <div className="flex-1 flex flex-col min-w-0 h-full bg-[var(--surface-base)]">
       {/* Variable Substitution Dialog */}
       {varDialogState.isOpen && (
         <VariableSubstitutionDialog
@@ -2216,15 +2219,17 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       )}
 
       {/* Breadcrumbs - Superior Navigation */}
-      <div className="h-8 flex items-center px-3 bg-[var(--surface)] text-[11px] border-b border-[var(--border)] gap-2 select-none overflow-x-auto shrink-0">
-        <Database className="w-3.5 h-3.5 text-[var(--color-accent)] opacity-70 shrink-0" />
-        
+      <div className="h-8 flex items-center px-3 bg-[var(--surface-panel)] text-[11px] border-b border-[var(--neutral-6)] gap-2 select-none overflow-x-auto shrink-0">
+        <Database className="w-3.5 h-3.5 text-[var(--accent-11)] opacity-70 shrink-0" />
+
         {/* Connection Selector */}
-        <select 
-          className="bg-transparent border-none text-[var(--text-secondary)] font-bold uppercase tracking-wider outline-none cursor-pointer hover:text-[var(--text-primary)] transition-colors py-1"
-          value={activeTab?.target?.connectionId || activeConnection?.id || ""}
-          onChange={async (e) => {
-            const connId = e.target.value;
+        <Select
+          selectSize="sm"
+          className="w-auto min-w-[8rem] font-bold uppercase tracking-wider"
+          placeholder="Disconnected"
+          value={activeTab?.target?.connectionId || activeConnection?.id || undefined}
+          options={connections.map(c => ({ label: c.name, value: c.id }))}
+          onValueChange={async (connId) => {
             const conn = connections.find(c => c.id === connId);
             if (activeTabId && conn) {
               const defaultDb = conn.database;
@@ -2240,140 +2245,124 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               }
             }
           }}
-        >
-          {connections.length === 0 && <option value="" className="bg-[var(--surface)]">Disconnected</option>}
-          {connections.map(c => <option key={c.id} value={c.id} className="bg-[var(--surface)] uppercase">{c.name}</option>)}
-        </select>
+        />
 
         <ChevronRight className="w-3 h-3 opacity-20 shrink-0" />
-        
+
         {/* Database Selector */}
-        <select
-          className="bg-[var(--surface-raised)] border border-[var(--border)] rounded px-2 py-0.5 text-[var(--text-primary)] font-medium outline-none shadow-sm cursor-pointer focus:border-[var(--color-accent)]"
-          value={activeTab?.target?.database || selectedDatabase || ""}
-          onChange={async (e) => {
-             const dbName = e.target.value;
-             if (activeTabId) {
-               const currentTarget = activeTab?.target || (activeConnection && selectedDatabase ? { connectionId: activeConnection.id, connectionName: activeConnection.name, database: selectedDatabase } : null);
-               if (currentTarget) {
-                 setQueryTabs(prev => prev.map(t => t.id === activeTabId ? { ...t, target: { ...currentTarget, database: dbName } } : t));
-                 try {
-                   await connectToDatabase(currentTarget.connectionId, dbName);
-                 } catch (err) {
-                   console.error("Failed to connect to database:", err);
-                 }
-               }
-             }
-          }}
-        >
-          {(() => {
-            const currentConnId = activeTab?.target?.connectionId || activeConnection?.id;
-            const dbs = currentConnId && tabDatabases[currentConnId] ? tabDatabases[currentConnId] : (currentConnId === activeConnection?.id ? globalDatabases : []);
-            
-            const currentDbName = activeTab?.target?.database || selectedDatabase;
-            const allDbs = [...dbs];
-            if (currentDbName && !allDbs.includes(currentDbName)) allDbs.unshift(currentDbName);
-            
-            return allDbs.length > 0 
-              ? allDbs.map(db => <option key={db} value={db} className="bg-[var(--surface)]">{db}</option>)
-              : <option value={currentDbName || ""} className="bg-[var(--surface)]">{currentDbName || "No Database"}</option>;
-          })()}
-        </select>
-        
+        {(() => {
+          const currentConnId = activeTab?.target?.connectionId || activeConnection?.id;
+          const dbs = currentConnId && tabDatabases[currentConnId] ? tabDatabases[currentConnId] : (currentConnId === activeConnection?.id ? globalDatabases : []);
+
+          const currentDbName = activeTab?.target?.database || selectedDatabase;
+          const allDbs = [...dbs];
+          if (currentDbName && !allDbs.includes(currentDbName)) allDbs.unshift(currentDbName);
+
+          const dbOptions = allDbs.length > 0
+            ? allDbs.map(db => ({ label: db, value: db }))
+            : [{ label: currentDbName || "No Database", value: currentDbName || "__none__" }];
+
+          return (
+            <Select
+              selectSize="sm"
+              className="w-auto min-w-[8rem] font-medium"
+              placeholder="No Database"
+              value={currentDbName || undefined}
+              options={dbOptions}
+              onValueChange={async (dbName) => {
+                if (dbName === "__none__") return;
+                if (activeTabId) {
+                  const currentTarget = activeTab?.target || (activeConnection && selectedDatabase ? { connectionId: activeConnection.id, connectionName: activeConnection.name, database: selectedDatabase } : null);
+                  if (currentTarget) {
+                    setQueryTabs(prev => prev.map(t => t.id === activeTabId ? { ...t, target: { ...currentTarget, database: dbName } } : t));
+                    try {
+                      await connectToDatabase(currentTarget.connectionId, dbName);
+                    } catch (err) {
+                      console.error("Failed to connect to database:", err);
+                    }
+                  }
+                }
+              }}
+            />
+          );
+        })()}
+
         <ChevronRight className="w-3 h-3 opacity-20 shrink-0" />
-        <span className="text-[var(--text-secondary)] opacity-100 whitespace-nowrap">{activeTab?.name || "No Active Tab"}</span>
+        <span className="text-[var(--neutral-11)] whitespace-nowrap">{activeTab?.name || "No Active Tab"}</span>
       </div>
 
       {/* Combined Tool Window Bar - Top — only when a database is selected.
           Without a target DB, every action (Run, Format, Explain, Compare,
           Clone, Activity, AI, Save) is either disabled or pointless. See #84. */}
       {isDatabaseReady && (
-      <div className="h-12 flex items-center gap-1 px-2 bg-[var(--surface)] border-b border-[var(--border)] shrink-0">
+      <div className="h-12 flex items-center gap-1 px-2 bg-[var(--surface-panel)] border-b border-[var(--neutral-6)] shrink-0">
         {isExecuting ? (
-          <button
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 text-sm font-bold transition-colors shadow-inner"
-            onClick={cancelQuery}
-          >
-            <Square className="w-3.5 h-3.5" fill="currentColor" />
+          <Button variant="destructive" size="sm" onClick={cancelQuery} leftIcon={<Square className="w-3.5 h-3.5" fill="currentColor" />}>
             Cancel {runningTimeMs > 0 && `(${(runningTimeMs / 1000).toFixed(1)}s)`}
-          </button>
+          </Button>
         ) : (
-          <button
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-[var(--color-accent)] text-white text-sm hover:bg-[var(--color-accent-hover)] font-bold transition-all disabled:opacity-50"
+          <Button
+            variant="primary"
+            size="sm"
             onClick={() => {
               // Always use run-query-smart to get the correct line number from cursor position
               window.dispatchEvent(new CustomEvent("run-query-smart"));
             }}
             disabled={!activeConnection}
             title="Run first statement (Ctrl+Enter in editor for statement at cursor, Ctrl+Shift+Enter for all)"
+            leftIcon={<Play className="w-4 h-4" />}
           >
-            <Play className="w-4 h-4" />
             Run
-          </button>
+          </Button>
         )}
-        <button
+        <IconButton
           onClick={() => addNewTab()}
-          className="p-2 rounded hover:bg-[var(--border)]"
-          title="New Query Tab"
-        >
-          <Plus className="w-4 h-4" />
-        </button>
-        <div className="w-px h-6 bg-[var(--border)] mx-1" />
-        <button
+          label="New Query Tab"
+          icon={<Plus />}
+        />
+        <div className="w-px h-6 bg-[var(--neutral-6)] mx-1" />
+        <IconButton
           onClick={handleFormatSql}
-          className="p-2 rounded hover:bg-[var(--border)] transition-colors group"
-          title="Format SQL (Prettify)"
-        >
-          <FileText className="w-4 h-4 opacity-70 group-hover:opacity-100 text-blue-400" />
-        </button>
-        <button
+          label="Format SQL (Prettify)"
+          icon={<FileText />}
+        />
+        <IconButton
           onClick={handleExplainPlan}
           disabled={!activeTab?.query || isExecuting}
-          className="p-2 rounded hover:bg-[var(--border)] transition-colors group disabled:opacity-30"
-          title="Explain Plan (Analyze Performance)"
-        >
-          <BarChart2 className="w-4 h-4 opacity-70 group-hover:opacity-100 text-purple-400" />
-        </button>
-        <button
+          label="Explain Plan (Analyze Performance)"
+          icon={<BarChart2 />}
+        />
+        <IconButton
           onClick={handleVisualOptimize}
           disabled={!activeTab?.query || isExecuting}
-          className="p-2 rounded hover:bg-[var(--border)] transition-colors group disabled:opacity-30"
-          title="Visual Query Optimizer & Heuristics"
-        >
-          <Activity className="w-4 h-4 opacity-70 group-hover:opacity-100 text-emerald-400" />
-        </button>
-        <div className="w-px h-6 bg-[var(--border)] mx-1" />
-        <button 
-          className="p-2 rounded hover:bg-[var(--border)] transition-colors group" 
-          title="Compare Schemas / Merge (Beta)"
+          label="Visual Query Optimizer & Heuristics"
+          icon={<Activity />}
+        />
+        <div className="w-px h-6 bg-[var(--neutral-6)] mx-1" />
+        <IconButton
+          label="Compare Schemas / Merge (Beta)"
           onClick={() => setShowCompareDialog(true)}
-        >
-          <GitCompare className="w-4 h-4 opacity-70 group-hover:opacity-100 text-amber-400" />
-        </button>
-        <button 
-          className="p-2 rounded hover:bg-[var(--border)] transition-colors group" 
-          title="Clone Database / Snapshot"
+          icon={<GitCompare />}
+        />
+        <IconButton
+          label="Clone Database / Snapshot"
           onClick={() => setShowCloneDialog(true)}
-        >
-          <Copy className="w-4 h-4 opacity-70 group-hover:opacity-100 text-blue-400" />
-        </button>
-        <button 
-          className={`p-2 rounded transition-all group ${showActivityMonitor ? 'bg-emerald-500/20 text-emerald-400' : 'hover:bg-[var(--border)]'}`}
-          title="Performance Monitor / pg_stat_activity"
+          icon={<Copy />}
+        />
+        <IconButton
+          label="Performance Monitor / pg_stat_activity"
           onClick={() => setShowActivityMonitor(true)}
-        >
-          <ActivityIcon className={`w-4 h-4 ${showActivityMonitor ? 'opacity-100' : 'opacity-70 group-hover:opacity-100 text-emerald-400'}`} />
-        </button>
-        <button 
-          className={`p-2 rounded transition-all group ${showMultiQueryDialog ? 'bg-indigo-500/20 text-indigo-400' : 'hover:bg-[var(--border)]'}`}
-          title="Multi-Query (Run query across multiple databases)"
+          icon={<ActivityIcon />}
+          className={showActivityMonitor ? "bg-[var(--accent-3)] text-[var(--accent-11)] hover:bg-[var(--accent-4)]" : undefined}
+        />
+        <IconButton
+          label="Multi-Query (Run query across multiple databases)"
           onClick={() => setShowMultiQueryDialog(true)}
-        >
-          <Layers className={`w-4 h-4 ${showMultiQueryDialog ? 'opacity-100' : 'opacity-70 group-hover:opacity-100 text-indigo-400'}`} />
-        </button>
-        <button 
-          className="p-2 rounded hover:bg-[var(--border)] transition-colors group" 
-          title="Save Query (Ctrl+S)"
+          icon={<Layers />}
+          className={showMultiQueryDialog ? "bg-[var(--accent-3)] text-[var(--accent-11)] hover:bg-[var(--accent-4)]" : undefined}
+        />
+        <IconButton
+          label="Save Query (Ctrl+S)"
           onClick={async () => {
             if (!activeConnection) return;
             const name = await confirmDialog.dialog({
@@ -2386,7 +2375,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               type: "info",
               requireInput: true
             });
-            
+
             if (name) {
               addSavedQuery({
                 name,
@@ -2396,20 +2385,20 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               });
             }
           }}
-        >
-          <Save className="w-4 h-4 opacity-70 group-hover:opacity-100" />
-        </button>
+          icon={<Save />}
+        />
         <div className="flex-1" />
-        <button
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-bold bg-purple-500/10 text-purple-400 border border-purple-500/20 hover:bg-purple-500/20 transition-all mr-2"
+        <Button
+          size="xs"
           onClick={() => setShowAIDialog(true)}
+          className="font-bold uppercase bg-[var(--accent-3)] text-[var(--accent-11)] border border-[var(--accent-6)] hover:bg-[var(--accent-4)] hover:border-[var(--accent-7)] mr-2"
+          leftIcon={<Sparkles className="w-3.5 h-3.5" />}
         >
-          <Sparkles className="w-3.5 h-3.5" />
-          AI ASSISTANT
-        </button>
+          AI Assistant
+        </Button>
         <button
           onClick={() => setShowServices(!showServices)}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-sm ${showServices ? 'bg-[var(--border)]' : 'hover:bg-[var(--border)]'}`}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-sm cursor-pointer ${showServices ? 'bg-[var(--neutral-4)]' : 'hover:bg-[var(--neutral-4)]'}`}
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2m0 0h2a2 2 0 012 2v6a2 2 0 01-2 2H9a2 2 0 01-2-2v-6a2 2 0 012-2h2" />
@@ -2422,14 +2411,14 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
 
       {/* Query Tabs - DataGrip Style — gated alongside the toolbar (#84). */}
       {isDatabaseReady && (
-      <div className="flex items-center bg-[var(--surface)] border-b border-[var(--border)] shrink-0 overflow-x-auto no-scrollbar">
+      <div className="flex items-center bg-[var(--surface-panel)] border-b border-[var(--neutral-6)] shrink-0 overflow-x-auto no-scrollbar">
         <div className="flex items-center flex-nowrap min-w-0">
           {queryTabs.map((tab) => {
             // Get connection name for the tab (from target or active connection)
             const tabConnectionName = tab.target?.connectionName || activeConnection?.name || "No Connection";
             const tabConnectionId = tab.target?.connectionId || activeConnection?.id;
             const tabConnection = connections.find(c => c.id === tabConnectionId);
-            const tabColor = tabConnection?.color || "#06b6d4";
+            const tabColor = tabConnection?.color || "var(--accent-9)";
             // Truncate connection name for tab display (show first 12 chars if space is tight)
             const displayConnName = queryTabs.length > 5 && tabConnectionName.length > 12 
               ? tabConnectionName.substring(0, 10) + "..." 
@@ -2444,9 +2433,9 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               <div
                 key={tab.id}
                 className={`flex items-center gap-2 px-3 py-2 text-xs font-semibold cursor-pointer border-t-2 transition-all min-w-[140px] max-w-[200px] ${
-                  activeTabId === tab.id 
-                    ? "bg-[var(--background)] border-[var(--color-accent)] text-[var(--color-accent)]" 
-                    : "bg-[var(--surface-raised)] border-transparent text-[var(--text-secondary)] hover:bg-[var(--border)]"
+                  activeTabId === tab.id
+                    ? "bg-[var(--surface-base)] border-[var(--accent-9)] text-[var(--accent-11)]"
+                    : "bg-[var(--surface-elevated)] border-transparent text-[var(--neutral-11)] hover:bg-[var(--neutral-4)]"
                 }`}
                 onClick={() => {
                   setActiveTabId(tab.id);
@@ -2465,11 +2454,11 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                 {/* Status Indicator - Left side */}
                 <div className="shrink-0">
                   {tabIsExecuting ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--warning-11)]" />
                   ) : tabHasError ? (
-                    <XCircle className="w-3.5 h-3.5 text-red-400" />
+                    <XCircle className="w-3.5 h-3.5 text-[var(--danger-11)]" />
                   ) : tabHasSuccess ? (
-                    <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                    <CheckCircle className="w-3.5 h-3.5 text-[var(--success-11)]" />
                   ) : (
                     <Terminal className="w-3.5 h-3.5 mt-0.5 opacity-50" />
                   )}
@@ -2484,9 +2473,9 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                         style={{ backgroundColor: tabColor }}
                         title={tabColor}
                       />
-                      <span className="text-[9px] font-bold text-[var(--color-accent)] opacity-80 shrink-0">[{displayConnName}]</span>
+                      <span className="text-[9px] font-bold text-[var(--accent-11)] opacity-80 shrink-0">[{displayConnName}]</span>
                       {tab.usePsql && (
-                        <span className="text-[8px] font-bold text-blue-400 bg-blue-400/10 px-1 py-0.5 rounded shrink-0 border border-blue-400/20">psql</span>
+                        <span className="text-[8px] font-bold text-[var(--accent-11)] bg-[var(--accent-3)] px-1 py-0.5 rounded shrink-0 border border-[var(--accent-6)]">psql</span>
                       )}
                       <span className="truncate">{tab.name}</span>
                     </span>
@@ -2497,15 +2486,16 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                 
                 {/* Close Button */}
                 {queryTabs.length > 1 && (
-                  <button
+                  <IconButton
+                    size="xs"
+                    label="Close tab"
                     onClick={(e) => {
                       e.stopPropagation();
                       closeTab(tab.id);
                     }}
-                    className="p-0.5 rounded hover:bg-[var(--border)] shrink-0"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
+                    icon={<X />}
+                    className="shrink-0"
+                  />
                 )}
               </div>
             );
@@ -2513,13 +2503,13 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         </div>
         
         {/* New Tab Button */}
-        <button
+        <IconButton
+          size="sm"
           onClick={() => addNewTab()}
-          className="p-2 hover:bg-[var(--border)] shrink-0 ml-1"
-          title="New Query Tab"
-        >
-          <Plus className="w-3.5 h-3.5" />
-        </button>
+          label="New Query Tab"
+          icon={<Plus />}
+          className="shrink-0 ml-1"
+        />
       </div>
       )}
 
@@ -2563,7 +2553,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
             ) : (
               <Suspense
                 fallback={
-                  <div className="h-full w-full bg-[var(--background)]" aria-hidden="true" />
+                  <div className="h-full w-full bg-[var(--surface-base)]" aria-hidden="true" />
                 }
               >
                 <QueryEditor
@@ -2583,9 +2573,9 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               </Suspense>
             )
           ) : (
-            <div className="h-full flex flex-col items-center justify-center bg-[var(--background)] p-6 text-center">
-              <p className="text-sm text-[var(--text-secondary)]">
-                Press <kbd className="px-1.5 py-0.5 mx-1 text-[10px] font-bold rounded bg-[var(--surface-raised)] border border-[var(--border)]">Ctrl+N</kbd>
+            <div className="h-full flex flex-col items-center justify-center bg-[var(--surface-base)] p-6 text-center">
+              <p className="text-sm text-[var(--neutral-11)]">
+                Press <kbd className="px-1.5 py-0.5 mx-1 text-[10px] font-bold rounded bg-[var(--surface-elevated)] border border-[var(--neutral-6)]">Ctrl+N</kbd>
                 or click <Plus className="inline w-3.5 h-3.5 mx-0.5 align-text-bottom" /> in the tab bar to start a query.
               </p>
             </div>
@@ -2594,7 +2584,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
 
         {isDatabaseReady && showServices && !activeTab?.usePsql && (
           <>
-            <PanelResizeHandle className="h-1 bg-[var(--border)] hover:bg-[var(--color-accent)] transition-colors cursor-row-resize select-none shrink-0 data-[resize-handle-state=drag]:bg-[var(--color-accent)] data-[resize-handle-state=hover]:bg-[var(--color-accent)]/60" />
+            <PanelResizeHandle className="h-1 bg-[var(--neutral-6)] hover:bg-[var(--accent-9)] transition-colors cursor-row-resize select-none shrink-0 data-[resize-handle-state=drag]:bg-[var(--accent-9)] data-[resize-handle-state=hover]:bg-[var(--accent-9)]/60" />
             <Panel minSize={15} maxSize={85} defaultSize={40}>
               <ResultsPanel
             results={results}
