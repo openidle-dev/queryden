@@ -42,9 +42,14 @@ export function AddRowModal({ isOpen, onClose, onSave, columns, tableName }: Add
     }
   };
 
+  // Don't let the modal be dismissed while a write is in flight.
+  const handleRequestClose = () => {
+    if (!isSaving) onClose();
+  };
+
   return (
-    <Dialog open={isOpen} onClose={onClose} size="lg">
-      <Dialog.Title onClose={onClose}>
+    <Dialog open={isOpen} onClose={handleRequestClose} size="lg" dismissOnBackdrop={!isSaving} dismissOnEsc={!isSaving}>
+      <Dialog.Title onClose={handleRequestClose}>
         <span className="inline-flex items-center gap-3">
           <span className="p-1.5 bg-[var(--accent-3)] rounded">
             <Save className="w-4 h-4 text-[var(--accent-11)]" />
@@ -93,7 +98,7 @@ export function AddRowModal({ isOpen, onClose, onSave, columns, tableName }: Add
       </Dialog.Body>
 
       <Dialog.Footer>
-        <Button variant="ghost" size="sm" onClick={onClose}>
+        <Button variant="ghost" size="sm" onClick={handleRequestClose} disabled={isSaving}>
           Cancel
         </Button>
         <Button

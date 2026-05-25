@@ -19,7 +19,8 @@ export function AIAssistantDialog({ isOpen, onClose, currentQuery, onUpdateQuery
   const [isGenerating, setIsGenerating] = useState(false);
 
   const handleGenerate = async () => {
-    if (!prompt.trim() || !ai.enabled) return;
+    // Guard against Enter re-triggering while a generation is already running.
+    if (!prompt.trim() || !ai.enabled || isGenerating) return;
     setIsGenerating(true);
 
     // Simulate AI generation based on prompt.

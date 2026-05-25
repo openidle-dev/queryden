@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { ChevronRight, ChevronLeft, Database, Terminal, Settings, ShieldCheck, CheckCircle2 } from "lucide-react";
 import { Dialog } from "../ui/Dialog";
 import { Button } from "../ui/Button";
@@ -124,7 +124,13 @@ export function ToolGuideWizard({ isOpen, onClose, type }: ToolGuideWizardProps)
   ];
 
   const steps = type === "postgres-required" ? postgresSteps : clusterSteps;
-  const current = steps[currentStep];
+  // The Dialog migration keeps this mounted via open={isOpen}, so currentStep
+  // persists across opens — reset it, and clamp in case `type` has fewer steps.
+  useEffect(() => {
+    if (isOpen) setCurrentStep(0);
+  }, [isOpen, type]);
+  const safeStep = Math.min(currentStep, steps.length - 1);
+  const current = steps[safeStep];
 
   return (
     <Dialog open={isOpen} onClose={onClose} size="lg">
@@ -154,7 +160,7 @@ export function ToolGuideWizard({ isOpen, onClose, type }: ToolGuideWizardProps)
           {steps.map((_, idx) => (
             <div
               key={idx}
-              className={`h-1.5 rounded-full transition-all duration-300 ${idx === currentStep ? 'w-8 bg-[var(--accent-9)]' : 'w-2 bg-[var(--neutral-6)]'}`}
+              className={`h-1.5 rounded-full transition-all duration-300 ${idx === safeStep ? 'w-8 bg-[var(--accent-9)]' : 'w-2 bg-[var(--neutral-6)]'}`}
             />
           ))}
         </div>
@@ -163,17 +169,17 @@ export function ToolGuideWizard({ isOpen, onClose, type }: ToolGuideWizardProps)
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => setCurrentStep(prev => Math.max(0, prev - 1))}
-            disabled={currentStep === 0}
+            onClick={() => setCurrentStep(Math.max(0, safeStep - 1))}
+            disabled={safeStep === 0}
             leftIcon={<ChevronLeft className="w-4 h-4" />}
           >
             Back
           </Button>
-          {currentStep < steps.length - 1 ? (
+          {safeStep < steps.length - 1 ? (
             <Button
               variant="primary"
               size="sm"
-              onClick={() => setCurrentStep(prev => prev + 1)}
+              onClick={() => setCurrentStep(safeStep + 1)}
               rightIcon={<ChevronRight className="w-4 h-4" />}
             >
               Next step
