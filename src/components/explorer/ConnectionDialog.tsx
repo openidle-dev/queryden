@@ -417,6 +417,9 @@ export function ConnectionDialog({ connection, onClose, defaultFolderId }: { con
                         onClick={() => {
                           setError(null);
                           setTestResult(null);
+                          // #157: SQLite hides the tab row, so a stranded "ssh"
+                          // tab would leave the General form (file path) unreachable.
+                          setActiveTab("general");
                           setFormData(prev => ({
                             ...prev,
                             type: p.id as any,
@@ -450,6 +453,9 @@ export function ConnectionDialog({ connection, onClose, defaultFolderId }: { con
                         onClick={() => {
                           setError(null);
                           setTestResult(null);
+                          // #157: SQLite hides the tab row, so a stranded "ssh"
+                          // tab would leave the General form (file path) unreachable.
+                          setActiveTab("general");
                           setFormData(prev => ({
                             ...prev,
                             type: p.id as any,
@@ -627,6 +633,8 @@ export function ConnectionDialog({ connection, onClose, defaultFolderId }: { con
                                 key={color}
                                 type="button"
                                 onClick={() => setFormData({ ...formData, color })}
+                                aria-label={`Set connection color ${color}`}
+                                aria-pressed={formData.color === color}
                                 className={`w-5 h-5 rounded-full border transition-all ${
                                   formData.color === color ? "border-[var(--neutral-12)] scale-110" : "border-transparent hover:scale-105"
                                 }`}
