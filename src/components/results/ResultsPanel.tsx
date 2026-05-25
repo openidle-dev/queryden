@@ -15,6 +15,13 @@ import { CompactSelection } from "@glideapps/glide-data-grid";
 import "@glideapps/glide-data-grid/dist/index.css";
 import clsx from "clsx";
 import { FileType, toBlobUrl, revokeBlobUrl, formatFileSize, binaryToUtf8, isImageType, isPdfType, formatHexDump, formatHexCompact, toDataUrl } from "../../utils/binaryUtils";
+import { Button } from "../ui/Button";
+import { IconButton } from "../ui/IconButton";
+import { Input } from "../ui/Input";
+
+// Shared accent-soft treatment for the binary-preview action pills (Save /
+// Copy / Open / Download). Reused ~9× across the preview's view modes.
+const binaryActionClass = "bg-[var(--accent-3)] text-[var(--accent-11)] hover:bg-[var(--accent-4)]";
 
 interface ResultsPanelProps {
   results: any[];
@@ -426,10 +433,10 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
   const getColumnIcon = (col: string) => {
     if (results.length === 0) return <Type className="w-2.5 h-2.5" />;
     const val = results[0][col];
-    if (typeof val === "number") return <Hash className="w-2.5 h-2.5 text-cyan-400" />;
-    if (typeof val === "boolean") return <Binary className="w-2.5 h-2.5 text-emerald-400" />;
-    if (typeof val === "string" && (val.includes("-") || val.includes("/")) && !isNaN(Date.parse(val))) return <Calendar className="w-2.5 h-2.5 text-amber-400" />;
-    if (typeof val === "object") return <CodeIcon className="w-2.5 h-2.5 text-purple-400" />;
+    if (typeof val === "number") return <Hash className="w-2.5 h-2.5 text-[var(--accent-11)]" />;
+    if (typeof val === "boolean") return <Binary className="w-2.5 h-2.5 text-[var(--success-11)]" />;
+    if (typeof val === "string" && (val.includes("-") || val.includes("/")) && !isNaN(Date.parse(val))) return <Calendar className="w-2.5 h-2.5 text-[var(--warning-11)]" />;
+    if (typeof val === "object") return <CodeIcon className="w-2.5 h-2.5 text-[var(--accent-11)]" />;
     return <Type className="w-2.5 h-2.5 opacity-40" />;
   };
 
@@ -479,38 +486,38 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
   const hasHistory = history.length > 0;
 
   const TabHeader = () => (
-    <div className="h-9 flex items-center gap-2 px-3 bg-[var(--surface)] border-b border-[var(--border)] text-xs shrink-0 select-none">
-      <button onClick={() => setActiveTab("messages")} className={`h-full flex items-center px-1 border-b transition-all ${activeTab === "messages" ? (error ? "text-red-400 border-red-400" : "text-[var(--color-accent)] border-[var(--color-accent)]") : "text-[var(--text-secondary)] border-transparent hover:text-[var(--text-primary)]"}`}>
+    <div className="h-9 flex items-center gap-2 px-3 bg-[var(--surface-panel)] border-b border-[var(--neutral-6)] text-xs shrink-0 select-none">
+      <button onClick={() => setActiveTab("messages")} className={`h-full flex items-center px-1 border-b transition-all cursor-pointer ${activeTab === "messages" ? (error ? "text-[var(--danger-11)] border-[var(--danger-11)]" : "text-[var(--accent-11)] border-[var(--accent-9)]") : "text-[var(--neutral-11)] border-transparent hover:text-[var(--neutral-12)]"}`}>
         <AlertCircle className="w-3.5 h-3.5 mr-1" /> Messages
       </button>
       {hasResults && (
-        <button onClick={() => setActiveTab("result")} className={`h-full flex items-center px-1 border-b transition-all ${activeTab === "result" ? "text-[var(--color-accent)] border-[var(--color-accent)]" : "text-[var(--text-secondary)] border-transparent hover:text-[var(--text-primary)]"}`}>
+        <button onClick={() => setActiveTab("result")} className={`h-full flex items-center px-1 border-b transition-all cursor-pointer ${activeTab === "result" ? "text-[var(--accent-11)] border-[var(--accent-9)]" : "text-[var(--neutral-11)] border-transparent hover:text-[var(--neutral-12)]"}`}>
           <Table2 className="w-3.5 h-3.5 mr-1" /> Results {results.length > 0 && <span className="ml-1 opacity-60">({results.length})</span>}
         </button>
       )}
       {hasHistory && (
-        <button onClick={() => setActiveTab("history")} className={`h-full flex items-center px-1 border-b transition-all ${activeTab === "history" ? "text-[var(--color-accent)] border-[var(--color-accent)]" : "text-[var(--text-secondary)] border-transparent hover:text-[var(--text-primary)]"}`}>
+        <button onClick={() => setActiveTab("history")} className={`h-full flex items-center px-1 border-b transition-all cursor-pointer ${activeTab === "history" ? "text-[var(--accent-11)] border-[var(--accent-9)]" : "text-[var(--neutral-11)] border-transparent hover:text-[var(--neutral-12)]"}`}>
           <HistoryIcon className="w-3.5 h-3.5 mr-1" /> History
         </button>
       )}
       {optimizerData && (
-        <button onClick={() => setActiveTab("optimizer")} className={`h-full flex items-center px-1 border-b transition-all ${activeTab === "optimizer" ? "text-emerald-400 border-emerald-400" : "text-[var(--text-secondary)] border-transparent hover:text-emerald-400"}`}>
+        <button onClick={() => setActiveTab("optimizer")} className={`h-full flex items-center px-1 border-b transition-all cursor-pointer ${activeTab === "optimizer" ? "text-[var(--accent-11)] border-[var(--accent-9)]" : "text-[var(--neutral-11)] border-transparent hover:text-[var(--neutral-12)]"}`}>
           <Zap className="w-3.5 h-3.5 mr-1" /> Optimizer
         </button>
       )}
       <div className="flex-1" />
       {activeTab === "result" && results.length > 0 && (
         <div className="flex items-center gap-1">
-          <button onClick={() => setIsProductionMode(!isProductionMode)} className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-[10px] font-bold border ${isProductionMode ? "bg-red-500/10 border-red-500/30 text-red-400" : "bg-blue-500/10 border-blue-500/30 text-blue-400"}`}>
+          <button onClick={() => setIsProductionMode(!isProductionMode)} className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-[10px] font-bold border cursor-pointer ${isProductionMode ? "bg-[var(--danger-3)] border-[var(--danger-6)] text-[var(--danger-11)]" : "bg-[var(--accent-3)] border-[var(--accent-6)] text-[var(--accent-11)]"}`}>
             <Shield className="w-3 h-3" /> {isProductionMode ? "MASK ON" : "MASK OFF"}
           </button>
-          <button onClick={() => setShowColumnFilters(!showColumnFilters)} className={`flex items-center gap-1 px-1.5 py-0.5 rounded border ${showColumnFilters ? "bg-[var(--color-accent)]/20 text-[var(--color-accent)]" : "text-[var(--text-secondary)] hover:bg-[var(--border)]"}`}>
+          <button onClick={() => setShowColumnFilters(!showColumnFilters)} className={`flex items-center gap-1 px-1.5 py-0.5 rounded border cursor-pointer ${showColumnFilters ? "bg-[var(--accent-3)] border-[var(--accent-6)] text-[var(--accent-11)]" : "border-transparent text-[var(--neutral-11)] hover:bg-[var(--neutral-4)]"}`}>
              <Filter className="w-3.5 h-3.5" /> <span className="text-[8px] font-bold">FILTER</span>
           </button>
           <div className="relative" ref={columnDropdownRef}>
-            <button 
+            <button
               onClick={() => { setShowColumnDropdown(!showColumnDropdown); setColumnDropdownSearch(""); setColumnDropdownIndex(0); }}
-              className="flex items-center gap-1 px-2 py-1 rounded border border-[var(--border)] bg-[var(--background)] text-[10px] hover:border-indigo-400 transition-colors"
+              className="flex items-center gap-1 px-2 py-1 rounded border border-[var(--neutral-6)] bg-[var(--surface-base)] text-[10px] hover:border-[var(--accent-8)] transition-colors cursor-pointer"
               title="Jump to column"
             >
               <Search className="w-3 h-3 opacity-50" />
@@ -540,8 +547,8 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
                 setColumnDropdownIndex(0);
               };
               return (
-              <div className="absolute right-0 top-full mt-1 w-56 bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-2xl z-50 overflow-hidden">
-                <div className="flex items-center gap-1 px-2 py-1.5 border-b border-[var(--border)]">
+              <div className="absolute right-0 top-full mt-1 w-56 bg-[var(--surface-overlay)] border border-[var(--neutral-6)] rounded-lg shadow-2xl z-50 overflow-hidden">
+                <div className="flex items-center gap-1 px-2 py-1.5 border-b border-[var(--neutral-6)]">
                   <Search className="w-3 h-3 opacity-40 shrink-0" />
                   <input
                     type="text"
@@ -564,11 +571,11 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
                         jumpTo(filteredColumns[clampedIndex]);
                       }
                     }}
-                    className="flex-1 bg-transparent border-none outline-none text-xs"
+                    className="flex-1 bg-transparent border-none outline-none text-xs text-[var(--neutral-12)] placeholder:text-[var(--neutral-9)]"
                     autoFocus
                   />
                   {columnDropdownSearch && (
-                    <button onClick={() => { setColumnDropdownSearch(""); setColumnDropdownIndex(0); }} className="opacity-50 hover:opacity-100">
+                    <button onClick={() => { setColumnDropdownSearch(""); setColumnDropdownIndex(0); }} className="opacity-50 hover:opacity-100 cursor-pointer">
                       <X className="w-3 h-3" />
                     </button>
                   )}
@@ -585,10 +592,10 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
                       onMouseEnter={() => setColumnDropdownIndex(i)}
                       onClick={() => jumpTo(c)}
                       className={clsx(
-                        "w-full px-3 py-1.5 text-left text-xs transition-colors truncate",
+                        "w-full px-3 py-1.5 text-left text-xs transition-colors truncate cursor-pointer",
                         i === clampedIndex
-                          ? "bg-[var(--color-accent)]/15 text-[var(--text-primary)]"
-                          : "hover:bg-[var(--color-accent)]/10"
+                          ? "bg-[var(--accent-4)] text-[var(--neutral-12)]"
+                          : "hover:bg-[var(--accent-3)]"
                       )}
                     >
                       {c}
@@ -602,127 +609,138 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
               );
             })()}
           </div>
-          {onRefresh && <button onClick={onRefresh} className="p-1 px-2 rounded border hover:text-[var(--color-accent)] flex items-center gap-1.5"><RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} /><span className="text-[8px] font-bold">REFRESH</span></button>}
-          <div className="flex items-center gap-1 ml-1 border-l border-[var(--border)] pl-1">
-             <button 
-              onClick={() => onAddRow && onAddRow({}, true)} 
-              disabled={results.some(r => r._isNew || r._isModified)}
-              className="p-1.5 rounded border border-emerald-500/50 text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-30 transition-colors disabled:border-gray-500/30 disabled:text-gray-500" 
-              title="Add New Local Blank Row (Save later)"
+          {onRefresh && (
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={onRefresh}
+              leftIcon={<RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />}
             >
-              <Plus className="w-3.5 h-3.5" />
-            </button>
-            <button 
-              disabled={(selectedIndex < 0 && gridSelection.rows.length === 0) || results.some(r => r._isNew || r._isModified)} 
-              onClick={async () => { 
-                if (onAddRow) { 
+              <span className="text-[8px] font-bold">REFRESH</span>
+            </Button>
+          )}
+          <div className="flex items-center gap-1 ml-1 border-l border-[var(--neutral-6)] pl-1">
+            <IconButton
+              size="sm"
+              onClick={() => onAddRow && onAddRow({}, true)}
+              disabled={results.some(r => r._isNew || r._isModified)}
+              className="border border-[var(--success-6)] text-[var(--success-11)] hover:bg-[var(--success-3)] disabled:opacity-30"
+              label="Add New Local Blank Row (Save later)"
+              icon={<Plus />}
+            />
+            <IconButton
+              size="sm"
+              disabled={(selectedIndex < 0 && gridSelection.rows.length === 0) || results.some(r => r._isNew || r._isModified)}
+              onClick={async () => {
+                if (onAddRow) {
                   const rowIdx = selectedIndex >= 0 ? selectedIndex : gridSelection.rows.toArray()[0];
                   if (rowIdx !== undefined) {
-                    const { id, _isNew, ...newRow } = sortedResults[rowIdx]; 
-                    await onAddRow(newRow, true); 
+                    const { id, _isNew, ...newRow } = sortedResults[rowIdx];
+                    await onAddRow(newRow, true);
                   }
-                } 
-              }} 
-              className="p-1.5 rounded border border-indigo-500/50 text-indigo-400 hover:bg-indigo-500/10 disabled:opacity-30 transition-colors disabled:border-gray-500/30 disabled:text-gray-500" 
-              title="Duplicate Row Locally (Save later)"
-            >
-              <Copy className="w-3.5 h-3.5" />
-            </button>
-            <button 
-              disabled={selectedIndex < 0 && gridSelection.rows.length === 0} 
-              onClick={async () => { 
-                const rowIdx = selectedIndex >= 0 ? selectedIndex : gridSelection.rows.toArray()[0];
-                if (onDeleteRow && rowIdx !== undefined) { 
-                  const confirmed = await confirmDialog.confirm({ title: "Delete Row", message: "Delete this row permanently?", type: "danger" }); 
-                  if (confirmed) await onDeleteRow(sortedResults[rowIdx]); 
-                } 
-              }} 
-              className="p-1.5 rounded border border-rose-500/50 text-rose-400 hover:bg-rose-500/10 disabled:opacity-30 transition-colors" 
-              title="Remove Row"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
-             <button
-              className={clsx(
-                "relative p-1.5 rounded border transition-colors",
-                results.some(r => r._isNew || r._isModified)
-                  ? "border-emerald-500 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 shadow-[0_0_8px_rgba(16,185,129,0.3)]"
-                  : "border-blue-500/50 text-blue-400 hover:bg-blue-500/10"
-              )}
-              title={(() => {
-                const n = results.filter(r => r._isNew || r._isModified).length;
-                return n > 0
-                  ? `Save ${n} pending change${n === 1 ? "" : "s"} (Ctrl+S)`
-                  : "Save All Pending Changes (Ctrl+S)";
-              })()}
-              onClick={async () => {
-                 if (onSave) {
-                    await onSave(results);
-                 } else if (onRefresh) {
-                    onRefresh();
-                 }
+                }
               }}
-            >
-              <CheckCircle className={clsx("w-3.5 h-3.5", results.some(r => r._isNew || r._isModified) && "animate-pulse")} />
+              className="border border-[var(--accent-6)] text-[var(--accent-11)] hover:bg-[var(--accent-3)] disabled:opacity-30"
+              label="Duplicate Row Locally (Save later)"
+              icon={<Copy />}
+            />
+            <IconButton
+              size="sm"
+              disabled={selectedIndex < 0 && gridSelection.rows.length === 0}
+              onClick={async () => {
+                const rowIdx = selectedIndex >= 0 ? selectedIndex : gridSelection.rows.toArray()[0];
+                if (onDeleteRow && rowIdx !== undefined) {
+                  const confirmed = await confirmDialog.confirm({ title: "Delete Row", message: "Delete this row permanently?", type: "danger" });
+                  if (confirmed) await onDeleteRow(sortedResults[rowIdx]);
+                }
+              }}
+              className="border border-[var(--danger-6)] text-[var(--danger-11)] hover:bg-[var(--danger-3)] disabled:opacity-30"
+              label="Remove Row"
+              icon={<Trash2 />}
+            />
+            <span className="relative inline-flex">
+              <IconButton
+                size="sm"
+                className={clsx(
+                  "border",
+                  results.some(r => r._isNew || r._isModified)
+                    ? "border-[var(--success-9)] bg-[var(--success-3)] text-[var(--success-11)] hover:bg-[var(--success-6)]/30 shadow-[0_0_8px_rgba(70,167,88,0.3)]"
+                    : "border-[var(--accent-6)] text-[var(--accent-11)] hover:bg-[var(--accent-3)]"
+                )}
+                title={(() => {
+                  const n = results.filter(r => r._isNew || r._isModified).length;
+                  return n > 0
+                    ? `Save ${n} pending change${n === 1 ? "" : "s"} (Ctrl+S)`
+                    : "Save All Pending Changes (Ctrl+S)";
+                })()}
+                label="Save All Pending Changes (Ctrl+S)"
+                onClick={async () => {
+                  if (onSave) {
+                    await onSave(results);
+                  } else if (onRefresh) {
+                    onRefresh();
+                  }
+                }}
+                icon={<CheckCircle className={clsx(results.some(r => r._isNew || r._isModified) && "animate-pulse")} />}
+              />
               {(() => {
                 const n = results.filter(r => r._isNew || r._isModified).length;
                 if (n === 0) return null;
                 return (
-                  <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-emerald-500 text-[9px] font-bold text-[#0b0f17] flex items-center justify-center leading-none">
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-[var(--success-9)] text-[9px] font-bold text-white flex items-center justify-center leading-none pointer-events-none">
                     {n > 99 ? "99+" : n}
                   </span>
                 );
               })()}
-            </button>
+            </span>
             {results.some(r => r._isNew || r._isModified) && (
-              <button 
+              <IconButton
+                size="sm"
                 type="button"
-                onClick={async (e) => { 
+                onClick={async (e) => {
                   e.stopPropagation();
                   const confirmed = await confirmDialog.confirm({ title: "Discard Changes", message: "Discard all unsaved local changes? This cannot be undone.", type: "warning" });
                   if (confirmed && onDiscard) await onDiscard();
                 }}
-                className="p-1.5 rounded border border-rose-500/50 text-rose-400 hover:bg-rose-500/10 transition-colors"
-                title="Discard all local changes"
-              >
-                <XCircle className="w-3.5 h-3.5" />
-              </button>
+                className="border border-[var(--danger-6)] text-[var(--danger-11)] hover:bg-[var(--danger-3)]"
+                label="Discard all local changes"
+                icon={<XCircle />}
+              />
             )}
           </div>
-          <div className="relative ml-1 border-l border-[var(--border)] pl-1" ref={exportDropdownRef}>
-            <button 
+          <div className="relative ml-1 border-l border-[var(--neutral-6)] pl-1" ref={exportDropdownRef}>
+            <IconButton
+              size="sm"
               onClick={() => setShowExportDropdown(!showExportDropdown)}
-              className="p-1.5 rounded hover:text-[var(--color-accent)] opacity-70 hover:opacity-100 transition-opacity" 
-              title="Export data"
-            >
-              <Download className="w-3.5 h-3.5" />
-            </button>
+              label="Export data"
+              icon={<Download />}
+            />
             {showExportDropdown && (
-              <div className="absolute right-0 top-full mt-1 w-44 bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-2xl z-50 overflow-hidden">
-                <div className="px-3 py-1.5 text-[9px] uppercase font-bold text-[var(--text-secondary)] tracking-widest border-b border-[var(--border)]">Export As</div>
+              <div className="absolute right-0 top-full mt-1 w-44 bg-[var(--surface-overlay)] border border-[var(--neutral-6)] rounded-lg shadow-2xl z-50 overflow-hidden">
+                <div className="px-3 py-1.5 text-[9px] uppercase font-bold text-[var(--neutral-11)] tracking-widest border-b border-[var(--neutral-6)]">Export As</div>
                 {settings.enabledExportFormats.includes("csv") && (
-                  <button onClick={() => { handleExport("csv"); setShowExportDropdown(false); }} className="w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--color-accent)]/10 flex items-center gap-2 transition-colors">
-                    <Download className="w-3.5 h-3.5 text-emerald-400" /> CSV
+                  <button onClick={() => { handleExport("csv"); setShowExportDropdown(false); }} className="w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--accent-3)] flex items-center gap-2 transition-colors cursor-pointer">
+                    <Download className="w-3.5 h-3.5 text-[var(--neutral-11)]" /> CSV
                   </button>
                 )}
                 {settings.enabledExportFormats.includes("json") && (
-                  <button onClick={() => { handleExport("json"); setShowExportDropdown(false); }} className="w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--color-accent)]/10 flex items-center gap-2 transition-colors">
-                    <FileJson className="w-3.5 h-3.5 text-amber-400" /> JSON
+                  <button onClick={() => { handleExport("json"); setShowExportDropdown(false); }} className="w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--accent-3)] flex items-center gap-2 transition-colors cursor-pointer">
+                    <FileJson className="w-3.5 h-3.5 text-[var(--neutral-11)]" /> JSON
                   </button>
                 )}
                 {settings.enabledExportFormats.includes("xml") && (
-                  <button onClick={() => { handleExport("xml"); setShowExportDropdown(false); }} className="w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--color-accent)]/10 flex items-center gap-2 transition-colors">
-                    <FileCode className="w-3.5 h-3.5 text-blue-400" /> XML
+                  <button onClick={() => { handleExport("xml"); setShowExportDropdown(false); }} className="w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--accent-3)] flex items-center gap-2 transition-colors cursor-pointer">
+                    <FileCode className="w-3.5 h-3.5 text-[var(--neutral-11)]" /> XML
                   </button>
                 )}
                 {settings.enabledExportFormats.includes("html") && (
-                  <button onClick={() => { handleExport("html"); setShowExportDropdown(false); }} className="w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--color-accent)]/10 flex items-center gap-2 transition-colors">
-                    <Globe className="w-3.5 h-3.5 text-orange-400" /> HTML
+                  <button onClick={() => { handleExport("html"); setShowExportDropdown(false); }} className="w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--accent-3)] flex items-center gap-2 transition-colors cursor-pointer">
+                    <Globe className="w-3.5 h-3.5 text-[var(--neutral-11)]" /> HTML
                   </button>
                 )}
                 {settings.enabledExportFormats.includes("sql") && (
-                  <button onClick={() => { handleExport("sql"); setShowExportDropdown(false); }} className="w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--color-accent)]/10 flex items-center gap-2 transition-colors">
-                    <Database className="w-3.5 h-3.5 text-cyan-400" /> SQL INSERT
+                  <button onClick={() => { handleExport("sql"); setShowExportDropdown(false); }} className="w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--accent-3)] flex items-center gap-2 transition-colors cursor-pointer">
+                    <Database className="w-3.5 h-3.5 text-[var(--neutral-11)]" /> SQL INSERT
                   </button>
                 )}
               </div>
@@ -739,37 +757,37 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
   }, [searchTerm, history]);
 
   return (
-    <div className="h-full flex flex-col bg-[var(--background)] text-xs relative overflow-hidden">
+    <div className="h-full flex flex-col bg-[var(--surface-base)] text-xs relative overflow-hidden">
       <TabHeader />
-      {isLoading && <div className="absolute top-9 left-0 right-0 z-[60] h-0.5 bg-[var(--color-accent)]/20 overflow-hidden"><div className="h-full bg-[var(--color-accent)] animate-shimmer" style={{ width: '40%' }} /></div>}
+      {isLoading && <div className="absolute top-9 left-0 right-0 z-[60] h-0.5 bg-[var(--accent-9)]/20 overflow-hidden"><div className="h-full bg-[var(--accent-9)] animate-shimmer" style={{ width: '40%' }} /></div>}
 
       {/* Context Menu */}
       {contextMenu && (
-        <div 
-          className="fixed z-[100] w-56 bg-[var(--surface)] border border-[var(--border)] rounded-xl shadow-2xl py-1.5 animate-in zoom-in-95 duration-100" 
-          style={{ top: contextMenu.y, left: contextMenu.x }} 
+        <div
+          className="fixed z-[100] w-56 bg-[var(--surface-overlay)] border border-[var(--neutral-6)] rounded-xl shadow-2xl py-1.5 animate-in zoom-in-95 duration-100"
+          style={{ top: contextMenu.y, left: contextMenu.x }}
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="px-3 py-1 text-[9px] uppercase font-bold text-[var(--text-secondary)] tracking-widest mb-1 border-b border-[var(--border)] pb-1">Selection Actions</div>
-          
+          <div className="px-3 py-1 text-[9px] uppercase font-bold text-[var(--neutral-11)] tracking-widest mb-1 border-b border-[var(--neutral-6)] pb-1">Selection Actions</div>
+
           {contextMenu.col && (
-            <button 
-              onClick={() => { copyToClipboard(formatCellValue(contextMenu.row[contextMenu.col!])); setContextMenu(null); }} 
-              className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-indigo-500 hover:text-white flex items-center gap-2 transition-colors"
+            <button
+              onClick={() => { copyToClipboard(formatCellValue(contextMenu.row[contextMenu.col!])); setContextMenu(null); }}
+              className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--accent-9)] hover:text-white flex items-center gap-2 transition-colors cursor-pointer"
             >
               <Copy className="w-3.5 h-3.5" /> Copy Cell
             </button>
           )}
-          
-          <button 
-            onClick={() => { copyToClipboard(JSON.stringify(contextMenu.row, null, 2)); setContextMenu(null); }} 
-            className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-indigo-500 hover:text-white flex items-center gap-2 transition-colors"
+
+          <button
+            onClick={() => { copyToClipboard(JSON.stringify(contextMenu.row, null, 2)); setContextMenu(null); }}
+            className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--accent-9)] hover:text-white flex items-center gap-2 transition-colors cursor-pointer"
           >
             <FileJson className="w-3.5 h-3.5" /> Copy Row as JSON
           </button>
 
-          <button 
-            onClick={async () => { 
+          <button
+            onClick={async () => {
                 try {
                     const text = await navigator.clipboard.readText();
                     if (text && contextMenu.col) {
@@ -780,47 +798,47 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
                     }
                 } catch { /* clipboard permission */ }
                 setContextMenu(null);
-            }} 
-            className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-indigo-500 hover:text-white flex items-center gap-2 transition-colors disabled:opacity-30"
+            }}
+            className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--accent-9)] hover:text-white flex items-center gap-2 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
             disabled={isReadOnly}
           >
             <CheckCircle className="w-3.5 h-3.5 opacity-50" /> Paste to Cell
           </button>
 
-          <div className="my-1 border-t border-[var(--border)] opacity-50" />
-          <div className="px-3 py-1 text-[9px] uppercase font-bold text-[var(--text-secondary)] tracking-widest mb-1 opacity-60">Record Details</div>
+          <div className="my-1 border-t border-[var(--neutral-6)] opacity-50" />
+          <div className="px-3 py-1 text-[9px] uppercase font-bold text-[var(--neutral-11)] tracking-widest mb-1 opacity-60">Record Details</div>
 
-          <button onClick={() => { setSelectedRow({row: contextMenu.row, idx: sortedResults.indexOf(contextMenu.row)}); setIsEditingRow(false); setContextMenu(null); }} className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-indigo-500 hover:text-white flex items-center gap-2 transition-colors">
+          <button onClick={() => { setSelectedRow({row: contextMenu.row, idx: sortedResults.indexOf(contextMenu.row)}); setIsEditingRow(false); setContextMenu(null); }} className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--accent-9)] hover:text-white flex items-center gap-2 transition-colors cursor-pointer">
             <Maximize2 className="w-3.5 h-3.5" /> View Details
           </button>
-          <button onClick={() => { setSelectedRow({row: contextMenu.row, idx: sortedResults.indexOf(contextMenu.row)}); setIsEditingRow(true); setSelectedRowEdits({}); setContextMenu(null); }} className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-indigo-500 hover:text-white flex items-center gap-2 transition-colors disabled:opacity-30" disabled={isReadOnly}>
+          <button onClick={() => { setSelectedRow({row: contextMenu.row, idx: sortedResults.indexOf(contextMenu.row)}); setIsEditingRow(true); setSelectedRowEdits({}); setContextMenu(null); }} className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--accent-9)] hover:text-white flex items-center gap-2 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed" disabled={isReadOnly}>
             <RefreshCw className="w-3.5 h-3.5" /> Edit Record
           </button>
 
-          <div className="my-1 border-t border-[var(--border)] opacity-50" />
-          
+          <div className="my-1 border-t border-[var(--neutral-6)] opacity-50" />
+
           <div className="relative group/sql">
-            <button className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-indigo-500 hover:text-white flex items-center justify-between transition-colors">
+            <button className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--accent-9)] hover:text-white flex items-center justify-between transition-colors cursor-pointer">
               <div className="flex items-center gap-2"><Database className="w-3.5 h-3.5" /> Generate SQL</div>
               <ChevronRight className="w-3 h-3 opacity-50" />
             </button>
-            <div className="hidden group-hover/sql:block absolute left-[calc(100%-8px)] top-0 w-48 bg-[var(--surface)] border border-[var(--border)] rounded-xl shadow-2xl py-1.5 animate-in slide-in-from-left-1 duration-150">
-               <div className="px-3 py-1 text-[9px] uppercase font-bold text-[var(--text-secondary)] tracking-widest mb-1 border-b border-[var(--border)] pb-1 opacity-60">Output Format</div>
-               <button 
-                  onClick={() => generateSqlForSelected("INSERT")} 
-                  className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-emerald-500 hover:text-white flex items-center gap-2 transition-colors"
+            <div className="hidden group-hover/sql:block absolute left-[calc(100%-8px)] top-0 w-48 bg-[var(--surface-overlay)] border border-[var(--neutral-6)] rounded-xl shadow-2xl py-1.5 animate-in slide-in-from-left-1 duration-150">
+               <div className="px-3 py-1 text-[9px] uppercase font-bold text-[var(--neutral-11)] tracking-widest mb-1 border-b border-[var(--neutral-6)] pb-1 opacity-60">Output Format</div>
+               <button
+                  onClick={() => generateSqlForSelected("INSERT")}
+                  className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--success-9)] hover:text-white flex items-center gap-2 transition-colors cursor-pointer"
                 >
                   <Database className="w-3.5 h-3.5" /> SQL INSERTs
                 </button>
-                <button 
-                  onClick={() => generateSqlForSelected("UPDATE")} 
-                  className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-amber-500 hover:text-white flex items-center gap-2 transition-colors"
+                <button
+                  onClick={() => generateSqlForSelected("UPDATE")}
+                  className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--warning-9)] hover:text-white flex items-center gap-2 transition-colors cursor-pointer"
                 >
                   <RefreshCw className="w-3.5 h-3.5" /> SQL UPDATEs
                 </button>
-                <button 
-                  onClick={() => generateSqlForSelected("DELETE")} 
-                  className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-red-500 hover:text-white flex items-center gap-2 transition-colors"
+                <button
+                  onClick={() => generateSqlForSelected("DELETE")}
+                  className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--danger-9)] hover:text-white flex items-center gap-2 transition-colors cursor-pointer"
                 >
                   <Trash2 className="w-3.5 h-3.5" /> SQL DELETEs
                 </button>
@@ -832,14 +850,14 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
       {/* Detail/Edit Overlay */}
       {selectedRow && (
         <div className="absolute inset-0 z-50 bg-black/40 flex items-center justify-end p-4 backdrop-blur-[1px]" onClick={() => setSelectedRow(null)}>
-          <div className="w-96 h-full bg-[var(--surface)] shadow-2xl border-l border-[var(--border)] flex flex-col animate-in slide-in-from-right duration-200" onClick={e => e.stopPropagation()}>
-            <div className="p-3 border-b flex items-center justify-between">
-              <span className="font-bold flex items-center gap-2">{isEditingRow ? <><RefreshCw className="w-4 h-4 text-emerald-500" />Edit Record</> : <><Maximize2 className="w-4 h-4" />Row Details</>}</span>
+          <div className="w-96 h-full bg-[var(--surface-overlay)] shadow-2xl border-l border-[var(--neutral-6)] flex flex-col animate-in slide-in-from-right duration-200" onClick={e => e.stopPropagation()}>
+            <div className="p-3 border-b border-[var(--neutral-6)] flex items-center justify-between">
+              <span className="font-bold flex items-center gap-2">{isEditingRow ? <><RefreshCw className="w-4 h-4 text-[var(--success-11)]" />Edit Record</> : <><Maximize2 className="w-4 h-4" />Row Details</>}</span>
               <div className="flex items-center gap-2">
                 {!isEditingRow ? (
-                  <button onClick={() => setIsEditingRow(true)} className="px-2 py-1 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 rounded text-xs font-medium">Edit</button>
+                  <Button size="xs" className="bg-[var(--accent-3)] text-[var(--accent-11)] hover:bg-[var(--accent-4)]" onClick={() => setIsEditingRow(true)}>Edit</Button>
                 ) : (
-                  <button onClick={async () => {
+                  <Button size="xs" variant="primary" onClick={async () => {
                     if (!onUpdateRow) return;
                     try {
                       const newRow = { ...selectedRow.row, ...selectedRowEdits };
@@ -849,9 +867,9 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
                     } catch (e: any) {
                       confirmDialog.dialog({ title: "Update Failed", message: e.message || "Failed to update row data", type: "danger" });
                     }
-                  }} className="px-3 py-1 bg-emerald-500 text-white hover:bg-emerald-600 rounded shadow-lg text-xs font-medium">Save Changes</button>
+                  }}>Save Changes</Button>
                 )}
-                <button onClick={() => setSelectedRow(null)} className="p-1 hover:bg-[var(--border)] rounded"><XCircle className="w-4 h-4" /></button>
+                <IconButton size="sm" label="Close" onClick={() => setSelectedRow(null)} icon={<XCircle />} />
               </div>
             </div>
             <div className="flex-1 overflow-auto p-4 space-y-4">
@@ -862,18 +880,18 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
                 
                 return (
                 <div key={col} className="space-y-1">
-                  <div className="text-[10px] uppercase font-bold text-[var(--text-secondary)] flex items-center justify-between">
+                  <div className="text-[10px] uppercase font-bold text-[var(--neutral-11)] flex items-center justify-between">
                     <div className="flex items-center gap-1.5">{getColumnIcon(col)}{col}</div>
-                    {isChanged && <span className="text-[9px] text-emerald-400 bg-emerald-400/10 px-1 rounded">Edited</span>}
+                    {isChanged && <span className="text-[9px] text-[var(--success-11)] bg-[var(--success-3)] px-1 rounded">Edited</span>}
                   </div>
                   {!isEditingRow ? (
-                    <div className="p-2 bg-[var(--background)] rounded border font-mono break-all select-text text-[13px]">{formatCellValue(val)}</div>
+                    <div className="p-2 bg-[var(--surface-base)] rounded border border-[var(--neutral-6)] font-mono break-all select-text text-[13px]">{formatCellValue(val)}</div>
                   ) : (
-                    <input 
-                      type="text" 
+                    <Input
+                      inputSize="sm"
                       value={editedVal === null ? "" : String(editedVal)}
                       onChange={e => setSelectedRowEdits(prev => ({ ...prev, [col]: e.target.value }))}
-                      className={`w-full p-2 bg-[var(--background)] rounded border font-mono text-[13px] outline-none transition-colors ${isChanged ? "border-emerald-500/50 bg-emerald-500/5" : "focus:border-[var(--color-accent)]"}`}
+                      className={`font-mono text-[13px] ${isChanged ? "bg-[var(--success-3)]" : ""}`}
                       placeholder={val === null ? "NULL" : ""}
                     />
                   )}
@@ -899,78 +917,70 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
 
         return (
           <div className="absolute inset-0 z-50 bg-black/40 flex items-center justify-end p-4 backdrop-blur-[1px]" onClick={(e) => { if (e.button === 0) setBinaryPreview(null); }} onContextMenu={(e) => e.stopPropagation()}>
-            <div className="w-[560px] h-full bg-[var(--surface)] shadow-2xl border-l border-[var(--border)] flex flex-col animate-in slide-in-from-right duration-200" onClick={e => e.stopPropagation()}>
-              <div className="p-3 border-b flex items-center gap-3 shrink-0">
+            <div className="w-[560px] h-full bg-[var(--surface-overlay)] shadow-2xl border-l border-[var(--neutral-6)] flex flex-col animate-in slide-in-from-right duration-200" onClick={e => e.stopPropagation()}>
+              <div className="p-3 border-b border-[var(--neutral-6)] flex items-center gap-3 shrink-0">
                 <div className="flex items-center gap-2 min-w-0 flex-1">
-                  {isImage ? <Image className="w-4 h-4 text-indigo-400 shrink-0" /> : isPdf ? <File className="w-4 h-4 text-rose-400 shrink-0" /> : <Binary className="w-4 h-4 text-amber-400 shrink-0" />}
+                  {isImage ? <Image className="w-4 h-4 text-[var(--accent-11)] shrink-0" /> : isPdf ? <File className="w-4 h-4 text-[var(--danger-11)] shrink-0" /> : <Binary className="w-4 h-4 text-[var(--warning-11)] shrink-0" />}
                   <span className="font-bold truncate text-sm">{col}</span>
-                  <span className="text-[10px] text-[var(--text-secondary)] bg-[var(--background)] px-1.5 py-0.5 rounded shrink-0">{fileType.label}</span>
+                  <span className="text-[10px] text-[var(--neutral-11)] bg-[var(--surface-base)] px-1.5 py-0.5 rounded shrink-0">{fileType.label}</span>
                   <span className="text-[10px] opacity-50 shrink-0">{formatFileSize(bytes.length)}</span>
                 </div>
-                <div className="flex items-center gap-1 shrink-0 bg-[var(--background)] rounded-lg p-0.5">
-                  <button onClick={() => setView("preview")} className={`px-2 py-1 rounded-md text-[11px] font-medium transition-colors ${viewMode === "preview" ? "bg-[var(--color-accent)] text-white" : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"}`}>Preview</button>
-                  <button onClick={() => setView("text")} className={`px-2 py-1 rounded-md text-[11px] font-medium transition-colors ${viewMode === "text" ? "bg-[var(--color-accent)] text-white" : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"}`}>Text</button>
-                  <button onClick={() => setView("hex")} className={`px-2 py-1 rounded-md text-[11px] font-medium transition-colors ${viewMode === "hex" ? "bg-[var(--color-accent)] text-white" : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"}`}>Hex</button>
+                <div className="flex items-center gap-1 shrink-0 bg-[var(--surface-base)] rounded-lg p-0.5">
+                  <button onClick={() => setView("preview")} className={`px-2 py-1 rounded-md text-[11px] font-medium transition-colors cursor-pointer ${viewMode === "preview" ? "bg-[var(--accent-9)] text-white" : "text-[var(--neutral-11)] hover:text-[var(--neutral-12)]"}`}>Preview</button>
+                  <button onClick={() => setView("text")} className={`px-2 py-1 rounded-md text-[11px] font-medium transition-colors cursor-pointer ${viewMode === "text" ? "bg-[var(--accent-9)] text-white" : "text-[var(--neutral-11)] hover:text-[var(--neutral-12)]"}`}>Text</button>
+                  <button onClick={() => setView("hex")} className={`px-2 py-1 rounded-md text-[11px] font-medium transition-colors cursor-pointer ${viewMode === "hex" ? "bg-[var(--accent-9)] text-white" : "text-[var(--neutral-11)] hover:text-[var(--neutral-12)]"}`}>Hex</button>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
-                  <button onClick={handleBinaryDownload} className="px-2 py-1 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 rounded text-xs font-medium flex items-center gap-1">
-                    <Download className="w-3 h-3" /> Save
-                  </button>
-                  <button onClick={() => setBinaryPreview(null)} className="p-1 hover:bg-[var(--border)] rounded"><XCircle className="w-4 h-4" /></button>
+                  <Button size="sm" className={binaryActionClass} onClick={handleBinaryDownload} leftIcon={<Download className="w-3 h-3" />}>Save</Button>
+                  <IconButton size="sm" label="Close" onClick={() => setBinaryPreview(null)} icon={<XCircle />} />
                 </div>
               </div>
               <div className="flex-1 overflow-auto p-4">
                 {viewMode === "hex" ? (
                   <div className="space-y-4">
                     <div>
-                      <div className="text-[10px] uppercase font-bold text-[var(--text-secondary)] tracking-widest flex items-center justify-between mb-1">
+                      <div className="text-[10px] uppercase font-bold text-[var(--neutral-11)] tracking-widest flex items-center justify-between mb-1">
                         <span>Hex Dump{bytes.length > 4096 ? ` (first 4096 of ${bytes.length.toLocaleString()} bytes)` : ""}</span>
                         <span className="text-[9px] opacity-50">{bytes.length.toLocaleString()} total bytes</span>
                       </div>
-                      <pre className="font-mono text-[10px] leading-relaxed whitespace-pre select-all bg-[var(--background)] p-3 rounded-lg border border-[var(--border)] text-[var(--text-secondary)] overflow-x-auto">{hexDump}{bytes.length > 4096 ? `\n\u2026 ${(bytes.length - 4096).toLocaleString()} more bytes` : ""}</pre>
+                      <pre className="font-mono text-[10px] leading-relaxed whitespace-pre select-all bg-[var(--surface-base)] p-3 rounded-lg border border-[var(--neutral-6)] text-[var(--neutral-11)] overflow-x-auto">{hexDump}{bytes.length > 4096 ? `\n\u2026 ${(bytes.length - 4096).toLocaleString()} more bytes` : ""}</pre>
                     </div>
                     <div className="flex justify-center">
-                      <button onClick={() => { navigator.clipboard.writeText(hexCompact); setToastMessage("Hex copied"); setShowCopyToast(true); setTimeout(() => setShowCopyToast(false), 2000); }} className="px-3 py-2 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 rounded-lg text-xs font-medium flex items-center gap-2">
-                        <Copy className="w-3 h-3" /> Copy Hex
-                      </button>
+                      <Button size="sm" className={binaryActionClass} onClick={() => { navigator.clipboard.writeText(hexCompact); setToastMessage("Hex copied"); setShowCopyToast(true); setTimeout(() => setShowCopyToast(false), 2000); }} leftIcon={<Copy className="w-3 h-3" />}>Copy Hex</Button>
                     </div>
                   </div>
                 ) : viewMode === "text" ? (
                   <div className="space-y-4">
                     {base64 && (
                       <div>
-                        <div className="text-[10px] uppercase font-bold text-[var(--text-secondary)] tracking-widest mb-1">Base64 String</div>
-                        <pre className="font-mono text-[10px] whitespace-pre-wrap break-all select-all leading-relaxed bg-[var(--background)] p-3 rounded-lg border border-[var(--border)] text-[var(--text-secondary)] max-h-48 overflow-y-auto">{base64}</pre>
+                        <div className="text-[10px] uppercase font-bold text-[var(--neutral-11)] tracking-widest mb-1">Base64 String</div>
+                        <pre className="font-mono text-[10px] whitespace-pre-wrap break-all select-all leading-relaxed bg-[var(--surface-base)] p-3 rounded-lg border border-[var(--neutral-6)] text-[var(--neutral-11)] max-h-48 overflow-y-auto">{base64}</pre>
                       </div>
                     )}
                     {utf8 !== null ? (
                       <div>
-                        <div className="text-[10px] uppercase font-bold text-[var(--text-secondary)] tracking-widest mb-1">Decoded Text (UTF-8){utf8.length > 8192 ? ` — first 8192 chars` : ""}</div>
-                        <pre className="font-mono text-[11px] whitespace-pre-wrap break-all select-all leading-relaxed bg-[var(--background)] p-4 rounded-lg border border-[var(--border)]">{utf8.slice(0, 8192)}{utf8.length > 8192 ? `\n\u2026 ${(utf8.length - 8192).toLocaleString()} more chars` : ""}</pre>
+                        <div className="text-[10px] uppercase font-bold text-[var(--neutral-11)] tracking-widest mb-1">Decoded Text (UTF-8){utf8.length > 8192 ? ` — first 8192 chars` : ""}</div>
+                        <pre className="font-mono text-[11px] whitespace-pre-wrap break-all select-all leading-relaxed bg-[var(--surface-base)] p-4 rounded-lg border border-[var(--neutral-6)]">{utf8.slice(0, 8192)}{utf8.length > 8192 ? `\n\u2026 ${(utf8.length - 8192).toLocaleString()} more chars` : ""}</pre>
                       </div>
                     ) : (
                       <div className="space-y-3">
                         <div>
-                          <div className="text-[10px] uppercase font-bold text-[var(--text-secondary)] tracking-widest mb-1">Raw Bytes{base64 ? " (decoded from Base64)" : ""}</div>
-                          <pre className="font-mono text-[10px] leading-relaxed whitespace-pre select-all bg-[var(--background)] p-3 rounded-lg border border-[var(--border)] text-[var(--text-secondary)]">{bytes.slice(0, 32).map(b => b.toString(16).padStart(2, "0")).join(" ")}{bytes.length > 32 ? `  \u2026 ${(bytes.length - 32).toLocaleString()} more bytes` : ""}</pre>
+                          <div className="text-[10px] uppercase font-bold text-[var(--neutral-11)] tracking-widest mb-1">Raw Bytes{base64 ? " (decoded from Base64)" : ""}</div>
+                          <pre className="font-mono text-[10px] leading-relaxed whitespace-pre select-all bg-[var(--surface-base)] p-3 rounded-lg border border-[var(--neutral-6)] text-[var(--neutral-11)]">{bytes.slice(0, 32).map(b => b.toString(16).padStart(2, "0")).join(" ")}{bytes.length > 32 ? `  \u2026 ${(bytes.length - 32).toLocaleString()} more bytes` : ""}</pre>
                         </div>
                         <div>
-                          <div className="text-[10px] uppercase font-bold text-[var(--text-secondary)] tracking-widest mb-1">ASCII Signature</div>
-                          <pre className="font-mono text-[10px] whitespace-pre select-all bg-[var(--background)] p-3 rounded-lg border border-[var(--border)]">{bytes.slice(0, 64).map(b => (b >= 0x20 && b <= 0x7E) ? String.fromCharCode(b) : ".").join("")}{bytes.length > 64 ? ` \u2026 ${(bytes.length - 64).toLocaleString()} unused bytes` : ""}</pre>
+                          <div className="text-[10px] uppercase font-bold text-[var(--neutral-11)] tracking-widest mb-1">ASCII Signature</div>
+                          <pre className="font-mono text-[10px] whitespace-pre select-all bg-[var(--surface-base)] p-3 rounded-lg border border-[var(--neutral-6)]">{bytes.slice(0, 64).map(b => (b >= 0x20 && b <= 0x7E) ? String.fromCharCode(b) : ".").join("")}{bytes.length > 64 ? ` \u2026 ${(bytes.length - 64).toLocaleString()} unused bytes` : ""}</pre>
                         </div>
-                        <p className="text-[10px] text-[var(--text-secondary)] opacity-50 text-center">Not valid UTF-8 text. Switch to Preview or Hex tab for full inspection.</p>
+                        <p className="text-[10px] text-[var(--neutral-11)] opacity-50 text-center">Not valid UTF-8 text. Switch to Preview or Hex tab for full inspection.</p>
                       </div>
                     )}
                     <div className="flex gap-2 justify-center">
                       {base64 && (
-                        <button onClick={() => { navigator.clipboard.writeText(base64); setToastMessage("Base64 copied"); setShowCopyToast(true); setTimeout(() => setShowCopyToast(false), 2000); }} className="px-3 py-2 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 rounded-lg text-xs font-medium flex items-center gap-2">
-                          <Copy className="w-3 h-3" /> Copy Base64
-                        </button>
+                        <Button size="sm" className={binaryActionClass} onClick={() => { navigator.clipboard.writeText(base64); setToastMessage("Base64 copied"); setShowCopyToast(true); setTimeout(() => setShowCopyToast(false), 2000); }} leftIcon={<Copy className="w-3 h-3" />}>Copy Base64</Button>
                       )}
                       {utf8 !== null && (
-                        <button onClick={() => { navigator.clipboard.writeText(utf8); setToastMessage("Text copied"); setShowCopyToast(true); setTimeout(() => setShowCopyToast(false), 2000); }} className="px-3 py-2 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 rounded-lg text-xs font-medium flex items-center gap-2">
-                          <Copy className="w-3 h-3" /> Copy Text
-                        </button>
+                        <Button size="sm" className={binaryActionClass} onClick={() => { navigator.clipboard.writeText(utf8); setToastMessage("Text copied"); setShowCopyToast(true); setTimeout(() => setShowCopyToast(false), 2000); }} leftIcon={<Copy className="w-3 h-3" />}>Copy Text</Button>
                       )}
                     </div>
                   </div>
@@ -980,41 +990,31 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
                       <img src={blobUrl} alt={col} className="max-w-full max-h-full object-contain rounded-lg shadow-lg" />
                     </div>
                     <div className="flex gap-2 justify-center py-3 shrink-0">
-                      <button onClick={handleBinaryDownload} className="px-3 py-2 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 rounded-lg text-xs font-medium flex items-center gap-2">
-                        <Download className="w-3 h-3" /> Save
-                      </button>
-                      <button onClick={() => { navigator.clipboard.writeText(dataUrl); setToastMessage("Image URL copied"); setShowCopyToast(true); setTimeout(() => setShowCopyToast(false), 2000); }} className="px-3 py-2 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 rounded-lg text-xs font-medium flex items-center gap-2">
-                        <Copy className="w-3 h-3" /> Copy
-                      </button>
-                      <button onClick={() => { if (bytes.length > 5 * 1024 * 1024) { setToastMessage("Image too large for inline open — use Save instead"); setShowCopyToast(true); setTimeout(() => setShowCopyToast(false), 2000); } else { window.open(dataUrl, "_blank"); } }} className="px-3 py-2 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 rounded-lg text-xs font-medium flex items-center gap-2">
-                        <Maximize2 className="w-3 h-3" /> Open
-                      </button>
+                      <Button size="sm" className={binaryActionClass} onClick={handleBinaryDownload} leftIcon={<Download className="w-3 h-3" />}>Save</Button>
+                      <Button size="sm" className={binaryActionClass} onClick={() => { navigator.clipboard.writeText(dataUrl); setToastMessage("Image URL copied"); setShowCopyToast(true); setTimeout(() => setShowCopyToast(false), 2000); }} leftIcon={<Copy className="w-3 h-3" />}>Copy</Button>
+                      <Button size="sm" className={binaryActionClass} onClick={() => { if (bytes.length > 5 * 1024 * 1024) { setToastMessage("Image too large for inline open — use Save instead"); setShowCopyToast(true); setTimeout(() => setShowCopyToast(false), 2000); } else { window.open(dataUrl, "_blank"); } }} leftIcon={<Maximize2 className="w-3 h-3" />}>Open</Button>
                     </div>
                   </div>
                 ) : isPdf ? (
                   <div className="flex flex-col items-center justify-center h-full gap-4">
-                    <File className="w-16 h-16 text-rose-400 opacity-40" />
+                    <File className="w-16 h-16 text-[var(--danger-11)] opacity-40" />
                     <p className="text-sm opacity-60">PDF documents cannot be previewed inline.</p>
-                    <button onClick={handleBinaryDownload} className="px-4 py-2 bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 rounded-lg text-sm font-medium flex items-center gap-2">
-                      <Download className="w-4 h-4" /> Download PDF ({formatFileSize(bytes.length)})
-                    </button>
+                    <Button className="bg-[var(--danger-3)] text-[var(--danger-11)] hover:bg-[var(--danger-6)]/40" onClick={handleBinaryDownload} leftIcon={<Download className="w-4 h-4" />}>Download PDF ({formatFileSize(bytes.length)})</Button>
                   </div>
                 ) : isText ? (
-                  <pre className="font-mono text-[11px] whitespace-pre-wrap break-all select-text leading-relaxed bg-[var(--background)] p-4 rounded-lg border border-[var(--border)]">{utf8!.length > 32768 ? utf8!.slice(0, 32768) + `\n\n\u2026 ${(utf8!.length - 32768).toLocaleString()} more characters (use Text tab or download for full content)` : utf8}</pre>
+                  <pre className="font-mono text-[11px] whitespace-pre-wrap break-all select-text leading-relaxed bg-[var(--surface-base)] p-4 rounded-lg border border-[var(--neutral-6)]">{utf8!.length > 32768 ? utf8!.slice(0, 32768) + `\n\n\u2026 ${(utf8!.length - 32768).toLocaleString()} more characters (use Text tab or download for full content)` : utf8}</pre>
                 ) : (
                   <div className="space-y-4">
-                    <div className="text-[10px] uppercase font-bold text-[var(--text-secondary)] tracking-widest">Hex Preview (first 256 bytes)</div>
-                    <pre className="font-mono text-[10px] whitespace-pre-wrap break-all select-all leading-relaxed bg-[var(--background)] p-3 rounded-lg border border-[var(--border)] text-[var(--text-secondary)]">{bytes.slice(0, 256).map(b => b.toString(16).padStart(2, "0")).join(" ")}</pre>
+                    <div className="text-[10px] uppercase font-bold text-[var(--neutral-11)] tracking-widest">Hex Preview (first 256 bytes)</div>
+                    <pre className="font-mono text-[10px] whitespace-pre-wrap break-all select-all leading-relaxed bg-[var(--surface-base)] p-3 rounded-lg border border-[var(--neutral-6)] text-[var(--neutral-11)]">{bytes.slice(0, 256).map(b => b.toString(16).padStart(2, "0")).join(" ")}</pre>
                     {utf8 && (
                       <>
-                        <div className="text-[10px] uppercase font-bold text-[var(--text-secondary)] tracking-widest">Text Preview</div>
-                        <pre className="font-mono text-[11px] whitespace-pre-wrap break-all select-text leading-relaxed bg-[var(--background)] p-4 rounded-lg border border-[var(--border)]">{utf8.slice(0, 4096)}{utf8.length > 4096 ? "\n\u2026" : ""}</pre>
+                        <div className="text-[10px] uppercase font-bold text-[var(--neutral-11)] tracking-widest">Text Preview</div>
+                        <pre className="font-mono text-[11px] whitespace-pre-wrap break-all select-text leading-relaxed bg-[var(--surface-base)] p-4 rounded-lg border border-[var(--neutral-6)]">{utf8.slice(0, 4096)}{utf8.length > 4096 ? "\n\u2026" : ""}</pre>
                       </>
                     )}
                     <div className="flex justify-center pt-2">
-                      <button onClick={handleBinaryDownload} className="px-4 py-2 bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 rounded-lg text-sm font-medium flex items-center gap-2">
-                        <Download className="w-4 h-4" /> Download ({formatFileSize(bytes.length)})
-                      </button>
+                      <Button className={binaryActionClass} onClick={handleBinaryDownload} leftIcon={<Download className="w-4 h-4" />}>Download ({formatFileSize(bytes.length)})</Button>
                     </div>
                   </div>
                 )}
@@ -1027,12 +1027,12 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
       {activeTab === "messages" && (
         <div className="flex-1 overflow-auto p-4 font-mono select-text">
           {error ? (
-            <div className="bg-red-500/5 border border-red-500/20 rounded-lg p-4 text-red-500">
+            <div className="bg-[var(--danger-3)]/40 border border-[var(--danger-6)] rounded-lg p-4 text-[var(--danger-11)]">
                <div className="font-bold mb-2 flex items-center gap-2 text-sm"><XCircle className="w-4 h-4" /> Execution Error</div>
                <pre className="text-xs whitespace-pre-wrap leading-relaxed">{error}</pre>
             </div>
           ) : results.length > 0 || successMessage ? (
-            <div className="bg-green-500/5 border border-green-500/20 rounded-lg p-4 text-green-500">
+            <div className="bg-[var(--success-3)]/40 border border-[var(--success-6)] rounded-lg p-4 text-[var(--success-11)]">
                <div className="font-bold mb-1 flex items-center gap-2 text-sm"><CheckCircle className="w-4 h-4" /> Query Successful</div>
                <p className="text-xs">{successMessage || `${results.length} rows were retrieved in ${executionTime}ms.`}</p>
                <div className="mt-4 flex gap-4 text-[10px] opacity-60">
@@ -1055,7 +1055,7 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
             {/* Multi-statement results with tick/X indicators */}
             {multiResults && multiResults.length > 0 && (
-              <div className="border-b border-[var(--border)] bg-[var(--surface)] overflow-x-auto">
+              <div className="border-b border-[var(--neutral-6)] bg-[var(--surface-panel)] overflow-x-auto">
                 <div className="flex items-center px-2 py-1.5 gap-2 min-w-max">
                   {multiResults.map((mr, idx) => {
                     const isSelected = idx === selectedMultiResultIdx;
@@ -1067,27 +1067,27 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
                       <button
                         key={idx}
                         onClick={() => setSelectedMultiResultIdx(idx)}
-                        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded text-[10px] font-mono transition-all border ${
-                          isSelected 
-                            ? 'bg-[var(--color-accent)]/10 border-[var(--color-accent)]/30 text-[var(--text-primary)]' 
-                            : 'bg-[var(--surface)] border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--border)]'
+                        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded text-[10px] font-mono transition-all border cursor-pointer ${
+                          isSelected
+                            ? 'bg-[var(--accent-3)] border-[var(--accent-6)] text-[var(--neutral-12)]'
+                            : 'bg-[var(--surface-panel)] border-[var(--neutral-6)] text-[var(--neutral-11)] hover:bg-[var(--neutral-4)]'
                         }`}
                         title={mr.query}
                       >
                         {hasError ? (
-                          <XCircle className="w-3.5 h-3.5 text-red-500 shrink-0" />
+                          <XCircle className="w-3.5 h-3.5 text-[var(--danger-11)] shrink-0" />
                         ) : (
-                          <CheckCircle className="w-3.5 h-3.5 text-green-500 shrink-0" />
+                          <CheckCircle className="w-3.5 h-3.5 text-[var(--success-11)] shrink-0" />
                         )}
                         <span className="whitespace-nowrap max-w-[150px] truncate">{queryPreview}</span>
                         {results.some(r => r._isNew || r._isModified) && idx === 0 && (
-                           <span className="text-[8px] bg-amber-500/20 text-amber-500 px-1 rounded font-bold animate-pulse">MODIFIED</span>
+                           <span className="text-[8px] bg-[var(--warning-3)] text-[var(--warning-11)] px-1 rounded font-bold animate-pulse">MODIFIED</span>
                         )}
                         {hasRows && <span className="text-[9px] opacity-60">({(mr.rows?.length || 0)})</span>}
                         {!hasError && mr.rowsAffected !== undefined && (
                           <span className="text-[9px] opacity-60">{mr.rowsAffected}</span>
                         )}
-                        {hasError && <span className="text-red-400 text-[9px] max-w-[100px] truncate">Error</span>}
+                        {hasError && <span className="text-[var(--danger-11)] text-[9px] max-w-[100px] truncate">Error</span>}
                       </button>
                     );
                   })}
@@ -1095,10 +1095,10 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
               </div>
             )}
             {showColumnFilters && (
-              <div className="flex bg-[var(--surface)] border-b border-[var(--border)] px-10 py-1 gap-1 overflow-x-auto no-scrollbar shrink-0">
+              <div className="flex bg-[var(--surface-panel)] border-b border-[var(--neutral-6)] px-10 py-1 gap-1 overflow-x-auto no-scrollbar shrink-0">
                 {(displayColumns || columns).map(col => (
                   <div key={col} style={{ minWidth: 150, width: 150 }} className="px-1">
-                    <input type="text" placeholder={`Filter ${col}...`} value={columnFilters[col] || ""} onChange={(e) => setColumnFilters(prev => ({ ...prev, [col]: e.target.value }))} className="w-full bg-[var(--background)] border border-[var(--border)] rounded px-1.5 py-0.5 text-[10px] outline-none focus:border-[var(--color-accent)]" />
+                    <input type="text" placeholder={`Filter ${col}...`} value={columnFilters[col] || ""} onChange={(e) => setColumnFilters(prev => ({ ...prev, [col]: e.target.value }))} className="w-full bg-[var(--surface-base)] border border-[var(--neutral-6)] rounded px-1.5 py-0.5 text-[10px] outline-none focus:border-[var(--accent-8)]" />
                   </div>
                 ))}
               </div>
@@ -1126,15 +1126,15 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
                 onColumnMoved={(from, to) => { const newOrder = [...(displayColumns || columns)]; const [removed] = newOrder.splice(from, 1); newOrder.splice(to, 0, removed); setColumnOrder(newOrder); }}
               />
             </div>
-            <div className="h-8 border-t flex items-center px-4 gap-4 text-[10px] text-[var(--text-secondary)] bg-[var(--surface)] shrink-0 select-none">
+            <div className="h-8 border-t flex items-center px-4 gap-4 text-[10px] text-[var(--neutral-11)] bg-[var(--surface-panel)] shrink-0 select-none">
                <div className="flex items-center gap-1.5"><Table2 className="w-3 h-3 opacity-50" /> <b>{sortedResults.length}</b> rows</div>
-               <div className="h-3 w-px bg-[var(--border)] opacity-20" />
+               <div className="h-3 w-px bg-[var(--neutral-6)] opacity-20" />
                <div className="flex items-center gap-1.5"><Clock className="w-3 h-3 opacity-50" /> {executionTime}ms</div>
                <div className="flex-1" />
                {multiResults && multiResults.length > 0 && (
-                 <span className="text-[var(--color-accent)] opacity-60">{multiResults.length} statements</span>
+                 <span className="text-[var(--accent-11)] opacity-60">{multiResults.length} statements</span>
                )}
-               {isProductionMode && <div className="text-amber-500 font-bold flex items-center gap-1.5"><Shield className="w-3 h-3 animate-pulse" /> MASKING ACTIVE</div>}
+               {isProductionMode && <div className="text-[var(--warning-11)] font-bold flex items-center gap-1.5"><Shield className="w-3 h-3 animate-pulse" /> MASKING ACTIVE</div>}
             </div>
           </div>
         )
@@ -1142,26 +1142,26 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
 
       {activeTab === "history" && (
         <div className="flex-1 flex flex-col overflow-hidden select-none">
-          <div className="p-2 border-b flex gap-2 items-center bg-[var(--surface)] shrink-0">
+          <div className="p-2 border-b border-[var(--neutral-6)] flex gap-2 items-center bg-[var(--surface-panel)] shrink-0">
             <Search className="w-3.5 h-3.5 opacity-40 ml-1" />
-            <input type="text" placeholder="Search history..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="flex-1 bg-transparent outline-none text-[10px]" />
-            <button onClick={() => clearHistory()} className="text-rose-400 hover:bg-rose-400/10 px-2 py-1 rounded text-[9px] font-bold">CLEAR ALL</button>
+            <input type="text" placeholder="Search history..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="flex-1 bg-transparent outline-none text-[10px] text-[var(--neutral-12)] placeholder:text-[var(--neutral-9)]" />
+            <Button size="xs" variant="destructive" onClick={() => clearHistory()} className="font-bold">CLEAR ALL</Button>
           </div>
           <div className="flex-1 overflow-y-auto p-2 space-y-1.5 scrollbar-thin">
             {filteredHistoryMemo.map(item => (
-              <div key={item.id} className="p-2 bg-[var(--surface)]/40 border border-[var(--border)] rounded text-[10.5px] hover:bg-[var(--surface)] hover:border-[var(--color-accent)]/30 transition-all group">
+              <div key={item.id} className="p-2 bg-[var(--surface-panel)]/40 border border-[var(--neutral-6)] rounded text-[10.5px] hover:bg-[var(--surface-panel)] hover:border-[var(--accent-6)] transition-all group">
                 <div className="flex items-center gap-2 mb-1">
-                  <div className={item.success ? "text-green-500" : "text-rose-500"}>{item.success ? <CheckCircle className="w-3 h-3 shrink-0" /> : <XCircle className="w-3 h-3 shrink-0" />}</div>
+                  <div className={item.success ? "text-[var(--success-11)]" : "text-[var(--danger-11)]"}>{item.success ? <CheckCircle className="w-3 h-3 shrink-0" /> : <XCircle className="w-3 h-3 shrink-0" />}</div>
                   <span className="font-bold opacity-80 shrink-0">{item.connectionName}</span>
                   <span className="text-[9px] opacity-40 shrink-0">{new Date(item.executedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>
                   <span className="text-[9px] opacity-40 shrink-0">{new Date(item.executedAt).toLocaleTimeString()}</span>
                   <div className="flex-1" />
                   <div className="opacity-0 group-hover:opacity-100 flex gap-2">
-                     <button onClick={() => copyToClipboard(item.query)} className="text-indigo-400 hover:underline">Copy</button>
-                     <button onClick={() => window.dispatchEvent(new CustomEvent("open-query-with-text", { detail: { query: item.query } }))} className="text-indigo-400 hover:underline">Restore</button>
+                     <button onClick={() => copyToClipboard(item.query)} className="text-[var(--accent-11)] hover:underline cursor-pointer">Copy</button>
+                     <button onClick={() => window.dispatchEvent(new CustomEvent("open-query-with-text", { detail: { query: item.query } }))} className="text-[var(--accent-11)] hover:underline cursor-pointer">Restore</button>
                   </div>
                 </div>
-                <pre className="font-mono bg-[var(--background)]/50 p-1.5 rounded text-[9.5px] opacity-70 line-clamp-3 overflow-hidden border border-[var(--border)]/50">{item.query}</pre>
+                <pre className="font-mono bg-[var(--surface-base)]/50 p-1.5 rounded text-[9.5px] opacity-70 line-clamp-3 overflow-hidden border border-[var(--neutral-6)]/50">{item.query}</pre>
               </div>
             ))}
             {filteredHistoryMemo.length === 0 && (
@@ -1174,7 +1174,7 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
         </div>
       )}
 
-      {showCopyToast && <div className="fixed bottom-12 right-12 bg-indigo-500 text-white px-4 py-2 rounded-xl shadow-2xl text-[11px] font-bold z-[200] animate-in bounce-in duration-300 flex items-center gap-2"><CheckCircle className="w-4 h-4" /> {toastMessage}</div>}
+      {showCopyToast && <div className="fixed bottom-12 right-12 bg-[var(--accent-9)] text-white px-4 py-2 rounded-xl shadow-2xl text-[11px] font-bold z-[200] animate-in bounce-in duration-300 flex items-center gap-2"><CheckCircle className="w-4 h-4" /> {toastMessage}</div>}
 
       {tableName && onAddRow && (
         <AddRowModal isOpen={showAddRowModal} onClose={() => setShowAddRowModal(false)} onSave={onAddRow} columns={columns} tableName={tableName} />
