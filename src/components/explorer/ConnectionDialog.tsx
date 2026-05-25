@@ -1,17 +1,36 @@
 import { useState, useEffect, useMemo } from "react";
 import { DatabaseConnection } from "../../contexts/ConnectionContext";
 import { useConnections } from "../../contexts/useConnections";
-import { X, CheckCircle, Database, ServerCrash, Search, Settings, Shield } from "lucide-react";
+import { CheckCircle, Database, ServerCrash, Search, Settings, Shield } from "lucide-react";
 import { useConfirmDialog } from "../ui/ConfirmDialog";
 import { PasswordInput } from "../ui/PasswordInput";
+import { Dialog } from "../ui/Dialog";
+import { Button } from "../ui/Button";
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
 
 import { PROVIDERS } from "../../config/providers";
 import { getDefaultDatabaseName } from "../../config/app";
+import { CONNECTION_COLOR_PRESETS, DEFAULT_CONNECTION_COLOR } from "../../config/connectionColors";
 import { filterProviders, getComingSoonCount } from "./filterProviders";
 import { invokeCmd } from "../../lib/ipc";
 
+// Radix Select reserves the empty string, so root/manual options need sentinels.
+const ROOT_FOLDER = "__root__";
+const MANUAL_VAULT = "__manual__";
+
+// Password / hex inputs can't use the <Input> primitive (PasswordInput owns its
+// own markup; the hex field shares a widget with the swatch), so they reuse this
+// to match the primitive's compact, tokenized look.
+const fieldInputClass =
+  "w-full h-7 px-2.5 text-xs rounded-md bg-[var(--surface-base)] border border-[var(--neutral-7)] " +
+  "text-[var(--neutral-12)] placeholder:text-[var(--neutral-9)] outline-none transition-colors " +
+  "focus:border-[var(--accent-8)] focus:ring-1 focus:ring-[var(--accent-8)]/30";
+
+const fieldLabelClass = "text-xs font-medium text-[var(--neutral-12)] select-none";
+
 const getValidHexColor = (color: string): string => {
-  if (!color) return "#06b6d4";
+  if (!color) return DEFAULT_CONNECTION_COLOR;
   const trimmed = color.trim().toLowerCase();
   if (/^#[0-9a-f]{6}$/.test(trimmed)) return trimmed;
   if (/^#[0-9a-f]{3}$/.test(trimmed)) {
@@ -29,7 +48,7 @@ const getValidHexColor = (color: string): string => {
     };
     return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
   }
-  return "#06b6d4"; // default fallback for HTML color input
+  return DEFAULT_CONNECTION_COLOR; // default fallback for HTML color input
 };
 
 export function ConnectionDialog({ connection, onClose, defaultFolderId }: { connection?: DatabaseConnection; onClose: () => void; defaultFolderId?: string }) {
@@ -52,7 +71,7 @@ export function ConnectionDialog({ connection, onClose, defaultFolderId }: { con
     filepath: connection?.filepath || "",
     isVault: true,
     vaultCredentialId: connection?.vaultCredentialId || "",
-    color: connection?.color || "#06b6d4",
+    color: connection?.color || DEFAULT_CONNECTION_COLOR,
     // SSH fields
     sshEnabled: connection?.sshEnabled || false,
     sshHost: connection?.sshHost || "",
@@ -92,15 +111,6 @@ export function ConnectionDialog({ connection, onClose, defaultFolderId }: { con
       setFormData(prev => ({ ...prev, name: `Local ${prev.type.charAt(0).toUpperCase() + prev.type.slice(1)}` }));
     }
   }, [step]);
-
-  // ESC to close
-  useEffect(() => {
-    const handleEsc = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handleEsc);
-    return () => window.removeEventListener("keydown", handleEsc);
-  }, [onClose]);
 
   const testConnection = async (): Promise<{ success: boolean; message: string }> => {
     setIsConnecting(true);
@@ -223,7 +233,7 @@ export function ConnectionDialog({ connection, onClose, defaultFolderId }: { con
 
   const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    
+
     // Test on save
     const result = await testConnection();
     setTestResult(result);
@@ -269,7 +279,7 @@ export function ConnectionDialog({ connection, onClose, defaultFolderId }: { con
     } else {
       addConnection(conn);
     }
-    
+
     onClose();
   };
 
@@ -321,645 +331,615 @@ export function ConnectionDialog({ connection, onClose, defaultFolderId }: { con
     category: driverCategory,
   });
   const comingSoonCount = getComingSoonCount(PROVIDERS);
+  const activeProvider = PROVIDERS.find(p => p.id === formData.type);
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[200] backdrop-blur-[1px]">
-      <div className="bg-[var(--surface)] rounded-xl shadow-2xl w-[900px] max-w-[95vw] h-[640px] max-h-[90vh] flex flex-col overflow-hidden border border-[var(--border)] animate-in fade-in zoom-in duration-100">
-        
-        {/* Header */}
-        <div className="p-4 border-b border-[var(--border)] flex items-center justify-between bg-gradient-to-r from-[var(--surface-raised)] to-[var(--surface)]">
-          <div className="flex items-center gap-2">
-            <div className="p-1.5 bg-[var(--color-accent)]/20 rounded">
-              <Database className="w-5 h-5 text-[var(--color-accent)]" />
+    <Dialog
+      open
+      onClose={onClose}
+      dismissOnBackdrop={false}
+      className="w-[900px] max-w-[95vw] h-[640px] max-h-[90vh] overflow-hidden animate-in fade-in zoom-in duration-100"
+    >
+      <Dialog.Title onClose={onClose}>
+        <span className="inline-flex items-center gap-3">
+          <span className="p-1.5 bg-[var(--accent-3)] rounded">
+            <Database className="w-4 h-4 text-[var(--accent-11)]" />
+          </span>
+          <span className="flex flex-col leading-tight">
+            <span>{step === "driver" ? "Select your database" : (connection ? "Edit Connection" : "Connection Details")}</span>
+            <span className="text-[10px] font-normal text-[var(--neutral-11)]">
+              {step === "driver"
+                ? "Create a new database connection. Find your driver in the list below."
+                : `Configure connection settings for ${activeProvider?.name}.`}
+            </span>
+          </span>
+        </span>
+      </Dialog.Title>
+
+      {/* Step 1: Provider Selection */}
+      {step === "driver" && (
+        <div className="flex-1 flex flex-col min-h-0 bg-[var(--surface-panel)]">
+          {/* Search Bar */}
+          <div className="p-3 border-b border-[var(--neutral-6)] bg-[var(--surface-elevated)] flex gap-2 items-center">
+            <div className="flex-1">
+              <Input
+                inputSize="sm"
+                leftIcon={<Search />}
+                placeholder="Type part of database/driver name to filter"
+                value={searchFilter}
+                onChange={e => setSearchFilter(e.target.value)}
+              />
             </div>
-            <div>
-              <h3 className="text-sm font-bold tracking-wide">
-                {step === "driver" ? "Select your database" : (connection ? "Edit Connection" : "Connection Details")}
-              </h3>
-              {step === "driver" && <p className="text-[10px] text-[var(--text-secondary)]">Create new database connection. Find your database driver in the list below.</p>}
-              {step === "details" && <p className="text-[10px] text-[var(--text-secondary)]">Configure connection settings for {PROVIDERS.find(p => p.id === formData.type)?.name}.</p>}
+            <label className="text-[10px] text-[var(--neutral-11)] flex items-center gap-1.5 mr-3 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={showAll}
+                onChange={(e) => setShowAll(e.target.checked)}
+                className="w-3 h-3 accent-[var(--accent-9)] cursor-pointer"
+              />
+              <span>Show all ({comingSoonCount})</span>
+            </label>
+            <div className="text-[10px] text-[var(--neutral-11)] flex items-center gap-1.5 mr-2">
+              <span>View:</span>
+              <Button size="xs" variant={viewMode === "grid" ? "primary" : "ghost"} onClick={() => setViewMode("grid")}>
+                Tiles
+              </Button>
+              <Button size="xs" variant={viewMode === "list" ? "primary" : "ghost"} onClick={() => setViewMode("list")}>
+                List
+              </Button>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 text-[var(--text-secondary)] hover:text-white hover:bg-[var(--border)] rounded-full transition-all">
-            <X className="w-4 h-4" />
-          </button>
+
+          <div className="flex flex-1 min-h-0">
+            {/* Left Category Sidebar */}
+            <div className="w-48 bg-[var(--surface-elevated)] border-r border-[var(--neutral-6)] py-2 overflow-y-auto">
+              {categories.map(c => (
+                <button
+                  key={c}
+                  onClick={() => setDriverCategory(c)}
+                  className={`w-full text-left px-4 py-1.5 text-[11px] font-bold ${driverCategory === c ? "bg-[var(--accent-3)] text-[var(--accent-11)] border-r-2 border-[var(--accent-9)]" : "text-[var(--neutral-12)] hover:bg-[var(--neutral-4)]"}`}
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
+
+            {/* Content Area */}
+            <div className="flex-1 p-6 overflow-y-auto bg-[var(--surface-base)]">
+              {viewMode === "grid" ? (
+                <div className="grid grid-cols-4 gap-4">
+                  {filteredProviders.map(p => {
+                    const Icon = p.icon;
+                    return (
+                      <button
+                        key={p.id}
+                        disabled={p.comingSoon}
+                        onClick={() => {
+                          setError(null);
+                          setTestResult(null);
+                          setFormData(prev => ({
+                            ...prev,
+                            type: p.id as any,
+                            port: p.defaultPort || ""
+                          }));
+                          setStep("details");
+                        }}
+                        className={`flex flex-col items-center justify-center p-4 rounded-xl border transition-all ${
+                          p.comingSoon
+                            ? "bg-[var(--neutral-3)] border-[var(--neutral-6)] opacity-60 cursor-not-allowed grayscale"
+                            : "bg-[var(--surface-elevated)] border-[var(--neutral-7)] hover:border-[var(--accent-8)] hover:shadow-lg hover:shadow-[var(--accent-9)]/10 hover:-translate-y-1"
+                        }`}
+                      >
+                        <div className={`p-4 rounded-lg ${p.bg} ${p.color} border border-white/5 mb-3`}>
+                          <Icon className="w-10 h-10 drop-shadow-md" />
+                        </div>
+                        <span className="text-xs font-bold text-[var(--neutral-12)]">{p.name}</span>
+                        {p.comingSoon && <span className="text-[9px] text-[var(--neutral-11)] mt-1 font-mono tracking-tighter">SOON</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {filteredProviders.map(p => {
+                    const Icon = p.icon;
+                    return (
+                      <button
+                        key={p.id}
+                        disabled={p.comingSoon}
+                        onClick={() => {
+                          setError(null);
+                          setTestResult(null);
+                          setFormData(prev => ({
+                            ...prev,
+                            type: p.id as any,
+                            port: p.defaultPort || ""
+                          }));
+                          setStep("details");
+                        }}
+                        className={`w-full flex items-center gap-4 p-3 rounded-lg border transition-all ${
+                          p.comingSoon
+                            ? "bg-[var(--neutral-3)] border-[var(--neutral-6)] opacity-60 cursor-not-allowed grayscale"
+                            : "bg-[var(--surface-elevated)] border-[var(--neutral-7)] hover:border-[var(--accent-8)] group"
+                        }`}
+                      >
+                        <div className={`p-2 rounded ${p.bg} ${p.color} border border-white/5`}>
+                          <Icon className="w-5 h-5" />
+                        </div>
+                        <div className="flex-1 text-left">
+                          <div className="text-sm font-bold text-[var(--neutral-12)]">{p.name}</div>
+                          <div className="text-[10px] text-[var(--neutral-11)]">{p.type} • {p.defaultPort ? `Default Port: ${p.defaultPort}` : "Local File"}</div>
+                        </div>
+                        {p.comingSoon ? (
+                          <span className="text-[9px] font-mono text-[var(--neutral-11)] px-2 py-0.5 bg-[var(--neutral-5)] rounded">COMING SOON</span>
+                        ) : (
+                          <div className="opacity-0 group-hover:opacity-100 transition-opacity text-[10px] font-bold text-[var(--accent-11)] uppercase">
+                            Select &gt;
+                          </div>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="p-3 border-t border-[var(--neutral-6)] bg-[var(--surface-elevated)] flex justify-end">
+            <Button size="sm" disabled>
+              Next &gt;
+            </Button>
+          </div>
         </div>
-        
-        {/* Step 1: Provider Selection */}
-        {step === "driver" && (
-          <div className="flex-1 flex flex-col min-h-0 bg-[#1e1e1e]">
-            {/* Search Bar */}
-            <div className="p-3 border-b border-[var(--border)] bg-[var(--surface)] flex gap-2 items-center">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-secondary)]" />
-                <input
-                  type="text"
-                  placeholder="Type part of database/driver name to filter"
-                  value={searchFilter}
-                  onChange={e => setSearchFilter(e.target.value)}
-                  className="w-full pl-9 pr-3 py-1.5 text-xs rounded bg-[#111111] border border-[var(--border)] outline-none focus:border-[var(--color-accent)] text-white"
-                />
-              </div>
-              <label className="text-[10px] text-[var(--text-secondary)] flex items-center gap-1.5 mr-3 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={showAll}
-                  onChange={(e) => setShowAll(e.target.checked)}
-                  className="w-3 h-3 accent-[var(--color-accent)] cursor-pointer"
-                />
-                <span>Show all ({comingSoonCount})</span>
-              </label>
-              <div className="text-[10px] text-[var(--text-secondary)] flex items-center gap-1.5 mr-2">
-                <span>View:</span>
-                <button 
-                  onClick={() => setViewMode("grid")}
-                  className={`${viewMode === "grid" ? "bg-[var(--color-accent)] text-white" : "bg-[#111111] text-[var(--text-secondary)]"} px-2 py-0.5 rounded border ${viewMode === "grid" ? "border-[var(--color-accent)]" : "border-[var(--border)]"} hover:bg-[var(--color-accent)]/80 transition-all`}
-                >
-                  Tiles
-                </button>
-                <button 
-                  onClick={() => setViewMode("list")}
-                  className={`${viewMode === "list" ? "bg-[var(--color-accent)] text-white" : "bg-[#111111] text-[var(--text-secondary)]"} px-2 py-0.5 rounded border ${viewMode === "list" ? "border-[var(--color-accent)]" : "border-[var(--border)]"} hover:bg-[var(--color-accent)]/80 transition-all`}
-                >
-                  List
-                </button>
-              </div>
+      )}
+
+      {/* Step 2: Connection Details */}
+      {step === "details" && (
+        <div className="flex-1 flex flex-col min-h-0">
+          <div className="flex flex-1 min-h-0">
+            {/* Left Sidebar - Summary */}
+            <div className="w-56 bg-[var(--surface-panel)] border-r border-[var(--neutral-6)] p-4 flex flex-col items-center">
+              {(() => {
+                const p = activeProvider;
+                const Icon = p?.icon || Database;
+                return (
+                  <>
+                    <div className={`p-4 rounded-2xl ${p?.bg || 'bg-[var(--neutral-5)]'} ${p?.color || 'text-[var(--neutral-12)]'} border border-white/10 mb-3 shadow-xl`}>
+                      <Icon className="w-12 h-12 drop-shadow-lg" />
+                    </div>
+                    <h2 className="text-base font-bold text-[var(--neutral-12)] mb-0.5">{p?.name}</h2>
+                    <p className="text-[10px] uppercase tracking-widest text-[var(--neutral-11)] font-bold">Standard Connection</p>
+                    <div className="mt-4 w-full space-y-1.5">
+                      <div className="p-2 bg-[var(--surface-elevated)] rounded border border-[var(--neutral-6)] text-[11px]">
+                        <span className="text-[var(--neutral-11)]">Driver: </span> <span className="font-mono text-[var(--accent-11)]">Native (Tauri)</span>
+                      </div>
+                      <div className="p-2 bg-[var(--surface-elevated)] rounded border border-[var(--neutral-6)] text-[11px]">
+                        <span className="text-[var(--neutral-11)]">Last test: </span>
+                        <span className={`font-bold ${testResult ? (testResult.success ? 'text-[var(--success-11)]' : 'text-[var(--danger-11)]') : 'text-[var(--neutral-11)]'}`}>
+                          {testResult ? (testResult.success ? 'Passed' : 'Failed') : 'Not run'}
+                        </span>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
 
-            <div className="flex flex-1 min-h-0">
-              {/* Left Category Sidebar */}
-              <div className="w-48 bg-[var(--surface)] border-r border-[var(--border)] py-2 overflow-y-auto">
-                {categories.map(c => (
+            {/* Form Content */}
+            <form id="connection-form" onSubmit={handleSubmit} className="flex-1 flex flex-col min-h-0">
+              {/* Tabs */}
+              {formData.type !== "sqlite" && (
+                <div className="flex border-b border-[var(--neutral-6)] bg-[var(--surface-panel)]">
                   <button
-                    key={c}
-                    onClick={() => setDriverCategory(c)}
-                    className={`w-full text-left px-4 py-1.5 text-[11px] font-bold ${driverCategory === c ? "bg-[var(--color-accent)]/20 text-[var(--color-accent)] border-r-2 border-[var(--color-accent)]" : "text-[var(--text-primary)] hover:bg-[var(--border)]"}`}
+                    type="button"
+                    onClick={() => setActiveTab("general")}
+                    className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold transition-all border-b-2 ${
+                      activeTab === "general"
+                        ? "border-[var(--accent-9)] text-[var(--accent-11)] bg-[var(--surface-base)]"
+                        : "border-transparent text-[var(--neutral-11)] hover:text-[var(--neutral-12)]"
+                    }`}
                   >
-                    {c}
+                    <Settings className="w-3.5 h-3.5" />
+                    General
                   </button>
-                ))}
-              </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("ssh")}
+                    className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold transition-all border-b-2 ${
+                      activeTab === "ssh"
+                        ? "border-[var(--accent-9)] text-[var(--accent-11)] bg-[var(--surface-base)]"
+                        : "border-transparent text-[var(--neutral-11)] hover:text-[var(--neutral-12)]"
+                    }`}
+                  >
+                    <Shield className="w-3.5 h-3.5" />
+                    SSH / Tunneling
+                    {formData.sshEnabled && <span className="w-1.5 h-1.5 bg-[var(--success-9)] rounded-full" />}
+                  </button>
+                </div>
+              )}
 
-              {/* Content Area */}
-              <div className="flex-1 p-6 overflow-y-auto bg-[#1a1a1a]">
-                {viewMode === "grid" ? (
-                  <div className="grid grid-cols-4 gap-4">
-                    {filteredProviders.map(p => {
-                      const Icon = p.icon;
-                      return (
-                        <button
-                          key={p.id}
-                          disabled={p.comingSoon}
-                          onClick={() => {
-                            setError(null);
-                            setTestResult(null);
-                            setFormData(prev => ({ 
-                              ...prev, 
-                              type: p.id as any,
-                              port: p.defaultPort || ""
-                            }));
-                            setStep("details");
-                          }}
-                          className={`flex flex-col items-center justify-center p-4 rounded-xl border transition-all ${
-                            p.comingSoon 
-                              ? "bg-[#222] border-[#333] opacity-60 cursor-not-allowed grayscale" 
-                              : "bg-[#252526] border-[#3c3c3c] hover:border-[var(--color-accent)] hover:shadow-lg hover:shadow-[var(--color-accent)]/10 hover:-translate-y-1"
-                          }`}
-                        >
-                          <div className={`p-4 rounded-lg ${p.bg} ${p.color} border border-white/5 mb-3`}>
-                            <Icon className="w-10 h-10 drop-shadow-md" />
-                          </div>
-                          <span className="text-xs font-bold text-gray-200">{p.name}</span>
-                          {p.comingSoon && <span className="text-[9px] text-[var(--text-secondary)] mt-1 font-mono tracking-tighter">SOON</span>}
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {filteredProviders.map(p => {
-                      const Icon = p.icon;
-                      return (
-                        <button
-                          key={p.id}
-                          disabled={p.comingSoon}
-                          onClick={() => {
-                            setError(null);
-                            setTestResult(null);
-                            setFormData(prev => ({ 
-                              ...prev, 
-                              type: p.id as any,
-                              port: p.defaultPort || ""
-                            }));
-                            setStep("details");
-                          }}
-                          className={`w-full flex items-center gap-4 p-3 rounded-lg border transition-all ${
-                            p.comingSoon 
-                              ? "bg-[#222]/50 border-[#333] opacity-60 cursor-not-allowed grayscale" 
-                              : "bg-[#252526] border-[#3c3c3c] hover:border-[var(--color-accent)] group"
-                          }`}
-                        >
-                          <div className={`p-2 rounded ${p.bg} ${p.color} border border-white/5`}>
-                            <Icon className="w-5 h-5" />
-                          </div>
-                          <div className="flex-1 text-left">
-                            <div className="text-sm font-bold text-gray-200">{p.name}</div>
-                            <div className="text-[10px] text-[var(--text-secondary)]">{p.type} • {p.defaultPort ? `Default Port: ${p.defaultPort}` : "Local File"}</div>
-                          </div>
-                          {p.comingSoon ? (
-                            <span className="text-[9px] font-mono text-[var(--text-secondary)] px-2 py-0.5 bg-[#333] rounded">COMING SOON</span>
-                          ) : (
-                            <div className="opacity-0 group-hover:opacity-100 transition-opacity text-[10px] font-bold text-[var(--color-accent)] uppercase">
-                              Select &gt;
-                            </div>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
-            
-            <div className="p-3 border-t border-[var(--border)] bg-[var(--surface)] flex justify-end">
-              <button disabled className="px-4 py-1.5 bg-[#2d2d2d] text-[var(--text-secondary)] text-xs rounded border border-[#3c3c3c] cursor-not-allowed">
-                Next &gt;
-              </button>
-            </div>
-          </div>
-        )}
+              {/* Tab Content */}
+              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                {activeTab === "general" && (
+                  <>
+                    {/* General Settings */}
+                    <div className="space-y-2.5">
+                      <h4 className="text-[10px] font-bold uppercase tracking-wider text-[var(--neutral-11)] pb-1.5 border-b border-[var(--neutral-6)]">General Settings</h4>
 
-        {/* Step 2: Connection Details */}
-        {step === "details" && (
-          <div className="flex-1 flex flex-col min-h-0">
-            <div className="flex flex-1 min-h-0">
-              {/* Left Sidebar - Summary */}
-              <div className="w-56 bg-[#1e1e1e] border-r border-[var(--border)] p-4 flex flex-col items-center border-t border-[var(--surface-raised)]">
-                {(() => {
-                  const p = PROVIDERS.find(p => p.id === formData.type);
-                  const Icon = p?.icon || Database;
-                  return (
-                    <>
-                      <div className={`p-4 rounded-2xl ${p?.bg || 'bg-gray-800'} ${p?.color || 'text-white'} border border-white/10 mb-3 shadow-xl`}>
-                        <Icon className="w-12 h-12 drop-shadow-lg" />
+                      <div className={folders.length > 0 ? "grid grid-cols-2 gap-2.5" : ""}>
+                        <Input
+                          label="Connection Name"
+                          inputSize="sm"
+                          value={formData.name}
+                          onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                          placeholder="Production Database"
+                          required
+                        />
+
+                        {/* Folder */}
+                        {folders.length > 0 && (
+                          <Select
+                            label="Folder"
+                            selectSize="sm"
+                            value={formData.selectedFolderId || ROOT_FOLDER}
+                            onValueChange={(v) => setFormData({ ...formData, selectedFolderId: v === ROOT_FOLDER ? "" : v })}
+                            options={[
+                              { label: "Root (no folder)", value: ROOT_FOLDER },
+                              ...flatFolders.map(({ folder, depth }) => ({
+                                label: `${" ".repeat(depth * 2)}${folder.name}`,
+                                value: folder.id,
+                              })),
+                            ]}
+                          />
+                        )}
                       </div>
-                      <h2 className="text-base font-bold text-white mb-0.5">{p?.name}</h2>
-                      <p className="text-[10px] uppercase tracking-widest text-[var(--text-secondary)] font-bold">Standard Connection</p>
-                      <div className="mt-4 w-full space-y-1.5">
-                        <div className="p-2 bg-[#2d2d2d] rounded border border-[#3c3c3c] text-[11px]">
-                          <span className="text-[var(--text-secondary)]">Driver: </span> <span className="font-mono text-[var(--color-accent)]">Native (Tauri)</span>
-                        </div>
-                        <div className="p-2 bg-[#2d2d2d] rounded border border-[#3c3c3c] text-[11px]">
-                          <span className="text-[var(--text-secondary)]">Last test: </span>
-                          <span className={`font-bold ${testResult ? (testResult.success ? 'text-green-400' : 'text-red-400') : 'text-[var(--text-secondary)]'}`}>
-                            {testResult ? (testResult.success ? 'Passed' : 'Failed') : 'Not run'}
-                          </span>
-                        </div>
-                      </div>
-                    </>
-                  );
-                })()}
-              </div>
 
-              {/* Form Content */}
-              <form id="connection-form" onSubmit={handleSubmit} className="flex-1 flex flex-col min-h-0">
-                {/* Tabs */}
-                {formData.type !== "sqlite" && (
-                  <div className="flex border-b border-[var(--border)] bg-[#1e1e1e]">
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab("general")}
-                      className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold transition-all border-b-2 ${
-                        activeTab === "general"
-                          ? "border-[var(--color-accent)] text-[var(--color-accent)] bg-[var(--surface)]"
-                          : "border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-                      }`}
-                    >
-                      <Settings className="w-3.5 h-3.5" />
-                      General
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab("ssh")}
-                      className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold transition-all border-b-2 ${
-                        activeTab === "ssh"
-                          ? "border-[var(--color-accent)] text-[var(--color-accent)] bg-[var(--surface)]"
-                          : "border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-                      }`}
-                    >
-                      <Shield className="w-3.5 h-3.5" />
-                      SSH / Tunneling
-                      {formData.sshEnabled && <span className="w-1.5 h-1.5 bg-[var(--color-success)] rounded-full" />}
-                    </button>
-                  </div>
-                )}
-
-                {/* Tab Content */}
-                <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                  {activeTab === "general" && (
-                    <>
-                      {/* General Settings */}
-                      <div className="space-y-2.5">
-                        <h4 className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] pb-1.5 border-b border-[var(--border)]">General Settings</h4>
-                        
-                        <div className={folders.length > 0 ? "grid grid-cols-2 gap-2.5" : ""}>
-                          <div>
-                            <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Connection Name</label>
-                            <input
-                              type="text"
-                              value={formData.name}
-                              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                              className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-medium shadow-inner"
-                              placeholder="Production Database"
-                              required
-                            />
-                          </div>
-
-                          {/* Folder */}
-                          {folders.length > 0 && (
-                            <div>
-                              <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Folder</label>
-                              <select
-                                value={formData.selectedFolderId}
-                                onChange={(e) => setFormData({ ...formData, selectedFolderId: e.target.value })}
-                                className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none shadow-inner text-white"
-                              >
-                                <option value="">Root (no folder)</option>
-                                {flatFolders.map(({ folder, depth }) => (
-                                  <option key={folder.id} value={folder.id}>
-                                    {"\u00A0".repeat(depth * 2)}{folder.name}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Connection Color */}
-                        <div className="space-y-1.5">
-                          <label className="block text-[11px] font-bold text-[var(--text-primary)]">Connection Color</label>
-                          <div className="flex items-center gap-3 flex-wrap">
-                            <div className="flex items-center gap-2 bg-[#2d2d2d] border border-[#444] rounded-lg px-2.5 py-1.5 focus-within:border-[var(--color-accent)] focus-within:bg-[#333] transition-colors shadow-inner w-44">
-                              <div 
-                                className="relative w-5 h-5 rounded-full border border-white/20 shadow-sm shrink-0 cursor-pointer overflow-hidden transition-all hover:scale-105" 
-                                style={{ backgroundColor: getValidHexColor(formData.color) }}
-                              >
-                                <input
-                                  type="color"
-                                  value={getValidHexColor(formData.color)}
-                                  onChange={(e) => setFormData({ ...formData, color: e.target.value })}
-                                  className="absolute inset-0 opacity-0 cursor-pointer w-full h-full scale-150"
-                                  title="Pick custom color"
-                                />
-                              </div>
+                      {/* Connection Color */}
+                      <div className="space-y-1.5">
+                        <label className={fieldLabelClass}>Connection Color</label>
+                        <div className="flex items-center gap-3 flex-wrap">
+                          <div className="flex items-center gap-2 bg-[var(--surface-base)] border border-[var(--neutral-7)] rounded-md px-2.5 py-1.5 focus-within:border-[var(--accent-8)] focus-within:ring-1 focus-within:ring-[var(--accent-8)]/30 transition-colors w-44">
+                            <div
+                              className="relative w-5 h-5 rounded-full border border-[var(--neutral-7)] shadow-sm shrink-0 cursor-pointer overflow-hidden transition-all hover:scale-105"
+                              style={{ backgroundColor: getValidHexColor(formData.color) }}
+                            >
                               <input
-                                type="text"
-                                value={formData.color}
+                                type="color"
+                                value={getValidHexColor(formData.color)}
                                 onChange={(e) => setFormData({ ...formData, color: e.target.value })}
-                                className="w-full bg-transparent text-xs outline-none font-mono text-white"
-                                placeholder="#06b6d4"
-                                title="Custom HEX or RGB color"
+                                className="absolute inset-0 opacity-0 cursor-pointer w-full h-full scale-150"
+                                title="Pick custom color"
                               />
                             </div>
-                            
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              {[
-                                "#06b6d4", "#3b82f6", "#8b5cf6", "#ec4899",
-                                "#ef4444", "#f97316", "#eab308", "#22c55e",
-                                "#14b8a6", "#64748b", "#1e293b", "#ffffff",
-                              ].map((color) => (
-                                <button
-                                  key={color}
-                                  type="button"
-                                  onClick={() => setFormData({ ...formData, color })}
-                                  className={`w-5 h-5 rounded-full border transition-all ${
-                                    formData.color === color ? "border-white scale-110" : "border-transparent hover:scale-105"
-                                  }`}
-                                  style={{ backgroundColor: color }}
-                                  title={color}
+                            <input
+                              type="text"
+                              value={formData.color}
+                              onChange={(e) => setFormData({ ...formData, color: e.target.value })}
+                              className="w-full bg-transparent text-xs outline-none font-mono text-[var(--neutral-12)]"
+                              placeholder={DEFAULT_CONNECTION_COLOR}
+                              title="Custom HEX or RGB color"
+                            />
+                          </div>
+
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {CONNECTION_COLOR_PRESETS.map((color) => (
+                              <button
+                                key={color}
+                                type="button"
+                                onClick={() => setFormData({ ...formData, color })}
+                                className={`w-5 h-5 rounded-full border transition-all ${
+                                  formData.color === color ? "border-[var(--neutral-12)] scale-110" : "border-transparent hover:scale-105"
+                                }`}
+                                style={{ backgroundColor: color }}
+                                title={color}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      {formData.type === "sqlite" ? (
+                        <Input
+                          label="File Path (Absolute)"
+                          inputSize="sm"
+                          className="font-mono"
+                          value={formData.filepath}
+                          onChange={(e) => setFormData({ ...formData, filepath: e.target.value })}
+                          placeholder="/absolute/path/to/database.db"
+                        />
+                      ) : (
+                        <>
+                          <div className="grid grid-cols-3 gap-2.5">
+                            <div className="col-span-2">
+                              <Input
+                                label="Host / Server"
+                                inputSize="sm"
+                                className="font-mono"
+                                value={formData.host}
+                                onChange={(e) => setFormData({ ...formData, host: e.target.value })}
+                                placeholder="localhost"
+                              />
+                            </div>
+                            <Input
+                              label="Port"
+                              inputSize="sm"
+                              className="font-mono"
+                              value={formData.port}
+                              onChange={(e) => setFormData({ ...formData, port: e.target.value })}
+                              placeholder={formData.type === "postgres" ? "5432" : "3306"}
+                            />
+                          </div>
+
+                          <Input
+                            label="Target Database"
+                            inputSize="sm"
+                            className="font-mono"
+                            value={formData.database}
+                            onChange={(e) => setFormData({ ...formData, database: e.target.value })}
+                            placeholder="database_name"
+                            required
+                          />
+                        </>
+                      )}
+                    </div>
+
+                    {/* Authentication - ONLY IF NOT SQLITE */}
+                    {formData.type !== "sqlite" && (
+                      <div className="space-y-2.5 pt-1">
+                        <h4 className="text-[10px] font-bold uppercase tracking-wider text-[var(--neutral-11)] pb-1.5 border-b border-[var(--neutral-6)]">Authentication</h4>
+
+                        {vaultCredentials.length > 0 && (
+                          <Select
+                            label="Vault Profile"
+                            selectSize="sm"
+                            value={formData.vaultCredentialId || MANUAL_VAULT}
+                            onValueChange={(v) => setFormData({ ...formData, vaultCredentialId: v === MANUAL_VAULT ? "" : v })}
+                            options={[
+                              { label: "Manual", value: MANUAL_VAULT },
+                              ...vaultCredentials.map(c => ({ label: `${c.name} (${c.username})`, value: c.id })),
+                            ]}
+                          />
+                        )}
+
+                        {!formData.vaultCredentialId && (
+                          <div className="grid grid-cols-2 gap-2.5 animate-in fade-in slide-in-from-top-1 duration-200">
+                            <Input
+                              label="Username"
+                              inputSize="sm"
+                              className="font-mono"
+                              value={formData.username}
+                              onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+                              placeholder={formData.type === "postgres" ? "postgres" : "root"}
+                            />
+
+                            <div className="flex flex-col gap-1 min-w-0">
+                              <label className={fieldLabelClass}>Password</label>
+                              <PasswordInput
+                                value={formData.password}
+                                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                                className={`${fieldInputClass} font-mono`}
+                                placeholder="••••••••••"
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {activeTab === "ssh" && formData.type !== "sqlite" && (
+                  <div className="space-y-2.5">
+                    <div className="flex items-center justify-between pb-1.5 border-b border-[var(--neutral-6)]">
+                      <h4 className="text-[10px] font-bold uppercase tracking-wider text-[var(--neutral-11)]">SSH Tunnel</h4>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={formData.sshEnabled}
+                          onChange={(e) => setFormData({ ...formData, sshEnabled: e.target.checked })}
+                          className="w-4 h-4 rounded accent-[var(--accent-9)]"
+                        />
+                        <span className="text-xs font-bold text-[var(--neutral-12)]">Enable SSH</span>
+                      </label>
+                    </div>
+
+                    {formData.sshEnabled ? (
+                      <div className="space-y-2.5 animate-in fade-in slide-in-from-top-1 duration-200">
+                        <div className="grid grid-cols-3 gap-2.5">
+                          <div className="col-span-2">
+                            <Input
+                              label="SSH Host"
+                              inputSize="sm"
+                              className="font-mono"
+                              value={formData.sshHost}
+                              onChange={(e) => setFormData({ ...formData, sshHost: e.target.value })}
+                              placeholder="bastion.example.com"
+                            />
+                          </div>
+                          <Input
+                            label="SSH Port"
+                            inputSize="sm"
+                            className="font-mono"
+                            value={formData.sshPort}
+                            onChange={(e) => setFormData({ ...formData, sshPort: e.target.value })}
+                            placeholder="22"
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2.5">
+                          <Input
+                            label="SSH Username"
+                            inputSize="sm"
+                            className="font-mono"
+                            value={formData.sshUsername}
+                            onChange={(e) => setFormData({ ...formData, sshUsername: e.target.value })}
+                            placeholder="deploy"
+                          />
+                          <div className="flex flex-col gap-1 min-w-0">
+                            <label className={fieldLabelClass}>Authentication Method</label>
+                            <div className="flex gap-4 pt-1">
+                              <label className="flex items-center gap-2 cursor-pointer">
+                                <input
+                                  type="radio"
+                                  name="sshAuth"
+                                  checked={formData.sshAuthMethod === "password"}
+                                  onChange={() => setFormData({ ...formData, sshAuthMethod: "password" })}
+                                  className="w-4 h-4 accent-[var(--accent-9)]"
                                 />
-                              ))}
+                                <span className="text-xs text-[var(--neutral-12)]">Password</span>
+                              </label>
+                              <label className="flex items-center gap-2 cursor-pointer">
+                                <input
+                                  type="radio"
+                                  name="sshAuth"
+                                  checked={formData.sshAuthMethod === "key"}
+                                  onChange={() => setFormData({ ...formData, sshAuthMethod: "key" })}
+                                  className="w-4 h-4 accent-[var(--accent-9)]"
+                                />
+                                <span className="text-xs text-[var(--neutral-12)]">Private Key</span>
+                              </label>
                             </div>
                           </div>
                         </div>
-                        
-                        {formData.type === "sqlite" ? (
-                          <div>
-                            <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">File Path (Absolute)</label>
-                            <input
-                              type="text"
-                              value={formData.filepath}
-                              onChange={(e) => setFormData({ ...formData, filepath: e.target.value })}
-                              className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono text-cyan-300"
-                              placeholder="/absolute/path/to/database.db"
+
+                        {formData.sshAuthMethod === "password" && (
+                          <div className="flex flex-col gap-1 min-w-0">
+                            <label className={fieldLabelClass}>SSH Password</label>
+                            <PasswordInput
+                              value={formData.sshPassword}
+                              onChange={(e) => setFormData({ ...formData, sshPassword: e.target.value })}
+                              className={`${fieldInputClass} font-mono`}
+                              placeholder="••••••••••"
                             />
                           </div>
-                        ) : (
+                        )}
+
+                        {formData.sshAuthMethod === "key" && (
                           <>
-                            <div className="grid grid-cols-3 gap-2.5">
-                              <div className="col-span-2">
-                                <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Host / Server</label>
-                                <input
-                                  type="text"
-                                  value={formData.host}
-                                  onChange={(e) => setFormData({ ...formData, host: e.target.value })}
-                                  className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono"
-                                  placeholder="localhost"
-                                />
-                              </div>
-                              <div>
-                                <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Port</label>
-                                <input
-                                  type="text"
-                                  value={formData.port}
-                                  onChange={(e) => setFormData({ ...formData, port: e.target.value })}
-                                  className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono text-amber-300"
-                                  placeholder={formData.type === "postgres" ? "5432" : "3306"}
-                                />
-                              </div>
-                            </div>
-                            
-                            <div>
-                              <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Target Database</label>
-                              <input
-                                type="text"
-                                value={formData.database}
-                                onChange={(e) => setFormData({ ...formData, database: e.target.value })}
-                                className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono text-purple-300"
-                                placeholder="database_name"
-                                required
+                            <Input
+                              label="Private Key Path"
+                              inputSize="sm"
+                              className="font-mono"
+                              value={formData.sshKeyPath}
+                              onChange={(e) => setFormData({ ...formData, sshKeyPath: e.target.value })}
+                              placeholder="/home/user/.ssh/id_ed25519"
+                            />
+                            <div className="flex flex-col gap-1 min-w-0">
+                              <label className={fieldLabelClass}>Key Passphrase (Optional)</label>
+                              <PasswordInput
+                                value={formData.sshKeyPassphrase}
+                                onChange={(e) => setFormData({ ...formData, sshKeyPassphrase: e.target.value })}
+                                className={`${fieldInputClass} font-mono`}
+                                placeholder="••••••••••"
                               />
                             </div>
                           </>
                         )}
+
+                        <div className="flex items-center gap-3 pt-1">
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={handleTestSsh}
+                            loading={isTestingSsh}
+                            disabled={!formData.sshHost || !formData.sshUsername}
+                            leftIcon={<Shield className="w-3 h-3" />}
+                          >
+                            {isTestingSsh ? "Testing SSH..." : "Test SSH Tunnel"}
+                          </Button>
+                          {sshTestResult && (
+                            <span className={`text-[11px] font-mono flex items-center gap-1.5 ${sshTestResult.success ? "text-[var(--success-11)]" : "text-[var(--danger-11)]"}`}>
+                              {sshTestResult.success ? <CheckCircle className="w-3.5 h-3.5" /> : <ServerCrash className="w-3.5 h-3.5" />}
+                              {sshTestResult.message}
+                            </span>
+                          )}
+                        </div>
+
+                        <p className="text-[10px] text-[var(--neutral-11)] leading-relaxed pt-0.5">
+                          <span className="font-bold text-[var(--neutral-12)]">How it works:</span> An SSH tunnel is opened on a free local port and the DB connection routes through your SSH server. <span className="font-bold text-[var(--neutral-12)]">Test SSH Tunnel</span> verifies SSH auth alone — DB credentials are not required.
+                        </p>
                       </div>
-
-                      {/* Authentication - ONLY IF NOT SQLITE */}
-                      {formData.type !== "sqlite" && (
-                        <div className="space-y-2.5 pt-1">
-                          <h4 className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] pb-1.5 border-b border-[var(--border)]">Authentication</h4>
-
-                          {vaultCredentials.length > 0 && (
-                            <div>
-                              <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Vault Profile</label>
-                              <select
-                                value={formData.vaultCredentialId}
-                                onChange={(e) => setFormData({ ...formData, vaultCredentialId: e.target.value })}
-                                className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none text-white"
-                              >
-                                <option value="">Manual</option>
-                                {vaultCredentials.map(c => (
-                                  <option key={c.id} value={c.id}>{c.name} ({c.username})</option>
-                                ))}
-                              </select>
-                            </div>
-                          )}
-
-                          {!formData.vaultCredentialId && (
-                            <div className="grid grid-cols-2 gap-2.5 animate-in fade-in slide-in-from-top-1 duration-200">
-                              <div>
-                                <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Username</label>
-                                <input
-                                  type="text"
-                                  value={formData.username}
-                                  onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                                  className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono text-green-300 shadow-inner"
-                                  placeholder={formData.type === "postgres" ? "postgres" : "root"}
-                                />
-                              </div>
-                              
-                              <div>
-                                <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Password</label>
-                                <PasswordInput
-                                  value={formData.password}
-                                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                                  className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono shadow-inner"
-                                  placeholder="••••••••••"
-                                />
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </>
-                  )}
-
-                  {activeTab === "ssh" && formData.type !== "sqlite" && (
-                    <div className="space-y-2.5">
-                      <div className="flex items-center justify-between pb-1.5 border-b border-[var(--border)]">
-                        <h4 className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)]">SSH Tunnel</h4>
-                        <label className="flex items-center gap-2 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={formData.sshEnabled}
-                            onChange={(e) => setFormData({ ...formData, sshEnabled: e.target.checked })}
-                            className="w-4 h-4 rounded accent-[var(--color-accent)]"
-                          />
-                          <span className="text-xs font-bold text-[var(--text-primary)]">Enable SSH</span>
-                        </label>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center py-10 text-center">
+                        <Shield className="w-10 h-10 text-[var(--neutral-11)] opacity-30 mb-3" />
+                        <p className="text-sm text-[var(--neutral-11)] mb-1">SSH tunneling is disabled</p>
+                        <p className="text-[10px] text-[var(--neutral-11)]">Enable SSH above to connect through a bastion host</p>
                       </div>
-
-                      {formData.sshEnabled ? (
-                        <div className="space-y-2.5 animate-in fade-in slide-in-from-top-1 duration-200">
-                          <div className="grid grid-cols-3 gap-2.5">
-                            <div className="col-span-2">
-                              <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">SSH Host</label>
-                              <input
-                                type="text"
-                                value={formData.sshHost}
-                                onChange={(e) => setFormData({ ...formData, sshHost: e.target.value })}
-                                className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono"
-                                placeholder="bastion.example.com"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">SSH Port</label>
-                              <input
-                                type="text"
-                                value={formData.sshPort}
-                                onChange={(e) => setFormData({ ...formData, sshPort: e.target.value })}
-                                className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono text-amber-300"
-                                placeholder="22"
-                              />
-                            </div>
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-2.5">
-                            <div>
-                              <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">SSH Username</label>
-                              <input
-                                type="text"
-                                value={formData.sshUsername}
-                                onChange={(e) => setFormData({ ...formData, sshUsername: e.target.value })}
-                                className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono text-green-300"
-                                placeholder="deploy"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Authentication Method</label>
-                              <div className="flex gap-4 pt-1">
-                                <label className="flex items-center gap-2 cursor-pointer">
-                                  <input
-                                    type="radio"
-                                    name="sshAuth"
-                                    checked={formData.sshAuthMethod === "password"}
-                                    onChange={() => setFormData({ ...formData, sshAuthMethod: "password" })}
-                                    className="w-4 h-4 accent-[var(--color-accent)]"
-                                  />
-                                  <span className="text-xs text-[var(--text-primary)]">Password</span>
-                                </label>
-                                <label className="flex items-center gap-2 cursor-pointer">
-                                  <input
-                                    type="radio"
-                                    name="sshAuth"
-                                    checked={formData.sshAuthMethod === "key"}
-                                    onChange={() => setFormData({ ...formData, sshAuthMethod: "key" })}
-                                    className="w-4 h-4 accent-[var(--color-accent)]"
-                                  />
-                                  <span className="text-xs text-[var(--text-primary)]">Private Key</span>
-                                </label>
-                              </div>
-                            </div>
-                          </div>
-
-                          {formData.sshAuthMethod === "password" && (
-                            <div>
-                              <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">SSH Password</label>
-                              <PasswordInput
-                                value={formData.sshPassword}
-                                onChange={(e) => setFormData({ ...formData, sshPassword: e.target.value })}
-                                className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono shadow-inner"
-                                placeholder="••••••••••"
-                              />
-                            </div>
-                          )}
-
-                          {formData.sshAuthMethod === "key" && (
-                            <>
-                              <div>
-                                <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Private Key Path</label>
-                                <input
-                                  type="text"
-                                  value={formData.sshKeyPath}
-                                  onChange={(e) => setFormData({ ...formData, sshKeyPath: e.target.value })}
-                                  className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono text-cyan-300"
-                                  placeholder="/home/user/.ssh/id_ed25519"
-                                />
-                              </div>
-                              <div>
-                                <label className="block text-[11px] font-bold mb-1 text-[var(--text-primary)]">Key Passphrase (Optional)</label>
-                                <PasswordInput
-                                  value={formData.sshKeyPassphrase}
-                                  onChange={(e) => setFormData({ ...formData, sshKeyPassphrase: e.target.value })}
-                                  className="w-full px-3 py-1.5 text-xs rounded bg-[#2d2d2d] border border-[#444] focus:border-[var(--color-accent)] focus:bg-[#333] transition-colors outline-none font-mono shadow-inner"
-                                  placeholder="••••••••••"
-                                />
-                              </div>
-                            </>
-                          )}
-
-                          <div className="flex items-center gap-3 pt-1">
-                            <button
-                              type="button"
-                              onClick={handleTestSsh}
-                              disabled={isTestingSsh || !formData.sshHost || !formData.sshUsername}
-                              className="px-3 py-1.5 text-[11px] font-bold rounded border border-[var(--border)] bg-[var(--surface)] hover:bg-[#333] transition-colors text-white disabled:opacity-50 flex items-center gap-2"
-                            >
-                              {isTestingSsh && <span className="animate-pulse w-1.5 h-1.5 rounded-full bg-amber-400" />}
-                              <Shield className="w-3 h-3" />
-                              {isTestingSsh ? "Testing SSH..." : "Test SSH Tunnel"}
-                            </button>
-                            {sshTestResult && (
-                              <span className={`text-[11px] font-mono flex items-center gap-1.5 ${sshTestResult.success ? "text-green-400" : "text-red-400"}`}>
-                                {sshTestResult.success ? <CheckCircle className="w-3.5 h-3.5" /> : <ServerCrash className="w-3.5 h-3.5" />}
-                                {sshTestResult.message}
-                              </span>
-                            )}
-                          </div>
-
-                          <p className="text-[10px] text-[var(--text-secondary)] leading-relaxed pt-0.5">
-                            <span className="font-bold text-[var(--text-primary)]">How it works:</span> An SSH tunnel is opened on a free local port and the DB connection routes through your SSH server. <span className="font-bold text-[var(--text-primary)]">Test SSH Tunnel</span> verifies SSH auth alone — DB credentials are not required.
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="flex flex-col items-center justify-center py-10 text-center">
-                          <Shield className="w-10 h-10 text-[var(--text-secondary)] opacity-30 mb-3" />
-                          <p className="text-sm text-[var(--text-secondary)] mb-1">SSH tunneling is disabled</p>
-                          <p className="text-[10px] text-[var(--text-secondary)]">Enable SSH above to connect through a bastion host</p>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {formData.type === "sqlite" && (
-                    <div className="flex flex-col items-center justify-center py-10 text-center">
-                      <Database className="w-10 h-10 text-[var(--text-secondary)] opacity-30 mb-3" />
-                      <p className="text-sm text-[var(--text-secondary)]">SQLite connections use local files</p>
-                      <p className="text-[10px] text-[var(--text-secondary)]">SSH tunneling is not available for SQLite databases</p>
-                    </div>
-                  )}
-                </div>
-              </form>
-            </div>
-
-            {/* Sticky feedback strip — always visible above the footer so errors
-                never hide below the fold when the form scrolls. #44 */}
-            {(error || testResult?.success) && (
-              <div className="border-t border-[var(--border)] bg-[#1e1e1e] px-4 py-2">
-                {error && (
-                  <div className="p-2 rounded border text-[11px] flex items-start gap-2 bg-red-500/10 border-red-500/30 text-red-400">
-                    <ServerCrash className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                    <div className="font-mono break-all">{error}</div>
+                    )}
                   </div>
                 )}
-                {!error && testResult?.success && (
-                  <div className="p-2 flex items-start gap-2 bg-green-500/10 border border-green-500/30 text-green-400 rounded text-[11px] font-bold">
-                    <CheckCircle className="w-4 h-4 flex-shrink-0" />
-                    <div>{testResult.message}</div>
+
+                {formData.type === "sqlite" && (
+                  <div className="flex flex-col items-center justify-center py-10 text-center">
+                    <Database className="w-10 h-10 text-[var(--neutral-11)] opacity-30 mb-3" />
+                    <p className="text-sm text-[var(--neutral-11)]">SQLite connections use local files</p>
+                    <p className="text-[10px] text-[var(--neutral-11)]">SSH tunneling is not available for SQLite databases</p>
                   </div>
                 )}
               </div>
-            )}
-
-            {/* Footer Actions */}
-            <div className="p-3 border-t border-[var(--border)] bg-[#1e1e1e] flex items-center justify-between shadow-[0_-4px_10px_rgba(0,0,0,0.1)] z-10">
-              <div className="flex gap-2">
-                {!connection && (
-                  <button onClick={() => setStep("driver")} className="px-5 py-2 text-xs font-bold rounded-lg border border-[var(--border)] bg-[var(--surface)] hover:bg-[#333] transition-colors text-white">
-                    &lt; Back to Providers
-                  </button>
-                )}
-                {connection && (
-                  <button onClick={() => { removeConnection(connection.id); onClose(); }} className="px-5 py-2 text-xs font-bold rounded-lg border border-red-500/30 bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors">
-                    Delete Target
-                  </button>
-                )}
-              </div>
-              
-              <div className="flex gap-3">
-                <button
-                  type="button"
-                  onClick={handleTestOnly}
-                  disabled={isConnecting || !formData.name}
-                  className="px-6 py-2 text-xs font-bold rounded-lg border border-[var(--border)] bg-[var(--surface)] hover:bg-[#333] transition-colors text-white disabled:opacity-50 flex items-center gap-2"
-                >
-                  {isConnecting && <span className="animate-pulse w-2 h-2 rounded-full bg-amber-400" />}
-                  {isConnecting ? "Negotiating..." : "Test Connection"}
-                </button>
-                
-                <button
-                  type="submit"
-                  form="connection-form"
-                  disabled={isConnecting || !formData.name}
-                  className="px-8 py-2 text-xs font-bold rounded-lg bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-hover)] transition-all shadow-lg shadow-[var(--color-accent)]/20 disabled:opacity-50"
-                >
-                  Finish
-                </button>
-              </div>
-            </div>
+            </form>
           </div>
-        )}
-      </div>
-    </div>
+
+          {/* Sticky feedback strip — always visible above the footer so errors
+              never hide below the fold when the form scrolls. #44 */}
+          {(error || testResult?.success) && (
+            <div className="border-t border-[var(--neutral-6)] bg-[var(--surface-panel)] px-4 py-2">
+              {error && (
+                <div className="p-2 rounded border text-[11px] flex items-start gap-2 bg-[var(--danger-3)] border-[var(--danger-6)] text-[var(--danger-11)]">
+                  <ServerCrash className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <div className="font-mono break-all">{error}</div>
+                </div>
+              )}
+              {!error && testResult?.success && (
+                <div className="p-2 flex items-start gap-2 bg-[var(--success-3)] border border-[var(--success-6)] text-[var(--success-11)] rounded text-[11px] font-bold">
+                  <CheckCircle className="w-4 h-4 flex-shrink-0" />
+                  <div>{testResult.message}</div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Footer Actions */}
+          <Dialog.Footer className="justify-between">
+            <div className="flex gap-2">
+              {!connection && (
+                <Button variant="secondary" size="md" onClick={() => setStep("driver")}>
+                  &lt; Back to Providers
+                </Button>
+              )}
+              {connection && (
+                <Button variant="destructive" size="md" onClick={() => { removeConnection(connection.id); onClose(); }}>
+                  Delete Target
+                </Button>
+              )}
+            </div>
+
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                size="md"
+                onClick={handleTestOnly}
+                loading={isConnecting}
+                disabled={!formData.name}
+              >
+                {isConnecting ? "Negotiating..." : "Test Connection"}
+              </Button>
+
+              <Button
+                type="submit"
+                form="connection-form"
+                variant="primary"
+                size="md"
+                loading={isConnecting}
+                disabled={!formData.name}
+              >
+                Finish
+              </Button>
+            </div>
+          </Dialog.Footer>
+        </div>
+      )}
+    </Dialog>
   );
 }
