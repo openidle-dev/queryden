@@ -1,6 +1,8 @@
 import { useState } from "react";
-import { X, Sparkles, Send, Loader2 } from "lucide-react";
+import { Sparkles, Send } from "lucide-react";
 import { useAI } from "../../store/aiStore";
+import { Dialog } from "../ui/Dialog";
+import { Button } from "../ui/Button";
 
 interface AIAssistantDialogProps {
   isOpen: boolean;
@@ -9,19 +11,18 @@ interface AIAssistantDialogProps {
   onUpdateQuery: (query: string) => void;
 }
 
+const SUGGESTIONS = ["Optimize current query", "Generate JOINs for active tables", "Explain query plan"];
+
 export function AIAssistantDialog({ isOpen, onClose, currentQuery, onUpdateQuery }: AIAssistantDialogProps) {
   const ai = useAI();
   const [prompt, setPrompt] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
 
-  if (!isOpen) return null;
-
   const handleGenerate = async () => {
     if (!prompt.trim() || !ai.enabled) return;
     setIsGenerating(true);
-    
-    // Simulate AI generation based on prompt
-    // In a real app, this would call OpenAI/Gemini/Ollama API securely using Tauri invoke or direct fetch
+
+    // Simulate AI generation based on prompt.
     setTimeout(() => {
       let result = currentQuery;
       if (!result) {
@@ -36,78 +37,77 @@ export function AIAssistantDialog({ isOpen, onClose, currentQuery, onUpdateQuery
   };
 
   return (
-    <div className="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-4 backdrop-blur-sm">
-      <div className="bg-[var(--surface)] w-full max-w-2xl rounded-xl shadow-2xl flex flex-col overflow-hidden border border-purple-500/30">
-        <div className="p-4 border-b border-[var(--border)] flex items-center justify-between bg-gradient-to-r from-purple-500/10 to-transparent">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-purple-500/20 rounded-lg">
-              <Sparkles className="w-5 h-5 text-purple-400" />
-            </div>
-            <div>
-              <h2 className="text-lg font-bold">AI SQL Assistant</h2>
-              <p className="text-[10px] text-[var(--text-secondary)] uppercase tracking-widest font-bold opacity-60">
-                Powered by {ai.provider} • {ai.model}
-              </p>
-            </div>
-          </div>
-          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-colors">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
+    <Dialog open={isOpen} onClose={onClose} size="xl">
+      <Dialog.Title onClose={onClose} className="bg-gradient-to-r from-purple-500/10 to-transparent">
+        <span className="inline-flex items-center gap-3">
+          <span className="p-1.5 bg-purple-500/20 rounded-lg">
+            <Sparkles className="w-4 h-4 text-purple-400" />
+          </span>
+          <span className="flex flex-col leading-tight">
+            <span>AI SQL Assistant</span>
+            <span className="text-[10px] font-normal text-[var(--neutral-11)] uppercase tracking-widest">
+              Powered by {ai.provider} • {ai.model}
+            </span>
+          </span>
+        </span>
+      </Dialog.Title>
 
-        <div className="p-5 flex flex-col gap-4">
-          {!ai.enabled || !ai.apiKey ? (
-            <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-4 text-center">
-              <p className="text-amber-400 font-bold mb-2">AI is not configured</p>
-              <p className="text-xs opacity-70 mb-4">Please enable AI and add your API key in Settings to use the assistant.</p>
-            </div>
-          ) : (
-            <>
-              <div>
-                <label className="block text-xs font-bold text-[var(--text-secondary)] uppercase mb-2">What do you want to do?</label>
-                <div className="relative">
-                  <textarea
-                    autoFocus
-                    value={prompt}
-                    onChange={(e) => setPrompt(e.target.value)}
-                    placeholder="e.g., 'Write a query to find the top 5 customers by order volume this month' or 'Optimize the current query for speed'"
-                    className="w-full h-32 p-4 pt-3 pb-12 bg-[var(--background)] border border-purple-500/20 rounded-xl outline-none focus:border-purple-500 resize-none text-sm placeholder:opacity-40"
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        handleGenerate();
-                      }
-                    }}
-                  />
-                  <div className="absolute bottom-3 right-3 flex items-center gap-2">
-                    <span className="text-[10px] text-[var(--text-secondary)] opacity-50 font-bold">Shift+Enter for newline, Enter to send</span>
-                    <button
-                      onClick={handleGenerate}
-                      disabled={isGenerating || !prompt.trim()}
-                      className="px-4 py-2 bg-purple-500 hover:bg-purple-600 disabled:bg-[var(--border)] disabled:text-[var(--text-secondary)] text-white rounded-lg flex items-center gap-2 shadow-lg shadow-purple-500/20 transition-all font-bold text-xs"
-                    >
-                      {isGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                      Generate
-                    </button>
-                  </div>
+      <Dialog.Body>
+        {!ai.enabled || !ai.apiKey ? (
+          <div className="bg-[var(--warning-3)] border border-[var(--warning-6)] rounded-md p-4 text-center">
+            <p className="text-[var(--warning-11)] font-bold mb-2">AI is not configured</p>
+            <p className="text-xs text-[var(--neutral-11)]">Enable AI and add your API key in Settings to use the assistant.</p>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-4">
+            <div>
+              <label className="block text-xs font-medium text-[var(--neutral-12)] mb-2">What do you want to do?</label>
+              <div className="relative">
+                <textarea
+                  autoFocus
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  placeholder="e.g. 'Write a query to find the top 5 customers by order volume this month' or 'Optimize the current query for speed'"
+                  className="w-full h-32 p-4 pb-12 bg-[var(--surface-base)] border border-purple-500/30 rounded-lg outline-none focus:border-purple-500 resize-none text-sm text-[var(--neutral-12)] placeholder:text-[var(--neutral-9)]"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      handleGenerate();
+                    }
+                  }}
+                />
+                <div className="absolute bottom-3 right-3 flex items-center gap-2">
+                  <span className="text-[10px] text-[var(--neutral-11)]">Shift+Enter for newline, Enter to send</span>
+                  <Button
+                    onClick={handleGenerate}
+                    loading={isGenerating}
+                    disabled={!prompt.trim()}
+                    size="sm"
+                    leftIcon={isGenerating ? undefined : <Send className="w-3.5 h-3.5" />}
+                    className="bg-purple-500 hover:bg-purple-600 text-white disabled:bg-[var(--neutral-6)] disabled:text-[var(--neutral-11)]"
+                  >
+                    Generate
+                  </Button>
                 </div>
               </div>
-              
-              <div className="flex gap-2.5">
-                {["Optimize current query", "Generate JOINs for active tables", "Explain query plan"].map(suggestion => (
-                  <button 
-                    key={suggestion}
-                    onClick={() => setPrompt(suggestion)}
-                    className="flex-1 px-3 py-2 text-[10px] font-bold bg-[var(--background)] hover:bg-purple-500/10 border border-[var(--border)] hover:border-purple-500/30 rounded-lg transition-colors text-center text-[var(--text-secondary)] hover:text-purple-400"
-                  >
-                    {suggestion}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
+            </div>
+
+            <div className="flex gap-2.5">
+              {SUGGESTIONS.map(suggestion => (
+                <Button
+                  key={suggestion}
+                  onClick={() => setPrompt(suggestion)}
+                  variant="secondary"
+                  size="xs"
+                  className="flex-1 text-[var(--neutral-11)] hover:text-purple-400 hover:border-purple-500/30"
+                >
+                  {suggestion}
+                </Button>
+              ))}
+            </div>
+          </div>
+        )}
+      </Dialog.Body>
+    </Dialog>
   );
 }
