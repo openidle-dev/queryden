@@ -8,6 +8,10 @@ import { useConnections } from "../../contexts/useConnections";
 import { DatabaseConnection } from "../../contexts/ConnectionContext";
 import { GridView, GridViewRef } from "../ui/GridView";
 import { CompactSelection } from "@glideapps/glide-data-grid";
+import { Dialog } from "../ui/Dialog";
+import { Button } from "../ui/Button";
+import { IconButton } from "../ui/IconButton";
+import { Select } from "../ui/Select";
 
 interface MultiQueryDialogProps {
   isOpen: boolean;
@@ -30,6 +34,8 @@ interface SelectedTarget {
   connectionId: string;
   database: string;
 }
+
+const menuItemClass = "w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--accent-9)] hover:text-white flex items-center gap-2 transition-colors";
 
 export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
   const { connections, vaultCredentials } = useConnections();
@@ -79,27 +85,27 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
         });
       }
     });
-    return [{ 
-      connectionName: "All Databases", 
-      databaseName: "Merged", 
-      connectionId: "merged", 
-      rows: mergedRows, 
-      columns: ["_source_connection", "_source_database", ...mergedColumns], 
-      rowsAffected: mergedRows.length, 
-      duration: results.reduce((sum, r) => sum + r.duration, 0) 
+    return [{
+      connectionName: "All Databases",
+      databaseName: "Merged",
+      connectionId: "merged",
+      rows: mergedRows,
+      columns: ["_source_connection", "_source_database", ...mergedColumns],
+      rowsAffected: mergedRows.length,
+      duration: results.reduce((sum, r) => sum + r.duration, 0)
     }];
   }, [results]);
 
   const displayResults = useMemo(() => showMerged ? getMergedResults() : results, [showMerged, results, getMergedResults]);
   const currentResult = displayResults?.[activeTab];
-  
+
   const columns = useMemo(() => {
     if (!currentResult) return [];
     if (currentResult.columns && currentResult.columns.length > 0) return currentResult.columns;
     if (currentResult.rows && currentResult.rows.length > 0) return Object.keys(currentResult.rows[0]);
     return [];
   }, [currentResult]);
-  
+
   const sortedRows = useMemo(() => {
     let rows = [...(currentResult?.rows || [])];
     if (!sortCol || !sortDir) return rows;
@@ -161,11 +167,11 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
 
   const executeQuery = async (queryText?: any, _statementInfo?: any) => {
     if (selectedTargets.length === 0) { setError("Please select at least one database"); return; }
-    
+
     // Determine what text to run
     let queryToRun = "";
     let statementsToRun: string[] = [];
-    
+
     if (queryText && typeof queryText === 'object' && queryText.__runAll) {
       statementsToRun = queryText.statements || [];
     } else {
@@ -176,10 +182,10 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
     }
 
     if (statementsToRun.length === 0) return;
-    
+
     setError(null);
     setIsExecuting(true);
-    
+
     // Issue 1 FIX: Auto-expand connections that have selected targets
     const targetConnectionIds = selectedTargets.map(t => t.connectionId);
     setExpandedConnections(prev => {
@@ -192,7 +198,7 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
       });
       return next;
     });
-    
+
     // Setup initial running state
     const initialResults: QueryResult[] = selectedTargets.map(target => ({
       connectionName: connections.find(c => c.id === target.connectionId)?.name || "",
@@ -202,10 +208,10 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
     }));
     setResults(initialResults);
     setActiveTab(0);
-    
+
     const isSelectQuery = (stmt: string) => {
       const s = stmt.toUpperCase().trim();
-      return s.startsWith("SELECT") || s.startsWith("WITH") || s.startsWith("SHOW") || 
+      return s.startsWith("SELECT") || s.startsWith("WITH") || s.startsWith("SHOW") ||
              s.startsWith("DESCRIBE") || s.startsWith("EXPLAIN") || s.includes("RETURNING");
     };
 
@@ -213,23 +219,23 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
       const conn = connections.find(c => c.id === target.connectionId);
       if (!conn) continue;
       const startTime = Date.now();
-      
+
       try {
         let username = conn.username || "", password = conn.password || "";
         if (conn.vaultCredentialId) { const vaultCred = vaultCredentials.find(vc => vc.id === conn.vaultCredentialId); if (vaultCred) { username = vaultCred.username || ""; password = vaultCred.password || ""; } }
-        
+
         const Database = (await import("@tauri-apps/plugin-sql")).default;
         const port = conn.port || (conn.type === "mysql" || conn.type === "mariadb" ? 3306 : 5432);
         const connectionString = conn.type === "sqlite" ? `sqlite:${conn.filepath || "dbman.sqlite"}` :
           ["postgres", "supabase", "cockroach"].includes(conn.type) ? `postgres://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${conn.host}:${port}/${target.database}` :
           `mysql://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${conn.host}:${port}/${target.database}`;
-        
+
         const db = await Database.load(connectionString);
-        
+
         let lastRows: any[] = [];
         let lastCols: string[] = [];
         let totalAffected = 0;
-        
+
         // Execute each statement sequentially
         for (const stmt of statementsToRun) {
           if (isSelectQuery(stmt)) {
@@ -242,19 +248,19 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
             totalAffected += (result.rowsAffected || 0);
           }
         }
-        
-        setResults(prev => prev.map(r => (r.connectionId === target.connectionId && r.databaseName === target.database) 
-          ? { 
-              ...r, 
-              status: 'done', 
-              rows: lastRows, 
-              columns: lastCols, 
-              rowsAffected: totalAffected, 
-              duration: Date.now() - startTime 
+
+        setResults(prev => prev.map(r => (r.connectionId === target.connectionId && r.databaseName === target.database)
+          ? {
+              ...r,
+              status: 'done',
+              rows: lastRows,
+              columns: lastCols,
+              rowsAffected: totalAffected,
+              duration: Date.now() - startTime
             } : r));
-            
-      } catch (err: any) { 
-        setResults(prev => prev.map(r => (r.connectionId === target.connectionId && r.databaseName === target.database) 
+
+      } catch (err: any) {
+        setResults(prev => prev.map(r => (r.connectionId === target.connectionId && r.databaseName === target.database)
           ? { ...r, status: 'error', error: err?.message || String(err), duration: Date.now() - startTime } : r));
       }
     }
@@ -292,11 +298,11 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
       });
       return; // Don't do anything yet, wait for callback
     }
-    
+
     // Get ALL databases for this connection
     const dbs = availableDatabases[conn.id]?.length > 0 ? availableDatabases[conn.id] : [conn.database];
     const current = selectedTargets.filter(t => t.connectionId === conn.id);
-    
+
     // If all databases are already selected, deselect all
     // Otherwise, select ALL databases from this connection
     if (current.length === dbs.length && current.length > 0) {
@@ -315,12 +321,12 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
           csv: "csv", json: "json", excel: "xls", xml: "xml", html: "html", sql: "sql"
         };
         const ext = mapping[f] || "txt";
-        const path = await save({ 
+        const path = await save({
           filters: [{ name: f.toUpperCase(), extensions: [ext] }],
-          defaultPath: `export_${Date.now()}.${ext}` 
+          defaultPath: `export_${Date.now()}.${ext}`
         });
         if (!path) return;
-        
+
         let content = "";
         const rows = currentResult.rows;
         const cols = columns;
@@ -332,7 +338,7 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
         } else if (f === "excel") {
           content = [cols.join("\t"), ...rows.map(r => cols.map(c => JSON.stringify(r[c])).join("\t"))].join("\n");
         } else if (f === "xml") {
-          content = `<?xml version="1.0" encoding="UTF-8"?>\n<results>\n` + 
+          content = `<?xml version="1.0" encoding="UTF-8"?>\n<results>\n` +
                     rows.map(r => `  <row>\n${cols.map(c => `    <${c}>${String(r[c])}</${c}>`).join("\n")}\n  </row>`).join("\n") +
                     `\n</results>`;
         } else if (f === "html") {
@@ -371,7 +377,7 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
     if (selectedRows.length === 0) return;
 
     const table = "target_table";
-    const sqlColumns = selectedRows.length > 0 
+    const sqlColumns = selectedRows.length > 0
       ? Object.keys(selectedRows[0]).filter(k => !k.startsWith('_'))
       : columns.filter(k => !k.startsWith('_'));
 
@@ -405,36 +411,40 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-md" onClick={onClose} />
-      <div className="relative w-[95vw] h-[90vh] bg-[var(--surface)] border border-[var(--border)] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
-        {/* Header - Enhanced Visual Design */}
-        <div className="flex items-center justify-between px-5 py-4 bg-gradient-to-r from-[var(--surface)] to-[var(--background)] border-b border-[var(--border)] shrink-0">
+    <>
+      <Dialog
+        open={isOpen}
+        onClose={onClose}
+        className="relative w-[95vw] h-[90vh] max-w-none rounded-2xl overflow-hidden"
+        backdropClassName="bg-black/70 backdrop-blur-md"
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 bg-[var(--surface-elevated)] border-b border-[var(--neutral-6)] shrink-0">
           <div className="flex items-center gap-4">
-            <div className="p-2.5 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 text-white shadow-lg shadow-indigo-500/30">
+            <div className="p-2.5 rounded-xl bg-gradient-to-br from-[var(--accent-9)] to-[var(--accent-10)] text-white shadow-lg shadow-[var(--accent-9)]/30">
               <Layers className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="font-bold text-xl text-[var(--text-primary)] tracking-tight">Multi-Query Cluster</h2>
+              <h2 className="font-bold text-xl text-[var(--neutral-12)] tracking-tight">Multi-Query Cluster</h2>
               <div className="flex items-center gap-4 text-[10px] mt-0.5">
-                <span className="flex items-center gap-1 text-indigo-400 font-bold">
-                  <div className="w-1.5 h-1.5 rounded-full bg-indigo-400" />
+                <span className="flex items-center gap-1 text-[var(--accent-11)] font-bold">
+                  <div className="w-1.5 h-1.5 rounded-full bg-[var(--accent-9)]" />
                   {selectedTargets.length} targets selected
                 </span>
                 {results.length > 0 && (
-                  <span className="flex items-center gap-1 text-emerald-400 font-bold">
+                  <span className="flex items-center gap-1 text-[var(--success-11)] font-bold">
                     <CheckCircle className="w-3 h-3" />
                     {results.filter(r => !r.error).length} successful
                   </span>
                 )}
                 {results.some(r => r.error) && (
-                  <span className="flex items-center gap-1 text-red-400 font-bold">
+                  <span className="flex items-center gap-1 text-[var(--danger-11)] font-bold">
                     <AlertCircle className="w-3 h-3" />
                     {results.filter(r => r.error).length} errors
                   </span>
                 )}
                 {isExecuting && (
-                  <span className="flex items-center gap-1 text-amber-400 animate-pulse">
+                  <span className="flex items-center gap-1 text-[var(--warning-11)] animate-pulse">
                     <Loader2 className="w-3 h-3" />
                     Executing SQL...
                   </span>
@@ -442,25 +452,23 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
               </div>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-red-500/10 hover:text-red-500 rounded-full transition-colors">
-            <X className="w-5 h-5" />
-          </button>
+          <IconButton icon={<X />} label="Close" variant="ghost" size="sm" onClick={onClose} />
         </div>
         <div className="flex-1 flex overflow-hidden">
-          {/* Sidebar - Enhanced */}
-          <div className="w-80 border-r border-[var(--border)] flex flex-col bg-[var(--surface)] shrink-0">
+          {/* Sidebar */}
+          <div className="w-80 border-r border-[var(--neutral-6)] flex flex-col bg-[var(--surface-elevated)] shrink-0">
             {/* Sidebar Tabs */}
-            <div className="flex border-b border-[var(--border)] bg-[var(--surface-raised)]">
-              <button 
+            <div className="flex border-b border-[var(--neutral-6)] bg-[var(--surface-panel)]">
+              <button
                 onClick={() => setSidebarTab("targets")}
-                className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-all border-b-2 flex items-center justify-center gap-2 ${sidebarTab === "targets" ? "text-indigo-400 border-indigo-400 bg-[var(--background)]/50" : "text-[var(--text-secondary)] border-transparent hover:text-[var(--text-primary)] hover:bg-[var(--border)]/10"}`}
+                className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-all border-b-2 flex items-center justify-center gap-2 ${sidebarTab === "targets" ? "text-[var(--accent-11)] border-[var(--accent-9)] bg-[var(--surface-base)]" : "text-[var(--neutral-11)] border-transparent hover:text-[var(--neutral-12)] hover:bg-[var(--neutral-4)]"}`}
               >
                 <Database className="w-3.5 h-3.5" />
                 Nodes
               </button>
-              <button 
+              <button
                 onClick={() => setSidebarTab("saved")}
-                className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-all border-b-2 flex items-center justify-center gap-2 ${sidebarTab === "saved" ? "text-indigo-400 border-indigo-400 bg-[var(--background)]/50" : "text-[var(--text-secondary)] border-transparent hover:text-[var(--text-primary)] hover:bg-[var(--border)]/10"}`}
+                className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-all border-b-2 flex items-center justify-center gap-2 ${sidebarTab === "saved" ? "text-[var(--accent-11)] border-[var(--accent-9)] bg-[var(--surface-base)]" : "text-[var(--neutral-11)] border-transparent hover:text-[var(--neutral-12)] hover:bg-[var(--neutral-4)]"}`}
               >
                 <Star className="w-3.5 h-3.5" />
                 Saved Queries
@@ -468,33 +476,30 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
             </div>
 
             {sidebarTab === "targets" ? (
-              <div className="p-4 border-b border-[var(--border)] flex justify-between items-center bg-[var(--surface-raised)]">
+              <div className="p-4 border-b border-[var(--neutral-6)] flex justify-between items-center bg-[var(--surface-panel)]">
                 <div className="flex items-center gap-2">
-                  <Database className="w-4 h-4 text-indigo-400" />
-                  <span className="text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Sync Group</span>
+                  <Database className="w-4 h-4 text-[var(--accent-11)]" />
+                  <span className="text-[11px] font-bold text-[var(--neutral-11)] uppercase tracking-wider">Sync Group</span>
                 </div>
-                <button
-                  onClick={toggleSelectAll}
-                  className="px-3 py-1.5 rounded-lg text-[10px] font-bold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 hover:bg-indigo-500/20 transition-all"
-                >
+                <Button size="xs" variant="secondary" onClick={toggleSelectAll}>
                   {selectedTargets.length ? "Clear All" : "Select All"}
-                </button>
+                </Button>
               </div>
             ) : (
-              <div className="p-3 border-b border-[var(--border)] bg-[var(--surface-raised)]">
+              <div className="p-3 border-b border-[var(--neutral-6)] bg-[var(--surface-panel)]">
                 <div className="relative">
-                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--text-secondary)]" />
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--neutral-11)]" />
                   <input
                     type="text"
                     placeholder="Search library..."
                     value={savedSearch}
                     onChange={(e) => setSavedSearch(e.target.value)}
-                    className="w-full pl-8 pr-3 py-2 text-[11px] rounded-lg bg-[var(--background)] border border-[var(--border)] outline-none focus:border-indigo-500/50 transition-all"
+                    className="w-full pl-8 pr-3 py-2 text-[11px] rounded-lg bg-[var(--surface-base)] border border-[var(--neutral-7)] outline-none focus:border-[var(--accent-8)] transition-all"
                   />
                 </div>
               </div>
             )}
-            
+
             <div className="flex-1 overflow-y-auto p-3 scrollbar-thin">
               {sidebarTab === "targets" ? (
                 <div className="space-y-2">
@@ -502,36 +507,36 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
                     const isExp = expandedConnections.has(conn.id);
                     const count = getSelectedCount(conn.id);
                     return (<div key={conn.id} className="mb-2">
-                      <div className="flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-[var(--border)]/30 group bg-[var(--surface-raised)] border border-[var(--border)]">
+                      <div className="flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-[var(--neutral-4)] group bg-[var(--surface-panel)] border border-[var(--neutral-6)]">
                         <button
                           onClick={() => { setExpandedConnections(prev => { const n = new Set(prev); if (n.has(conn.id)) n.delete(conn.id); else { n.add(conn.id); loadDatabasesForConnection(conn.id); } return n; }); }}
-                          className="p-1 rounded hover:bg-[var(--border)] transition-colors"
+                          className="p-1 rounded hover:bg-[var(--neutral-5)] transition-colors"
                         >
-                          {isExp ? <ChevronDown className="w-4 h-4 text-indigo-400" /> : <ChevronRight className="w-4 h-4 text-indigo-400" />}
+                          {isExp ? <ChevronDown className="w-4 h-4 text-[var(--accent-11)]" /> : <ChevronRight className="w-4 h-4 text-[var(--accent-11)]" />}
                         </button>
                         <div onClick={() => toggleConnAll(conn)} className={`flex-1 flex items-center gap-3 cursor-pointer`}>
                           <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all ${
                             count === (availableDatabases[conn.id] || [conn.database]).length
-                              ? "bg-indigo-500 border-indigo-500 text-white"
+                              ? "bg-[var(--accent-9)] border-[var(--accent-9)] text-white"
                               : count > 0
-                              ? "bg-indigo-500/30 border-indigo-500 text-indigo-400"
-                              : "border-[var(--border)]"
+                              ? "bg-[var(--accent-9)]/30 border-[var(--accent-9)] text-[var(--accent-11)]"
+                              : "border-[var(--neutral-7)]"
                           }`}>
                             {count > 0 && <Check className="w-3 h-3" />}
                           </div>
                           <div className="flex-1 min-w-0">
                             <span className="text-xs font-semibold truncate block">{conn.name}</span>
-                            <span className="text-[9px] text-[var(--text-secondary)] truncate block">{conn.type} • {conn.host}</span>
+                            <span className="text-[9px] text-[var(--neutral-11)] truncate block">{conn.type} • {conn.host}</span>
                           </div>
                           {count > 0 && (
-                            <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-400 font-bold">
+                            <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--accent-9)]/20 text-[var(--accent-11)] font-bold">
                               {count}
                             </span>
                           )}
                         </div>
                       </div>
                       {isExp && (
-                        <div className="ml-4 pl-3 py-2 border-l-2 border-[var(--border)] space-y-1.5">
+                        <div className="ml-4 pl-3 py-2 border-l-2 border-[var(--neutral-6)] space-y-1.5">
                           {(availableDatabases[conn.id] || [conn.database])?.map(db => {
                             const status = getTargetStatus(conn.id, db);
                             const result = results.find(r => r.connectionId === conn.id && r.databaseName === db);
@@ -541,11 +546,11 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
                                 onClick={() => toggleTarget(conn.id, db)}
                                 className={`flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all ${
                                   isTargetSelected(conn.id, db)
-                                    ? "bg-indigo-500/15 text-indigo-400 border border-indigo-500/30"
-                                    : "hover:bg-[var(--border)]/30 opacity-70 border border-transparent"
+                                    ? "bg-[var(--accent-9)]/15 text-[var(--accent-11)] border border-[var(--accent-9)]/30"
+                                    : "hover:bg-[var(--neutral-4)] opacity-70 border border-transparent"
                                 }`}
                               >
-                                <div 
+                                <div
                                   className="relative"
                                   onMouseEnter={() => {
                                     if (status && result) {
@@ -559,26 +564,26 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
                                   }}
                                 >
                                   {status === 'running' ? (
-                                    <Loader2 className="w-3.5 h-3.5 text-amber-400 animate-spin" />
+                                    <Loader2 className="w-3.5 h-3.5 text-[var(--warning-11)] animate-spin" />
                                   ) : status === 'done' ? (
-                                    <CheckCircle className="w-3.5 h-3.5 text-emerald-400 cursor-pointer hover:scale-110 transition-transform" />
+                                    <CheckCircle className="w-3.5 h-3.5 text-[var(--success-11)] cursor-pointer hover:scale-110 transition-transform" />
                                   ) : status === 'error' ? (
-                                    <AlertCircle className="w-3.5 h-3.5 text-red-500 cursor-pointer hover:scale-110 transition-transform" />
+                                    <AlertCircle className="w-3.5 h-3.5 text-[var(--danger-11)] cursor-pointer hover:scale-110 transition-transform" />
                                   ) : (
                                     <div className={`w-3.5 h-3.5 rounded-md border-2 ${
                                       isTargetSelected(conn.id, db)
-                                        ? "bg-indigo-500 border-indigo-500"
-                                        : "border-[var(--border)]"
+                                        ? "bg-[var(--accent-9)] border-[var(--accent-9)]"
+                                        : "border-[var(--neutral-7)]"
                                     }`} />
                                   )}
                                 </div>
-                                <Folder className={`w-4 h-4 ${isTargetSelected(conn.id, db) ? "text-indigo-400" : "text-amber-500/60"}`} />
+                                <Folder className={`w-4 h-4 ${isTargetSelected(conn.id, db) ? "text-[var(--accent-11)]" : "text-[var(--neutral-9)]"}`} />
                                 <span className="text-[11px] truncate flex-1 font-medium">{db}</span>
                                 {status && (
                                   <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold cursor-pointer hover:scale-105 transition-transform ${
-                                    status === 'done' ? "bg-emerald-500/20 text-emerald-400" :
-                                    status === 'error' ? "bg-red-500/20 text-red-400" :
-                                    "bg-amber-500/20 text-amber-400"
+                                    status === 'done' ? "bg-[var(--success-3)] text-[var(--success-11)]" :
+                                    status === 'error' ? "bg-[var(--danger-3)] text-[var(--danger-11)]" :
+                                    "bg-[var(--warning-3)] text-[var(--warning-11)]"
                                   }`}>
                                     {status}
                                   </span>
@@ -596,7 +601,7 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
                   {savedQueries
                     .filter(q => q.name.toLowerCase().includes(savedSearch.toLowerCase()) || q.query.toLowerCase().includes(savedSearch.toLowerCase()))
                     .map(q => (
-                      <div 
+                      <div
                         key={q.id}
                         onClick={() => {
                           setQuery(q.query);
@@ -604,14 +609,14 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
                           setShowToast(true);
                           setTimeout(() => setShowToast(false), 2000);
                         }}
-                        className="p-3 rounded-xl bg-[var(--surface-raised)] border border-[var(--border)] hover:border-indigo-500/50 hover:bg-indigo-500/5 cursor-pointer group transition-all"
+                        className="p-3 rounded-xl bg-[var(--surface-panel)] border border-[var(--neutral-6)] hover:border-[var(--accent-8)] hover:bg-[var(--accent-9)]/5 cursor-pointer group transition-all"
                         title="Click to load this query"
                       >
                          <div className="flex items-center justify-between mb-1">
-                           <span className="text-[11px] font-bold text-[var(--text-primary)] group-hover:text-indigo-400 transition-colors uppercase tracking-tight truncate mr-2">{q.name}</span>
+                           <span className="text-[11px] font-bold text-[var(--neutral-12)] group-hover:text-[var(--accent-11)] transition-colors uppercase tracking-tight truncate mr-2">{q.name}</span>
                            <span className="text-[9px] opacity-40 italic shrink-0">{new Date(q.createdAt).toLocaleDateString()}</span>
                          </div>
-                         <div className="text-[10px] text-[var(--text-secondary)] font-mono line-clamp-2 opacity-60 bg-[var(--background)]/50 p-1.5 rounded-md border border-[var(--border)]/50">
+                         <div className="text-[10px] text-[var(--neutral-11)] font-mono line-clamp-2 opacity-60 bg-[var(--surface-base)] p-1.5 rounded-md border border-[var(--neutral-6)]">
                            {q.query}
                          </div>
                       </div>
@@ -632,46 +637,55 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
             </div>
           </div>
           {/* Main area */}
-          <div className="flex-1 flex flex-col overflow-hidden bg-[var(--background)]">
-            <div className="p-4 flex flex-col gap-3 border-b border-[var(--border)] bg-[var(--surface)] shrink-0">
-               <div className="h-40 relative rounded-xl border border-[var(--border)] overflow-hidden shadow-inner bg-[var(--background)]"><QueryEditor value={query} onChange={setQuery} onRun={executeQuery} /></div>
-               <button onClick={executeQuery} disabled={!query.trim() || selectedTargets.length === 0 || isExecuting} className={`w-full py-2.5 rounded-xl font-bold text-xs uppercase shadow-lg transition-all flex items-center justify-center gap-2 ${!query.trim() || selectedTargets.length === 0 || isExecuting ? "bg-[var(--border)] opacity-50 cursor-not-allowed" : "bg-gradient-to-r from-indigo-500 to-indigo-600 text-white hover:scale-[1.01] active:scale-[0.99] shadow-indigo-500/20"}`}>{isExecuting ? <><Loader2 className="w-4 h-4 animate-spin" />Executing SQL on {selectedTargets.length} Nodes...</> : <><Play className="w-4 h-4 fill-current" />Execute SQL on {selectedTargets.length} Nodes</>}</button>
+          <div className="flex-1 flex flex-col overflow-hidden bg-[var(--surface-base)]">
+            <div className="p-4 flex flex-col gap-3 border-b border-[var(--neutral-6)] bg-[var(--surface-elevated)] shrink-0">
+               <div className="h-40 relative rounded-xl border border-[var(--neutral-6)] overflow-hidden shadow-inner bg-[var(--surface-base)]"><QueryEditor value={query} onChange={setQuery} onRun={executeQuery} /></div>
+               <Button
+                 variant="primary"
+                 size="md"
+                 className="w-full"
+                 onClick={executeQuery}
+                 loading={isExecuting}
+                 disabled={!query.trim() || selectedTargets.length === 0}
+                 leftIcon={isExecuting ? undefined : <Play className="w-4 h-4 fill-current" />}
+               >
+                 {isExecuting ? `Executing SQL on ${selectedTargets.length} Nodes...` : `Execute SQL on ${selectedTargets.length} Nodes`}
+               </Button>
             </div>
             <div className="flex-1 flex flex-col overflow-hidden">
                {results.length > 0 ? (<>
-{/* IMPROVEMENT 2: Cluster Output Scrollbar - visible horizontal scrollbar */}
-                  <div className="flex items-center bg-[var(--surface)] border-b border-[var(--border)] shrink-0 overflow-x-auto" style={{ scrollbarWidth: 'thin', scrollbarColor: 'var(--text-secondary) transparent' }}>
-                    <button onClick={() => { setShowMerged(false); setActiveTab(0); }} className={`px-4 py-3 text-[11px] font-bold border-r border-[var(--border)] transition-all ${!showMerged && activeTab === 0 ? "bg-[var(--background)] text-indigo-400 border-b-2 border-indigo-400" : "opacity-60 hover:opacity-100"}`}>CLUSTER OUTPUT</button>
-                    <button onClick={() => { setShowMerged(true); setActiveTab(0); }} className={`px-4 py-3 text-[11px] font-bold border-r border-[var(--border)] transition-all ${showMerged ? "bg-[var(--background)] text-emerald-400 border-b-2 border-emerald-400" : "opacity-60 hover:opacity-100"}`}>AGGREGATE RESULT</button>
+                  <div className="flex items-center bg-[var(--surface-elevated)] border-b border-[var(--neutral-6)] shrink-0 overflow-x-auto" style={{ scrollbarWidth: 'thin' }}>
+                    <button onClick={() => { setShowMerged(false); setActiveTab(0); }} className={`px-4 py-3 text-[11px] font-bold border-r border-[var(--neutral-6)] transition-all ${!showMerged && activeTab === 0 ? "bg-[var(--surface-base)] text-[var(--accent-11)] border-b-2 border-[var(--accent-9)]" : "opacity-60 hover:opacity-100"}`}>CLUSTER OUTPUT</button>
+                    <button onClick={() => { setShowMerged(true); setActiveTab(0); }} className={`px-4 py-3 text-[11px] font-bold border-r border-[var(--neutral-6)] transition-all ${showMerged ? "bg-[var(--surface-base)] text-[var(--success-11)] border-b-2 border-[var(--success-9)]" : "opacity-60 hover:opacity-100"}`}>AGGREGATE RESULT</button>
                     {!showMerged && results.map((r, i) => {
                       const isActive = !showMerged && activeTab === i;
                       const hasError = r.error;
                       return (
-                        <button 
-                          key={`${r.connectionId}-${r.databaseName}`} 
-                          onClick={() => { setActiveTab(i); setShowMerged(false); }} 
-                          className={`px-4 py-3 text-[11px] font-bold border-r border-[var(--border)] whitespace-nowrap transition-all flex items-center gap-2 ${isActive ? "bg-[var(--background)] text-indigo-400 border-b-2 border-indigo-400" : "opacity-60 hover:opacity-100"}`}
+                        <button
+                          key={`${r.connectionId}-${r.databaseName}`}
+                          onClick={() => { setActiveTab(i); setShowMerged(false); }}
+                          className={`px-4 py-3 text-[11px] font-bold border-r border-[var(--neutral-6)] whitespace-nowrap transition-all flex items-center gap-2 ${isActive ? "bg-[var(--surface-base)] text-[var(--accent-11)] border-b-2 border-[var(--accent-9)]" : "opacity-60 hover:opacity-100"}`}
                         >
-                          <span className="max-w-[100px] truncate">{r.connectionName}</span> 
-                          <span className="opacity-20 mx-1">/</span> 
+                          <span className="max-w-[100px] truncate">{r.connectionName}</span>
+                          <span className="opacity-20 mx-1">/</span>
                           <span className="max-w-[100px] truncate">{r.databaseName}</span>
-                          {hasError && <AlertCircle className="w-3 h-3 text-red-400" />}
-                          {r.status === 'done' && !hasError && <CheckCircle className="w-3 h-3 text-emerald-400" />}
-                          {r.status === 'running' && <Loader2 className="w-3 h-3 text-amber-400 animate-spin" />}
+                          {hasError && <AlertCircle className="w-3 h-3 text-[var(--danger-11)]" />}
+                          {r.status === 'done' && !hasError && <CheckCircle className="w-3 h-3 text-[var(--success-11)]" />}
+                          {r.status === 'running' && <Loader2 className="w-3 h-3 text-[var(--warning-11)] animate-spin" />}
                         </button>
                       );
                     })}
                   </div>
-                 <div className="flex items-center gap-2 px-4 py-2 bg-[var(--surface)] border-b border-[var(--border)] text-[10px]">
-                    <span className="font-bold text-[var(--text-secondary)] opacity-80">{sortedRows.length} rows retrieved</span>
+                 <div className="flex items-center gap-2 px-4 py-2 bg-[var(--surface-elevated)] border-b border-[var(--neutral-6)] text-[10px]">
+                    <span className="font-bold text-[var(--neutral-11)] opacity-80">{sortedRows.length} rows retrieved</span>
                     <div className="flex-1" />
-                    <div className="flex items-center bg-[var(--background)] border border-[var(--border)] rounded-md px-1.5 py-0.5 shadow-sm">
+                    <div className="flex items-center bg-[var(--surface-base)] border border-[var(--neutral-7)] rounded-md px-1.5 py-0.5 shadow-sm">
                       <Search className="w-3 h-3 opacity-30 mr-1.5" />
-                      <input 
-                        type="text" 
-                        placeholder="Jump to column..." 
+                      <input
+                        type="text"
+                        placeholder="Jump to column..."
                         list="mq-column-list"
-                        value={columnSearch} 
+                        value={columnSearch}
                         onKeyDown={(e) => {
                           if (e.key === "Enter") {
                             const idx = columns.findIndex(c => c.toLowerCase() === columnSearch.toLowerCase());
@@ -698,107 +712,106 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
                             });
                             setTimeout(() => { gridRef.current?.scrollToColumn(idx); gridRef.current?.focus(); }, 10);
                           }
-                        }} 
-                        className="bg-transparent outline-none w-32 text-[10px]" 
+                        }}
+                        className="bg-transparent outline-none w-32 text-[10px]"
                       />
                       <datalist id="mq-column-list">
                         {columns.map(c => <option key={c} value={c} />)}
                       </datalist>
                     </div>
-                    <select 
-                      value={selectedJumpCol}
-                      onChange={(e) => { 
-                        const val = e.target.value;
-                        setSelectedJumpCol(val);
-                        const v = parseInt(val); 
-                        if (!isNaN(v)) {
-                          // Visual selection feedback
-                          setGridSelection({
-                            columns: CompactSelection.empty(),
-                            rows: CompactSelection.empty(),
-                            current: {
-                                cell: [v, 0],
-                                range: { x: v, y: 0, width: 1, height: 1 },
-                                rangeStack: []
-                            }
-                          });
-                          setTimeout(() => {
-                            gridRef.current?.scrollToColumn(v);
-                            gridRef.current?.focus();
-                          }, 10);
-                        }
-                      }} 
-                      className="bg-[var(--background)] border border-[var(--border)] rounded-md px-2 py-0.5 outline-none text-[10px] shadow-sm cursor-pointer hover:border-indigo-400"
-                    >
-                      <option value="" disabled>Jump To Column...</option>
-                      {columns.map((c, i) => <option key={c} value={i.toString()}>{c}</option>)}
-                    </select>
-                    <div className="h-4 w-px bg-[var(--border)] mx-2" />
+                    <div className="w-44">
+                      <Select
+                        selectSize="sm"
+                        placeholder="Jump To Column..."
+                        value={selectedJumpCol}
+                        onValueChange={(val) => {
+                          setSelectedJumpCol(val);
+                          const v = parseInt(val);
+                          if (!isNaN(v)) {
+                            setGridSelection({
+                              columns: CompactSelection.empty(),
+                              rows: CompactSelection.empty(),
+                              current: {
+                                  cell: [v, 0],
+                                  range: { x: v, y: 0, width: 1, height: 1 },
+                                  rangeStack: []
+                              }
+                            });
+                            setTimeout(() => {
+                              gridRef.current?.scrollToColumn(v);
+                              gridRef.current?.focus();
+                            }, 10);
+                          }
+                        }}
+                        options={columns.map((c, i) => ({ label: c, value: i.toString() }))}
+                      />
+                    </div>
+                    <div className="h-4 w-px bg-[var(--neutral-6)] mx-2" />
                     <div className="flex items-center gap-1">
                         {settings.enabledExportFormats.includes("csv") && (
-                          <button onClick={() => exportData("csv")} className="p-1.5 hover:text-emerald-400 opacity-70 hover:opacity-100 transition-opacity" title="Export CSV"><Download className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => exportData("csv")} className="p-1.5 hover:text-[var(--accent-11)] opacity-70 hover:opacity-100 transition-opacity" title="Export CSV"><Download className="w-3.5 h-3.5" /></button>
                         )}
                         {settings.enabledExportFormats.includes("json") && (
-                          <button onClick={() => exportData("json")} className="p-1.5 hover:text-amber-400 opacity-70 hover:opacity-100 transition-opacity" title="Export JSON"><FileJson className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => exportData("json")} className="p-1.5 hover:text-[var(--accent-11)] opacity-70 hover:opacity-100 transition-opacity" title="Export JSON"><FileJson className="w-3.5 h-3.5" /></button>
                         )}
                         {settings.enabledExportFormats.includes("xml") && (
-                          <button onClick={() => exportData("xml")} className="p-1.5 hover:text-blue-400 opacity-70 hover:opacity-100 transition-opacity" title="Export XML"><FileCode className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => exportData("xml")} className="p-1.5 hover:text-[var(--accent-11)] opacity-70 hover:opacity-100 transition-opacity" title="Export XML"><FileCode className="w-3.5 h-3.5" /></button>
                         )}
                         {settings.enabledExportFormats.includes("html") && (
-                          <button onClick={() => exportData("html")} className="p-1.5 hover:text-orange-400 opacity-70 hover:opacity-100 transition-opacity" title="Export HTML"><Globe className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => exportData("html")} className="p-1.5 hover:text-[var(--accent-11)] opacity-70 hover:opacity-100 transition-opacity" title="Export HTML"><Globe className="w-3.5 h-3.5" /></button>
                         )}
                         {settings.enabledExportFormats.includes("sql") && (
-                          <button onClick={() => exportData("sql")} className="p-1.5 hover:text-cyan-400 opacity-70 hover:opacity-100 transition-opacity" title="Export SQL Insert"><Database className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => exportData("sql")} className="p-1.5 hover:text-[var(--accent-11)] opacity-70 hover:opacity-100 transition-opacity" title="Export SQL Insert"><Database className="w-3.5 h-3.5" /></button>
                         )}
                     </div>
                  </div>
-                  <div className="flex-1 relative min-h-0 bg-[var(--background)]">
+                  <div className="flex-1 relative min-h-0 bg-[var(--surface-base)]">
                     {/* Context Menu */}
                     {contextMenu && (
-                      <div 
-                        className="fixed z-[500] w-56 bg-[var(--surface)] border border-[var(--border)] rounded-xl shadow-2xl py-1.5 animate-in zoom-in-95 duration-100" 
+                      <div
+                        className="fixed z-[500] w-56 bg-[var(--surface-overlay)] border border-[var(--neutral-6)] rounded-xl shadow-2xl py-1.5 animate-in zoom-in-95 duration-100"
                         style={{ top: contextMenu.y, left: contextMenu.x }}
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <div className="px-3 py-1 text-[9px] uppercase font-bold text-[var(--text-secondary)] tracking-widest mb-1 border-b border-[var(--border)] pb-1">Selection Actions</div>
+                        <div className="px-3 py-1 text-[9px] uppercase font-bold text-[var(--neutral-11)] tracking-widest mb-1 border-b border-[var(--neutral-6)] pb-1">Selection Actions</div>
                         {contextMenu.col && (
-                          <button 
-                            onClick={() => { copyToClipboard(String(contextMenu.row[contextMenu.col!] || "")); setContextMenu(null); }} 
-                            className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-indigo-500 hover:text-white flex items-center gap-2 transition-colors"
+                          <button
+                            onClick={() => { copyToClipboard(String(contextMenu.row[contextMenu.col!] || "")); setContextMenu(null); }}
+                            className={menuItemClass}
                           >
                             <Copy className="w-3.5 h-3.5" /> Copy Cell
                           </button>
                         )}
-                        <button 
-                          onClick={() => { copyToClipboard(JSON.stringify(contextMenu.row, null, 2)); setContextMenu(null); }} 
-                          className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-indigo-500 hover:text-white flex items-center gap-2 transition-colors"
+                        <button
+                          onClick={() => { copyToClipboard(JSON.stringify(contextMenu.row, null, 2)); setContextMenu(null); }}
+                          className={menuItemClass}
                         >
                           <FileJson className="w-3.5 h-3.5" /> Copy Row as JSON
                         </button>
-                        <div className="my-1 border-t border-[var(--border)] opacity-50" />
-                        
+                        <div className="my-1 border-t border-[var(--neutral-6)] opacity-50" />
+
                         <div className="relative group/sql">
-                          <button className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-indigo-500 hover:text-white flex items-center justify-between transition-colors">
+                          <button className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--accent-9)] hover:text-white flex items-center justify-between transition-colors">
                             <div className="flex items-center gap-2"><Database className="w-3.5 h-3.5" /> Generate SQL</div>
                             <ChevronRight className="w-3 h-3 opacity-50" />
                           </button>
-                          <div className="hidden group-hover/sql:block absolute left-[calc(100%-8px)] top-0 w-48 bg-[var(--surface)] border border-[var(--border)] rounded-xl shadow-2xl py-1.5 animate-in slide-in-from-left-1 duration-150">
-                             <div className="px-3 py-1 text-[9px] uppercase font-bold text-[var(--text-secondary)] tracking-widest mb-1 border-b border-[var(--border)] pb-1 opacity-60">Output Format</div>
-                             <button 
-                                onClick={() => generateSqlForSelected("INSERT")} 
-                                className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-emerald-500 hover:text-white flex items-center gap-2 transition-colors"
+                          <div className="hidden group-hover/sql:block absolute left-[calc(100%-8px)] top-0 w-48 bg-[var(--surface-overlay)] border border-[var(--neutral-6)] rounded-xl shadow-2xl py-1.5 animate-in slide-in-from-left-1 duration-150">
+                             <div className="px-3 py-1 text-[9px] uppercase font-bold text-[var(--neutral-11)] tracking-widest mb-1 border-b border-[var(--neutral-6)] pb-1 opacity-60">Output Format</div>
+                             <button
+                                onClick={() => generateSqlForSelected("INSERT")}
+                                className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--success-9)] hover:text-white flex items-center gap-2 transition-colors"
                               >
                                 <Database className="w-3.5 h-3.5" /> SQL INSERTs
                               </button>
-                              <button 
-                                onClick={() => generateSqlForSelected("UPDATE")} 
-                                className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-amber-500 hover:text-white flex items-center gap-2 transition-colors"
+                              <button
+                                onClick={() => generateSqlForSelected("UPDATE")}
+                                className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--warning-9)] hover:text-white flex items-center gap-2 transition-colors"
                               >
                                 <RefreshCw className="w-3.5 h-3.5" /> SQL UPDATEs
                               </button>
-                              <button 
-                                onClick={() => generateSqlForSelected("DELETE")} 
-                                className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-red-500 hover:text-white flex items-center gap-2 transition-colors"
+                              <button
+                                onClick={() => generateSqlForSelected("DELETE")}
+                                className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--danger-9)] hover:text-white flex items-center gap-2 transition-colors"
                               >
                                 <Trash2 className="w-3.5 h-3.5" /> SQL DELETEs
                               </button>
@@ -807,26 +820,26 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
                       </div>
                     )}
                     {currentResult?.error ? (
-                      <div className="p-10 text-center"><AlertCircle className="w-12 h-12 text-rose-500 mx-auto mb-4 opacity-50" /><h3 className="font-bold text-rose-400 mb-2">Remote Execution Error</h3><pre className="text-xs text-rose-400/80 whitespace-pre-wrap font-mono bg-rose-500/5 p-4 rounded-xl border border-rose-500/20">{currentResult.error}</pre></div>
+                      <div className="p-10 text-center"><AlertCircle className="w-12 h-12 text-[var(--danger-9)] mx-auto mb-4 opacity-50" /><h3 className="font-bold text-[var(--danger-11)] mb-2">Remote Execution Error</h3><pre className="text-xs text-[var(--danger-11)] opacity-80 whitespace-pre-wrap font-mono bg-[var(--danger-3)] p-4 rounded-xl border border-[var(--danger-6)]">{currentResult.error}</pre></div>
                     ) : (
-                      <GridView 
-                        ref={gridRef} 
-                        data={sortedRows} 
-                        columns={columns} 
-                        rowMarkers="both" 
-                        gridSelection={gridSelection} 
-                        onGridSelectionChange={setGridSelection} 
-                        onHeaderClicked={(idx) => { 
-                          const c = columns[idx]; 
-                          if (sortCol === c) setSortDir(sortDir === "asc" ? "desc" : sortDir === "desc" ? null : "asc"); 
-                          else { setSortCol(c); setSortDir("asc"); } 
-                        }} 
+                      <GridView
+                        ref={gridRef}
+                        data={sortedRows}
+                        columns={columns}
+                        rowMarkers="both"
+                        gridSelection={gridSelection}
+                        onGridSelectionChange={setGridSelection}
+                        onHeaderClicked={(idx) => {
+                          const c = columns[idx];
+                          if (sortCol === c) setSortDir(sortDir === "asc" ? "desc" : sortDir === "desc" ? null : "asc");
+                          else { setSortCol(c); setSortDir("asc"); }
+                        }}
                         onCellContextMenu={(rowIdx, colIdx, e) => {
                           e.preventDefault();
                           setContextMenu({ x: e.pageX, y: e.pageY, row: sortedRows[rowIdx], col: columns[colIdx] });
                         }}
-                        columnWidths={columnWidths} 
-                        onColumnResized={(c, w) => setColumnWidths(prev => ({ ...prev, [c]: w }))} 
+                        columnWidths={columnWidths}
+                        onColumnResized={(c, w) => setColumnWidths(prev => ({ ...prev, [c]: w }))}
                       />
                     )}
                   </div>
@@ -834,22 +847,22 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
             </div>
           </div>
         </div>
-        {error && (<div className="absolute bottom-6 left-1/2 -translate-x-1/2 max-w-lg bg-rose-600 shadow-2xl shadow-rose-900/40 text-white px-6 py-4 rounded-2xl text-sm font-bold flex items-center gap-3 animate-in slide-in-from-bottom duration-300 z-[100]"><AlertCircle className="w-5 h-5 shrink-0" /><span className="flex-1 leading-tight">{error}</span><button onClick={() => setError(null)} className="p-1 hover:bg-white/10 rounded-lg"><X className="w-5 h-5" /></button></div>)}
-        {showToast && (<div className="absolute bottom-6 right-6 bg-indigo-600 text-white px-6 py-3 rounded-2xl shadow-2xl text-xs font-bold z-[600] animate-in slide-in-from-right flex items-center gap-2"><CheckCircle className="w-4 h-4" />{toastMessage}</div>)}
-        
-        {/* IMPROVEMENT 3: Tooltip for hovered status */}
+        {error && (<div className="absolute bottom-6 left-1/2 -translate-x-1/2 max-w-lg bg-[var(--danger-9)] shadow-2xl text-white px-6 py-4 rounded-2xl text-sm font-bold flex items-center gap-3 animate-in slide-in-from-bottom duration-300 z-[100]"><AlertCircle className="w-5 h-5 shrink-0" /><span className="flex-1 leading-tight">{error}</span><button onClick={() => setError(null)} className="p-1 hover:bg-white/10 rounded-lg"><X className="w-5 h-5" /></button></div>)}
+        {showToast && (<div className="absolute bottom-6 right-6 bg-[var(--accent-9)] text-white px-6 py-3 rounded-2xl shadow-2xl text-xs font-bold z-[600] animate-in slide-in-from-right flex items-center gap-2"><CheckCircle className="w-4 h-4" />{toastMessage}</div>)}
+
+        {/* Tooltip for hovered status */}
         {hoveredStatus && (
-          <div className="absolute z-[200] bg-[var(--surface)] border border-[var(--border)] rounded-xl shadow-xl p-3 min-w-[200px] animate-in fade-in zoom-in-95 duration-200"
+          <div className="absolute z-[200] bg-[var(--surface-overlay)] border border-[var(--neutral-6)] rounded-xl shadow-xl p-3 min-w-[200px] animate-in fade-in zoom-in-95 duration-200"
                style={{ bottom: 'auto', left: '320px', top: '50%', transform: 'translateY(-50%)' }}>
             <div className="flex items-center gap-2 mb-2">
-              {hoveredStatus.result.status === 'running' && <Loader2 className="w-4 h-4 text-amber-400 animate-spin" />}
-              {hoveredStatus.result.status === 'done' && <CheckCircle className="w-4 h-4 text-emerald-400" />}
-              {hoveredStatus.result.status === 'error' && <AlertCircle className="w-4 h-4 text-red-400" />}
-              <span className="text-xs font-bold text-[var(--text-primary)]">
+              {hoveredStatus.result.status === 'running' && <Loader2 className="w-4 h-4 text-[var(--warning-11)] animate-spin" />}
+              {hoveredStatus.result.status === 'done' && <CheckCircle className="w-4 h-4 text-[var(--success-11)]" />}
+              {hoveredStatus.result.status === 'error' && <AlertCircle className="w-4 h-4 text-[var(--danger-11)]" />}
+              <span className="text-xs font-bold text-[var(--neutral-12)]">
                 {hoveredStatus.result.connectionName} / {hoveredStatus.db}
               </span>
             </div>
-            <div className="text-[10px] text-[var(--text-secondary)] space-y-1">
+            <div className="text-[10px] text-[var(--neutral-11)] space-y-1">
               {hoveredStatus.result.status === 'running' && <p>Query is being executed...</p>}
               {hoveredStatus.result.status === 'done' && (
                 <>
@@ -858,137 +871,128 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
                 </>
               )}
               {hoveredStatus.result.status === 'error' && (
-                <p className="text-red-400 flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Click for details</p>
+                <p className="text-[var(--danger-11)] flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Click for details</p>
               )}
             </div>
-            <p className="text-[9px] text-[var(--text-secondary)] mt-2 pt-2 border-t border-[var(--border)]">Click for full details</p>
+            <p className="text-[9px] text-[var(--neutral-11)] mt-2 pt-2 border-t border-[var(--neutral-6)]">Click for full details</p>
           </div>
         )}
+      </Dialog>
 
-        {/* IMPROVEMENT 3: Modal for detailed status information */}
-        {statusDetailModal && (
-          <div className="fixed inset-0 z-[300] flex items-center justify-center p-4">
-            <div className="absolute inset-0 bg-black/70 backdrop-blur-md" onClick={() => setStatusDetailModal(null)} />
-            <div className="relative w-[500px] max-h-[80vh] bg-[var(--surface)] border border-[var(--border)] rounded-2xl shadow-2xl overflow-hidden flex flex-col">
-              <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border)] bg-[var(--surface-raised)]">
-                <div className="flex items-center gap-3">
-                  {statusDetailModal.status === 'running' && <Loader2 className="w-5 h-5 text-amber-400 animate-spin" />}
-                  {statusDetailModal.status === 'done' && <CheckCircle className="w-5 h-5 text-emerald-400" />}
-                  {statusDetailModal.status === 'error' && <AlertCircle className="w-5 h-5 text-red-400" />}
-                  <div>
-                    <h3 className="font-bold text-[var(--text-primary)]">
-                      {statusDetailModal.status === 'running' ? 'Query Running' : 
-                       statusDetailModal.status === 'done' ? 'Query Completed' : 'Query Error'}
-                    </h3>
-                    <p className="text-[10px] text-[var(--text-secondary)]">
-                      {statusDetailModal.connectionName} / {statusDetailModal.databaseName}
-                    </p>
-                  </div>
-                </div>
-                <button onClick={() => setStatusDetailModal(null)} className="p-2 hover:bg-[var(--border)] rounded-lg transition-colors">
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-              
-              <div className="flex-1 overflow-y-auto p-5 space-y-4">
-                {/* Execution Info Section */}
-                <div className="bg-[var(--background)] rounded-xl p-4 border border-[var(--border)]">
-                  <h4 className="text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-3 flex items-center gap-2">
-                    <Info className="w-4 h-4" /> Execution Details
-                  </h4>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="bg-[var(--surface)] rounded-lg p-3 border border-[var(--border)]">
-                      <span className="text-[10px] text-[var(--text-secondary)] block mb-1">Status</span>
-                      <span className={`text-xs font-bold ${
-                        statusDetailModal.status === 'done' ? 'text-emerald-400' :
-                        statusDetailModal.status === 'error' ? 'text-red-400' : 'text-amber-400'
-                      }`}>
-                        {statusDetailModal.status?.toUpperCase()}
-                      </span>
-                    </div>
-                    <div className="bg-[var(--surface)] rounded-lg p-3 border border-[var(--border)]">
-                      <span className="text-[10px] text-[var(--text-secondary)] block mb-1">Duration</span>
-                      <span className="text-xs font-bold text-[var(--text-primary)] flex items-center gap-1">
-                        <Clock className="w-3 h-3" /> {statusDetailModal.duration}ms
-                      </span>
-                    </div>
-                    {statusDetailModal.status !== 'error' && (
-                      <div className="bg-[var(--surface)] rounded-lg p-3 border border-[var(--border)]">
-                        <span className="text-[10px] text-[var(--text-secondary)] block mb-1">Rows Affected</span>
-                        <span className="text-xs font-bold text-[var(--text-primary)] flex items-center gap-1">
-                          <Table2 className="w-3 h-3" /> {statusDetailModal.rowsAffected}
-                        </span>
-                      </div>
-                    )}
-                    <div className="bg-[var(--surface)] rounded-lg p-3 border border-[var(--border)]">
-                      <span className="text-[10px] text-[var(--text-secondary)] block mb-1">Columns</span>
-                      <span className="text-xs font-bold text-[var(--text-primary)]">{statusDetailModal.columns.length}</span>
-                    </div>
-                  </div>
-                </div>
+      {/* Detailed status information modal */}
+      {statusDetailModal && (
+        <Dialog open={!!statusDetailModal} onClose={() => setStatusDetailModal(null)} className="w-[500px] max-w-[95vw] max-h-[80vh]">
+          <Dialog.Title onClose={() => setStatusDetailModal(null)}>
+            <span className="flex items-center gap-3">
+              {statusDetailModal.status === 'running' && <Loader2 className="w-5 h-5 text-[var(--warning-11)] animate-spin" />}
+              {statusDetailModal.status === 'done' && <CheckCircle className="w-5 h-5 text-[var(--success-11)]" />}
+              {statusDetailModal.status === 'error' && <AlertCircle className="w-5 h-5 text-[var(--danger-11)]" />}
+              <span className="flex flex-col leading-tight">
+                <span>
+                  {statusDetailModal.status === 'running' ? 'Query Running' :
+                   statusDetailModal.status === 'done' ? 'Query Completed' : 'Query Error'}
+                </span>
+                <span className="text-[10px] font-normal text-[var(--neutral-11)]">
+                  {statusDetailModal.connectionName} / {statusDetailModal.databaseName}
+                </span>
+              </span>
+            </span>
+          </Dialog.Title>
 
-                {/* Error Section - only show if there's an error */}
-                {statusDetailModal.error && (
-                  <div className="bg-rose-500/10 rounded-xl p-4 border border-rose-500/30">
-                    <h4 className="text-[11px] font-bold text-rose-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-                      <AlertTriangle className="w-4 h-4" /> Error Details
-                    </h4>
-                    <div className="space-y-3">
-                      <div className="bg-rose-500/10 rounded-lg p-3 border border-rose-500/20">
-                        <span className="text-[10px] text-rose-400/60 block mb-1">Error Message</span>
-                        <pre className="text-xs font-mono text-rose-400 whitespace-pre-wrap">{statusDetailModal.error}</pre>
-                      </div>
-                      {/* Check for additional error properties like stack trace */}
-                      {(statusDetailModal.error as any)?.stack && (
-                        <div className="bg-rose-500/10 rounded-lg p-3 border border-rose-500/20">
-                          <span className="text-[10px] text-rose-400/60 block mb-1">Stack Trace</span>
-                          <pre className="text-[10px] font-mono text-rose-400/80 whitespace-pre-wrap max-h-32 overflow-y-auto">{(statusDetailModal.error as any).stack}</pre>
-                        </div>
-                      )}
-                    </div>
+          <Dialog.Body className="space-y-4">
+            {/* Execution Info Section */}
+            <div className="bg-[var(--surface-base)] rounded-xl p-4 border border-[var(--neutral-6)]">
+              <h4 className="text-[11px] font-bold text-[var(--neutral-11)] uppercase tracking-wider mb-3 flex items-center gap-2">
+                <Info className="w-4 h-4" /> Execution Details
+              </h4>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-[var(--surface-elevated)] rounded-lg p-3 border border-[var(--neutral-6)]">
+                  <span className="text-[10px] text-[var(--neutral-11)] block mb-1">Status</span>
+                  <span className={`text-xs font-bold ${
+                    statusDetailModal.status === 'done' ? 'text-[var(--success-11)]' :
+                    statusDetailModal.status === 'error' ? 'text-[var(--danger-11)]' : 'text-[var(--warning-11)]'
+                  }`}>
+                    {statusDetailModal.status?.toUpperCase()}
+                  </span>
+                </div>
+                <div className="bg-[var(--surface-elevated)] rounded-lg p-3 border border-[var(--neutral-6)]">
+                  <span className="text-[10px] text-[var(--neutral-11)] block mb-1">Duration</span>
+                  <span className="text-xs font-bold text-[var(--neutral-12)] flex items-center gap-1">
+                    <Clock className="w-3 h-3" /> {statusDetailModal.duration}ms
+                  </span>
+                </div>
+                {statusDetailModal.status !== 'error' && (
+                  <div className="bg-[var(--surface-elevated)] rounded-lg p-3 border border-[var(--neutral-6)]">
+                    <span className="text-[10px] text-[var(--neutral-11)] block mb-1">Rows Affected</span>
+                    <span className="text-xs font-bold text-[var(--neutral-12)] flex items-center gap-1">
+                      <Table2 className="w-3 h-3" /> {statusDetailModal.rowsAffected}
+                    </span>
                   </div>
                 )}
-
-                {/* Success/Warnings Section */}
-                {statusDetailModal.status === 'done' && (
-                  <div className="bg-emerald-500/10 rounded-xl p-4 border border-emerald-500/30">
-                    <h4 className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-                      <CheckCircle className="w-4 h-4" /> Query Result Summary
-                    </h4>
-                    <p className="text-xs text-emerald-400/80">
-                      Query executed successfully on {statusDetailModal.databaseName} database.
-                      {statusDetailModal.rowsAffected > 0 
-                        ? ` Returned ${statusDetailModal.rowsAffected} rows with ${statusDetailModal.columns.length} columns.`
-                        : ' No rows returned (possibly an UPDATE/DELETE operation).'}
-                    </p>
-                    {statusDetailModal.columns.length > 0 && (
-                      <div className="mt-3">
-                        <span className="text-[10px] text-emerald-400/60 block mb-2">Columns in result:</span>
-                        <div className="flex flex-wrap gap-1">
-                          {statusDetailModal.columns.map((col, i) => (
-                            <span key={i} className="text-[10px] px-2 py-1 bg-emerald-500/20 text-emerald-400 rounded-md font-medium">
-                              {col}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <div className="px-5 py-4 border-t border-[var(--border)] bg-[var(--surface-raised)] flex justify-end">
-                <button 
-                  onClick={() => setStatusDetailModal(null)}
-                  className="px-4 py-2 bg-[var(--border)] hover:bg-[var(--text-secondary)] text-[var(--text-primary)] text-xs font-bold rounded-lg transition-colors"
-                >
-                  Close
-                </button>
+                <div className="bg-[var(--surface-elevated)] rounded-lg p-3 border border-[var(--neutral-6)]">
+                  <span className="text-[10px] text-[var(--neutral-11)] block mb-1">Columns</span>
+                  <span className="text-xs font-bold text-[var(--neutral-12)]">{statusDetailModal.columns.length}</span>
+                </div>
               </div>
             </div>
-          </div>
-        )}
-      </div>
-    </div>
+
+            {/* Error Section - only show if there's an error */}
+            {statusDetailModal.error && (
+              <div className="bg-[var(--danger-3)] rounded-xl p-4 border border-[var(--danger-6)]">
+                <h4 className="text-[11px] font-bold text-[var(--danger-11)] uppercase tracking-wider mb-3 flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4" /> Error Details
+                </h4>
+                <div className="space-y-3">
+                  <div className="bg-[var(--danger-3)] rounded-lg p-3 border border-[var(--danger-6)]">
+                    <span className="text-[10px] text-[var(--danger-11)] opacity-60 block mb-1">Error Message</span>
+                    <pre className="text-xs font-mono text-[var(--danger-11)] whitespace-pre-wrap">{statusDetailModal.error}</pre>
+                  </div>
+                  {/* Check for additional error properties like stack trace */}
+                  {(statusDetailModal.error as any)?.stack && (
+                    <div className="bg-[var(--danger-3)] rounded-lg p-3 border border-[var(--danger-6)]">
+                      <span className="text-[10px] text-[var(--danger-11)] opacity-60 block mb-1">Stack Trace</span>
+                      <pre className="text-[10px] font-mono text-[var(--danger-11)] opacity-80 whitespace-pre-wrap max-h-32 overflow-y-auto">{(statusDetailModal.error as any).stack}</pre>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Success/Warnings Section */}
+            {statusDetailModal.status === 'done' && (
+              <div className="bg-[var(--success-3)] rounded-xl p-4 border border-[var(--success-6)]">
+                <h4 className="text-[11px] font-bold text-[var(--success-11)] uppercase tracking-wider mb-3 flex items-center gap-2">
+                  <CheckCircle className="w-4 h-4" /> Query Result Summary
+                </h4>
+                <p className="text-xs text-[var(--success-11)] opacity-80">
+                  Query executed successfully on {statusDetailModal.databaseName} database.
+                  {statusDetailModal.rowsAffected > 0
+                    ? ` Returned ${statusDetailModal.rowsAffected} rows with ${statusDetailModal.columns.length} columns.`
+                    : ' No rows returned (possibly an UPDATE/DELETE operation).'}
+                </p>
+                {statusDetailModal.columns.length > 0 && (
+                  <div className="mt-3">
+                    <span className="text-[10px] text-[var(--success-11)] opacity-60 block mb-2">Columns in result:</span>
+                    <div className="flex flex-wrap gap-1">
+                      {statusDetailModal.columns.map((col, i) => (
+                        <span key={i} className="text-[10px] px-2 py-1 bg-[var(--success-3)] text-[var(--success-11)] rounded-md font-medium">
+                          {col}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </Dialog.Body>
+
+          <Dialog.Footer>
+            <Button variant="secondary" size="md" onClick={() => setStatusDetailModal(null)}>
+              Close
+            </Button>
+          </Dialog.Footer>
+        </Dialog>
+      )}
+    </>
   );
 }
