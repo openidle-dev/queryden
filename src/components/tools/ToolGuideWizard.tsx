@@ -1,5 +1,9 @@
-import React, { useState } from "react";
-import { X, ChevronRight, ChevronLeft, Database, Terminal, Settings, ShieldCheck, CheckCircle2 } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { ChevronRight, ChevronLeft, Database, Terminal, Settings, ShieldCheck, CheckCircle2 } from "lucide-react";
+import { Dialog } from "../ui/Dialog";
+import { Button } from "../ui/Button";
+import { IconButton } from "../ui/IconButton";
+import { X } from "lucide-react";
 
 interface GuideStep {
   title: string;
@@ -24,19 +28,19 @@ export function ToolGuideWizard({ isOpen, onClose, type }: ToolGuideWizardProps)
       icon: <Database className="w-6 h-6 text-blue-500" />,
       content: (
         <div className="space-y-4">
-          <p className="text-sm text-[var(--text-secondary)] leading-relaxed">
+          <p className="text-sm text-[var(--neutral-11)] leading-relaxed">
             The Clone Database feature utilizes PostgreSQL's native <code className="text-blue-400 bg-blue-500/10 px-1 rounded text-xs">CREATE DATABASE ... TEMPLATE</code> syntax.
           </p>
-          <div className="bg-[var(--surface-raised)] p-4 rounded-xl border border-[var(--border)]">
-            <h4 className="text-xs font-bold uppercase tracking-wider mb-2 text-[var(--text-primary)]">Supported Providers</h4>
+          <div className="bg-[var(--surface-base)] p-4 rounded-xl border border-[var(--neutral-6)]">
+            <h4 className="text-xs font-bold uppercase tracking-wider mb-2 text-[var(--neutral-12)]">Supported Providers</h4>
             <ul className="space-y-2">
-              <li className="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+              <li className="flex items-center gap-2 text-sm text-[var(--neutral-11)]">
                 <CheckCircle2 className="w-4 h-4 text-green-500" /> PostgreSQL (Standard)
               </li>
-              <li className="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+              <li className="flex items-center gap-2 text-sm text-[var(--neutral-11)]">
                 <CheckCircle2 className="w-4 h-4 text-green-500" /> Supabase / Neon
               </li>
-              <li className="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+              <li className="flex items-center gap-2 text-sm text-[var(--neutral-11)]">
                 <CheckCircle2 className="w-4 h-4 text-green-500" /> TimescaleDB / CockroachDB
               </li>
             </ul>
@@ -50,22 +54,16 @@ export function ToolGuideWizard({ isOpen, onClose, type }: ToolGuideWizardProps)
       icon: <Terminal className="w-6 h-6 text-amber-500" />,
       content: (
         <div className="space-y-4">
-          <p className="text-sm text-[var(--text-secondary)] leading-relaxed">
+          <p className="text-sm text-[var(--neutral-11)] leading-relaxed">
             Ensure you have an active PostgreSQL connection selected in the side explorer.
           </p>
           <ol className="space-y-3">
-            <li className="flex gap-3">
-              <span className="w-5 h-5 rounded-full bg-amber-500/20 text-amber-500 text-[10px] flex items-center justify-center font-bold shrink-0 mt-0.5">1</span>
-              <p className="text-xs text-[var(--text-secondary)]">Open the <strong>Database Explorer</strong> (sidebar).</p>
-            </li>
-            <li className="flex gap-3">
-              <span className="w-5 h-5 rounded-full bg-amber-500/20 text-amber-500 text-[10px] flex items-center justify-center font-bold shrink-0 mt-0.5">2</span>
-              <p className="text-xs text-[var(--text-secondary)]">Click on a <strong>PostgreSQL</strong> instance connection.</p>
-            </li>
-            <li className="flex gap-3">
-              <span className="w-5 h-5 rounded-full bg-amber-500/20 text-amber-500 text-[10px] flex items-center justify-center font-bold shrink-0 mt-0.5">3</span>
-              <p className="text-xs text-[var(--text-secondary)]">Wait for the databases to load before opening the Clone tool.</p>
-            </li>
+            {["Open the Database Explorer (sidebar).", "Click on a PostgreSQL instance connection.", "Wait for the databases to load before opening the Clone tool."].map((text, i) => (
+              <li key={i} className="flex gap-3">
+                <span className="w-5 h-5 rounded-full bg-amber-500/20 text-amber-500 text-[10px] flex items-center justify-center font-bold shrink-0 mt-0.5">{i + 1}</span>
+                <p className="text-xs text-[var(--neutral-11)]">{text}</p>
+              </li>
+            ))}
           </ol>
         </div>
       )
@@ -76,13 +74,13 @@ export function ToolGuideWizard({ isOpen, onClose, type }: ToolGuideWizardProps)
       icon: <ShieldCheck className="w-6 h-6 text-green-500" />,
       content: (
         <div className="space-y-4">
-          <p className="text-sm text-[var(--text-secondary)] leading-relaxed">
+          <p className="text-sm text-[var(--neutral-11)] leading-relaxed">
             The connected user must have the <code className="text-green-400 bg-green-500/10 px-1 rounded text-xs">CREATEDB</code> attribute set.
           </p>
-          <div className="bg-[var(--background)] p-3 rounded border border-[var(--border)] font-mono text-[10px] text-green-400/80">
+          <div className="bg-[var(--surface-base)] p-3 rounded border border-[var(--neutral-6)] font-mono text-[10px] text-green-400/80">
             ALTER USER my_user WITH CREATEDB;
           </div>
-          <p className="text-[10px] text-[var(--text-secondary)] italic italic">
+          <p className="text-[10px] text-[var(--neutral-11)] italic">
             Note: If you are using a managed service like Supabase, this is usually granted by default to the 'postgres' role.
           </p>
         </div>
@@ -97,7 +95,7 @@ export function ToolGuideWizard({ isOpen, onClose, type }: ToolGuideWizardProps)
       icon: <Database className="w-6 h-6 text-blue-500" />,
       content: (
         <div className="space-y-4">
-          <p className="text-sm text-[var(--text-secondary)] leading-relaxed">
+          <p className="text-sm text-[var(--neutral-11)] leading-relaxed">
             Schema comparison and merging requires access to two databases within an active server cluster.
           </p>
           <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg text-xs text-blue-400 leading-relaxed">
@@ -113,22 +111,12 @@ export function ToolGuideWizard({ isOpen, onClose, type }: ToolGuideWizardProps)
       content: (
         <div className="space-y-4">
           <ol className="space-y-3">
-            <li className="flex gap-3">
-              <span className="w-5 h-5 rounded-full bg-purple-500/20 text-purple-500 text-[10px] flex items-center justify-center font-bold shrink-0 mt-0.5">1</span>
-              <p className="text-xs text-[var(--text-secondary)]">Click the <strong>Add Connection</strong> (+) button in the Explorer.</p>
-            </li>
-            <li className="flex gap-3">
-              <span className="w-5 h-5 rounded-full bg-purple-500/20 text-purple-500 text-[10px] flex items-center justify-center font-bold shrink-0 mt-0.5">2</span>
-              <p className="text-xs text-[var(--text-secondary)]">Enter your server credentials and click <strong>Connect</strong>.</p>
-            </li>
-            <li className="flex gap-3">
-              <span className="w-5 h-5 rounded-full bg-purple-500/20 text-purple-500 text-[10px] flex items-center justify-center font-bold shrink-0 mt-0.5">3</span>
-              <p className="text-xs text-[var(--text-secondary)]">Wait for the browser to populate the list of databases in the sidebar.</p>
-            </li>
-            <li className="flex gap-3">
-              <span className="w-5 h-5 rounded-full bg-purple-500/20 text-purple-500 text-[10px] flex items-center justify-center font-bold shrink-0 mt-0.5">4</span>
-              <p className="text-xs text-[var(--text-secondary)]">Re-open the <strong>Compare Schema</strong> tool from the toolbar.</p>
-            </li>
+            {["Click the Add Connection (+) button in the Explorer.", "Enter your server credentials and click Connect.", "Wait for the browser to populate the list of databases in the sidebar.", "Re-open the Compare Schema tool from the toolbar."].map((text, i) => (
+              <li key={i} className="flex gap-3">
+                <span className="w-5 h-5 rounded-full bg-purple-500/20 text-purple-500 text-[10px] flex items-center justify-center font-bold shrink-0 mt-0.5">{i + 1}</span>
+                <p className="text-xs text-[var(--neutral-11)]">{text}</p>
+              </li>
+            ))}
           </ol>
         </div>
       )
@@ -136,70 +124,73 @@ export function ToolGuideWizard({ isOpen, onClose, type }: ToolGuideWizardProps)
   ];
 
   const steps = type === "postgres-required" ? postgresSteps : clusterSteps;
-  const current = steps[currentStep];
-
-  if (!isOpen) return null;
+  // The Dialog migration keeps this mounted via open={isOpen}, so currentStep
+  // persists across opens — reset it, and clamp in case `type` has fewer steps.
+  useEffect(() => {
+    if (isOpen) setCurrentStep(0);
+  }, [isOpen, type]);
+  const safeStep = Math.min(currentStep, steps.length - 1);
+  const current = steps[safeStep];
 
   return (
-    <div className="fixed inset-0 z-[110] bg-black/80 flex items-center justify-center p-8 backdrop-blur-md animate-in fade-in duration-300">
-      <div className="bg-[var(--surface)] w-full max-w-lg rounded-2xl shadow-2xl flex flex-col overflow-hidden border border-[var(--border)] animate-in slide-in-from-bottom-4 duration-300">
-        <div className="p-5 border-b border-[var(--border)] flex items-center justify-between bg-[var(--surface-raised)]">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-[var(--background)] rounded-xl border border-[var(--border)]">
-              {current.icon}
-            </div>
-            <div>
-              <h2 className="text-lg font-bold text-white leading-tight">{current.title}</h2>
-              <p className="text-xs text-[var(--text-secondary)] font-medium">{current.description}</p>
-            </div>
+    <Dialog open={isOpen} onClose={onClose} size="lg">
+      {/* Custom header — two-line title with a per-step icon box doesn't fit the
+          single-row Dialog.Title shape, so it's composed inline here. */}
+      <div className="p-5 border-b border-[var(--neutral-6)] flex items-center justify-between bg-[var(--surface-panel)]">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-[var(--surface-base)] rounded-xl border border-[var(--neutral-6)]">
+            {current.icon}
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-colors group">
-            <X className="w-5 h-5 opacity-60 group-hover:opacity-100" />
-          </button>
-        </div>
-
-        <div className="p-8 min-h-[300px]">
-          <div className="animate-in fade-in slide-in-from-right-4 duration-300">
-            {current.content}
+          <div>
+            <h2 className="text-lg font-bold text-[var(--neutral-12)] leading-tight">{current.title}</h2>
+            <p className="text-xs text-[var(--neutral-11)] font-medium">{current.description}</p>
           </div>
         </div>
+        <IconButton icon={<X />} label="Close" variant="ghost" size="sm" onClick={onClose} />
+      </div>
 
-        <div className="p-5 border-t border-[var(--border)] bg-[var(--surface-raised)] flex items-center justify-between">
-          <div className="flex gap-1">
-            {steps.map((_, idx) => (
-              <div 
-                key={idx} 
-                className={`h-1.5 rounded-full transition-all duration-300 ${idx === currentStep ? 'w-8 bg-blue-500' : 'w-2 bg-[var(--border)]'}`}
-              />
-            ))}
-          </div>
-          
-          <div className="flex gap-3">
-            <button 
-              onClick={() => setCurrentStep(prev => Math.max(0, prev - 1))}
-              disabled={currentStep === 0}
-              className="px-4 py-2 flex items-center gap-2 text-sm font-bold text-[var(--text-secondary)] hover:text-white disabled:opacity-30 transition-colors"
+      <Dialog.Body className="min-h-[300px] p-8">
+        <div className="animate-in fade-in slide-in-from-right-4 duration-300">
+          {current.content}
+        </div>
+      </Dialog.Body>
+
+      <div className="p-5 border-t border-[var(--neutral-6)] bg-[var(--surface-panel)] flex items-center justify-between">
+        <div className="flex gap-1">
+          {steps.map((_, idx) => (
+            <div
+              key={idx}
+              className={`h-1.5 rounded-full transition-all duration-300 ${idx === safeStep ? 'w-8 bg-[var(--accent-9)]' : 'w-2 bg-[var(--neutral-6)]'}`}
+            />
+          ))}
+        </div>
+
+        <div className="flex gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setCurrentStep(Math.max(0, safeStep - 1))}
+            disabled={safeStep === 0}
+            leftIcon={<ChevronLeft className="w-4 h-4" />}
+          >
+            Back
+          </Button>
+          {safeStep < steps.length - 1 ? (
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => setCurrentStep(safeStep + 1)}
+              rightIcon={<ChevronRight className="w-4 h-4" />}
             >
-              <ChevronLeft className="w-4 h-4" /> Back
-            </button>
-            {currentStep < steps.length - 1 ? (
-              <button 
-                onClick={() => setCurrentStep(prev => prev + 1)}
-                className="px-6 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-500/20 transition-all flex items-center gap-2"
-              >
-                Next Step <ChevronRight className="w-4 h-4" />
-              </button>
-            ) : (
-              <button 
-                onClick={onClose}
-                className="px-6 py-2 bg-green-500 hover:bg-green-600 text-white rounded-xl font-bold text-sm shadow-lg shadow-green-500/20 transition-all flex items-center gap-2"
-              >
-                Got it!
-              </button>
-            )}
-          </div>
+              Next step
+            </Button>
+          ) : (
+            <Button variant="primary" size="sm" onClick={onClose}>
+              Got it!
+            </Button>
+          )}
         </div>
       </div>
-    </div>
+    </Dialog>
   );
 }
