@@ -1,6 +1,10 @@
 import { useState } from "react";
-import { X, Plus, Trash2, Check, AlertCircle, Loader2 } from "lucide-react";
+import { Plus, Trash2, AlertCircle } from "lucide-react";
 import { CreateTablePayload } from "../../contexts/ConnectionContext";
+import { Dialog } from "../ui/Dialog";
+import { Input } from "../ui/Input";
+import { Button } from "../ui/Button";
+import { IconButton } from "../ui/IconButton";
 
 interface CreateTableDialogProps {
   isOpen: boolean;
@@ -29,8 +33,6 @@ export function CreateTableDialog({ isOpen, onClose, onCreate, dbType }: CreateT
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (!isOpen) return null;
-
   const addColumn = () => {
     setColumns([...columns, { name: "", type: "TEXT", nullable: true, primaryKey: false, defaultValue: "" }]);
   };
@@ -44,12 +46,6 @@ export function CreateTableDialog({ isOpen, onClose, onCreate, dbType }: CreateT
   const handleColumnChange = (index: number, field: string, value: any) => {
     const newCols = [...columns];
     (newCols[index] as any)[field] = value;
-    
-    // If setting something as primary key, maybe unset others if it's single PK
-    if (field === "primaryKey" && value === true) {
-       // Optional: enforce single PK if needed for simplicity
-    }
-    
     setColumns(newCols);
   };
 
@@ -80,73 +76,70 @@ export function CreateTableDialog({ isOpen, onClose, onCreate, dbType }: CreateT
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden animate-in zoom-in-95 duration-200">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border)] bg-[var(--surface-light)]">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
-            <Plus className="w-5 h-5 text-blue-400" /> Create New Table
-          </h2>
-          <button onClick={onClose} className="p-1 hover:bg-[var(--border)] rounded-lg transition-colors">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
+    <Dialog open={isOpen} onClose={onClose} size="xl">
+      <Dialog.Title onClose={onClose}>
+        <span className="inline-flex items-center gap-2">
+          <Plus className="w-4 h-4 text-[var(--accent-9)]" />
+          <span>Create New Table</span>
+        </span>
+      </Dialog.Title>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-6">
+      <form onSubmit={handleSubmit} className="contents">
+        <Dialog.Body className="space-y-4">
+          <Input
+            label="Table name"
+            autoFocus
+            value={tableName}
+            onChange={(e) => setTableName(e.target.value)}
+            placeholder="e.g. users, products"
+          />
+
           <div className="space-y-2">
-            <label className="text-sm font-medium text-[var(--text-secondary)]">Table Name</label>
-            <input
-              autoFocus
-              type="text"
-              value={tableName}
-              onChange={(e) => setTableName(e.target.value)}
-              placeholder="e.g. users, products"
-              className="w-full bg-[var(--input-bg)] border border-[var(--border)] rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all"
-            />
-          </div>
-
-          <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <label className="text-sm font-medium text-[var(--text-secondary)]">Columns</label>
-              <button
+              <label className="text-xs font-medium text-[var(--neutral-12)]">Columns</label>
+              <Button
                 type="button"
                 onClick={addColumn}
-                className="flex items-center gap-1.5 text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors"
+                variant="ghost"
+                size="xs"
+                leftIcon={<Plus className="w-3 h-3" />}
+                className="text-[var(--accent-11)]"
               >
-                <Plus className="w-3.5 h-3.5" /> Add Column
-              </button>
+                Add column
+              </Button>
             </div>
 
-            <div className="border border-[var(--border)] rounded-lg overflow-hidden bg-[var(--input-bg)]">
+            <div className="border border-[var(--neutral-6)] rounded-md overflow-hidden bg-[var(--surface-base)]">
               <table className="w-full text-left border-collapse">
-                <thead className="bg-[var(--surface-light)] text-[10px] uppercase tracking-wider text-[var(--text-secondary)]">
+                <thead className="bg-[var(--neutral-3)] text-[10px] uppercase tracking-wider text-[var(--neutral-11)]">
                   <tr>
-                    <th className="px-4 py-2 font-semibold">Name</th>
-                    <th className="px-4 py-2 font-semibold">Type</th>
-                    <th className="px-4 py-2 font-semibold text-center">PK</th>
-                    <th className="px-4 py-2 font-semibold text-center">NULL</th>
-                    <th className="px-4 py-2 font-semibold">Default</th>
-                    <th className="px-4 py-2 w-10"></th>
+                    <th className="px-3 py-2 font-semibold">Name</th>
+                    <th className="px-3 py-2 font-semibold">Type</th>
+                    <th className="px-3 py-2 font-semibold text-center">PK</th>
+                    <th className="px-3 py-2 font-semibold text-center">NULL</th>
+                    <th className="px-3 py-2 font-semibold">Default</th>
+                    <th className="px-3 py-2 w-8"></th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[var(--border)]">
+                <tbody className="divide-y divide-[var(--neutral-6)]">
                   {columns.map((col, idx) => (
-                    <tr key={idx} className="group hover:bg-[var(--border)]/30 transition-colors">
+                    <tr key={idx} className="group hover:bg-[var(--neutral-3)] transition-colors">
                       <td className="p-1 px-2">
                         <input
                           type="text"
                           value={col.name}
                           onChange={(e) => handleColumnChange(idx, "name", e.target.value)}
                           placeholder="column_name"
-                          className="w-full bg-transparent border-none rounded px-2 py-1 text-xs focus:ring-1 focus:ring-blue-500/50 outline-none"
+                          className="w-full bg-transparent border-none rounded px-2 py-1 text-xs text-[var(--neutral-12)] placeholder:text-[var(--neutral-9)] focus:ring-1 focus:ring-[var(--accent-8)]/40 outline-none"
                         />
                       </td>
                       <td className="p-1 px-2">
                         <select
                           value={col.type}
                           onChange={(e) => handleColumnChange(idx, "type", e.target.value)}
-                          className="w-full bg-transparent border-none rounded px-2 py-1 text-xs focus:ring-1 focus:ring-blue-500/50 outline-none appearance-none cursor-pointer"
+                          className="w-full bg-transparent border-none rounded px-2 py-1 text-xs text-[var(--neutral-12)] focus:ring-1 focus:ring-[var(--accent-8)]/40 outline-none appearance-none cursor-pointer"
                         >
-                          {commonTypes.map(t => <option key={t} value={t} className="bg-[var(--surface)]">{t}</option>)}
+                          {commonTypes.map(t => <option key={t} value={t} className="bg-[var(--surface-elevated)]">{t}</option>)}
                         </select>
                       </td>
                       <td className="p-1 text-center">
@@ -154,7 +147,7 @@ export function CreateTableDialog({ isOpen, onClose, onCreate, dbType }: CreateT
                           type="checkbox"
                           checked={col.primaryKey}
                           onChange={(e) => handleColumnChange(idx, "primaryKey", e.target.checked)}
-                          className="w-4 h-4 rounded border-[var(--border)] bg-transparent text-blue-500 focus:ring-0 cursor-pointer"
+                          className="w-3.5 h-3.5 rounded border-[var(--neutral-6)] bg-transparent text-[var(--accent-9)] focus:ring-0 cursor-pointer"
                         />
                       </td>
                       <td className="p-1 text-center">
@@ -162,7 +155,7 @@ export function CreateTableDialog({ isOpen, onClose, onCreate, dbType }: CreateT
                           type="checkbox"
                           checked={col.nullable}
                           onChange={(e) => handleColumnChange(idx, "nullable", e.target.checked)}
-                          className="w-4 h-4 rounded border-[var(--border)] bg-transparent text-blue-500 focus:ring-0 cursor-pointer"
+                          className="w-3.5 h-3.5 rounded border-[var(--neutral-6)] bg-transparent text-[var(--accent-9)] focus:ring-0 cursor-pointer"
                         />
                       </td>
                       <td className="p-1 px-2">
@@ -171,17 +164,19 @@ export function CreateTableDialog({ isOpen, onClose, onCreate, dbType }: CreateT
                           value={col.defaultValue}
                           onChange={(e) => handleColumnChange(idx, "defaultValue", e.target.value)}
                           placeholder="NULL"
-                          className="w-full bg-transparent border-none rounded px-2 py-1 text-[10px] focus:ring-1 focus:ring-blue-500/50 outline-none opacity-60 group-hover:opacity-100 transition-opacity"
+                          className="w-full bg-transparent border-none rounded px-2 py-1 text-[10px] text-[var(--neutral-12)] placeholder:text-[var(--neutral-9)] focus:ring-1 focus:ring-[var(--accent-8)]/40 outline-none opacity-60 group-hover:opacity-100 transition-opacity"
                         />
                       </td>
                       <td className="p-1 text-center">
-                        <button
-                          type="button"
+                        <IconButton
+                          icon={<Trash2 />}
+                          label="Remove column"
+                          variant="ghost"
+                          size="xs"
                           onClick={() => removeColumn(idx)}
-                          className="p-1.5 text-red-500/50 hover:text-red-500 hover:bg-red-500/10 rounded transition-all"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                          disabled={columns.length <= 1}
+                          className="text-[var(--danger-9)] hover:text-[var(--danger-10)] hover:bg-[var(--danger-3)]"
+                        />
                       </td>
                     </tr>
                   ))}
@@ -191,37 +186,22 @@ export function CreateTableDialog({ isOpen, onClose, onCreate, dbType }: CreateT
           </div>
 
           {error && (
-            <div className="flex items-start gap-3 p-4 bg-red-500/10 border border-red-500/20 rounded-lg animate-in slide-in-from-top-2">
-              <AlertCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
-              <p className="text-sm text-red-400">{error}</p>
+            <div className="flex items-start gap-3 p-3 bg-[var(--danger-3)] border border-[var(--danger-6)] rounded-md">
+              <AlertCircle className="w-4 h-4 text-[var(--danger-9)] shrink-0 mt-0.5" />
+              <p className="text-xs text-[var(--danger-11)]">{error}</p>
             </div>
           )}
+        </Dialog.Body>
 
-          <div className="flex items-center justify-end gap-3 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-sm font-medium hover:bg-[var(--border)] rounded-lg transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              disabled={isSubmitting}
-              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:hover:bg-blue-600 text-white px-6 py-2 rounded-lg text-sm font-semibold shadow-lg shadow-blue-500/20 transition-all active:scale-95"
-            >
-              {isSubmitting ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" /> Creating...
-                </>
-              ) : (
-                <>
-                  <Check className="w-4 h-4" /> Create Table
-                </>
-              )}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+        <Dialog.Footer>
+          <Button type="button" variant="ghost" size="sm" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" variant="primary" size="sm" loading={isSubmitting}>
+            {isSubmitting ? "Creating…" : "Create Table"}
+          </Button>
+        </Dialog.Footer>
+      </form>
+    </Dialog>
   );
 }
