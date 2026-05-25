@@ -252,6 +252,16 @@ html, body, #root {
   overflow: hidden;
 }
 
+/* Interactive affordance (#160). Native <button> defaults to the arrow cursor,
+   so the many raw buttons left after the primitive migration (tabs, nav rows,
+   list rows, context-menu items, sort headers) don't feel clickable. Give every
+   enabled button / role=button a pointer; disabled ones keep the default. */
+button:not(:disabled):not([aria-disabled="true"]),
+[role="button"]:not([aria-disabled="true"]),
+summary {
+  cursor: pointer;
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
