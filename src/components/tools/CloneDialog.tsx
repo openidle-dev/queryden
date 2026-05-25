@@ -1,9 +1,14 @@
 import { useState, useEffect } from "react";
-import { X, Copy, AlertCircle, Loader2, Info } from "lucide-react";
+import { Copy, AlertCircle, Info } from "lucide-react";
 import { useConnections } from "../../contexts/useConnections";
 import { ToolGuideWizard } from "./ToolGuideWizard";
 import { useConfirmDialog } from "../ui/ConfirmDialog";
 import { logger } from "../../utils/logger";
+import { Dialog } from "../ui/Dialog";
+import { Button } from "../ui/Button";
+import { IconButton } from "../ui/IconButton";
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
 
 interface CloneDialogProps {
   isOpen: boolean;
@@ -36,7 +41,7 @@ export function CloneDialog({ isOpen, onClose }: CloneDialogProps) {
 
   const handleClone = async () => {
     if (!sourceDB || !targetDB) return;
-    
+
     if (sourceDB === "postgres") {
       const isConfirmed = await confirm.confirm({
         title: "Warning: Cloning 'postgres' database",
@@ -63,7 +68,7 @@ export function CloneDialog({ isOpen, onClose }: CloneDialogProps) {
       if (!currentDb || !activeConnection) {
          throw new Error("No active database connection.");
       }
-      
+
       if (activeConnection.type !== "postgres" && activeConnection.type !== "supabase") {
          throw new Error("Cloning is only supported for PostgreSQL databases.");
       }
@@ -78,25 +83,25 @@ export function CloneDialog({ isOpen, onClose }: CloneDialogProps) {
 -- Run \connect postgres (or select 'postgres' in the UI) before running this script.
 
 -- Step 2: Terminate active connections to the source database
-SELECT pg_terminate_backend(pid) FROM pg_stat_activity 
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity
 WHERE datname = '${sourceDB}' AND pid <> pg_backend_pid();
 
 -- Step 3: Clone database
 ${cloneQuery};`;
 
-        window.dispatchEvent(new CustomEvent("open-query-with-text", { 
-          detail: { query: fullSql, name: `Clone ${sourceDB} -> ${targetDB}` } 
+        window.dispatchEvent(new CustomEvent("open-query-with-text", {
+          detail: { query: fullSql, name: `Clone ${sourceDB} -> ${targetDB}` }
         }));
-        
+
         onClose();
         return;
       }
 
-      // If we are attempting to clone the currently active database, we MUST 
-      // connect to a different database (e.g. 'postgres') first, otherwise 
+      // If we are attempting to clone the currently active database, we MUST
+      // connect to a different database (e.g. 'postgres') first, otherwise
       // PostgreSQL will reject it because we are using the template DB.
       let executionDb = currentDb;
-      
+
       try {
         if (selectedDatabase === sourceDB) {
           const Database = (await import("@tauri-apps/plugin-sql")).default;
@@ -109,12 +114,12 @@ ${cloneQuery};`;
 
       // Step 1: Terminate all connections to the source database
       try {
-        // We do not exclude our own pid if we successfully connected to 'postgres', 
+        // We do not exclude our own pid if we successfully connected to 'postgres',
         // which kills any dangling connections the UI left open in the background.
-        const terminateQuery = selectedDatabase === sourceDB 
+        const terminateQuery = selectedDatabase === sourceDB
           ? `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${sourceDB}';`
           : `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${sourceDB}' AND pid <> pg_backend_pid();`;
-        
+
         await executionDb.select(terminateQuery);
       } catch (err: any) {
         logger.warn("Failed to terminate connections:", err);
@@ -159,196 +164,164 @@ ${cloneQuery};`;
   if (!activeConnection || (activeConnection.type !== "postgres" && activeConnection.type !== "supabase")) {
     return (
       <>
-        <div className="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-8 backdrop-blur-sm">
-          <div className="bg-[var(--surface)] w-full max-w-md rounded-xl shadow-2xl flex flex-col overflow-hidden border border-[var(--border)] p-8 text-center animate-in zoom-in duration-200">
-            <div className="p-4 bg-amber-500/20 rounded-full w-20 h-20 flex items-center justify-center mx-auto mb-6 relative">
-              <AlertCircle className="w-10 h-10 text-amber-500" />
-              <button 
+        <Dialog open={isOpen} onClose={onClose} size="md">
+          <Dialog.Body className="p-8 text-center">
+            <div className="p-4 bg-[var(--warning-3)] rounded-full w-20 h-20 flex items-center justify-center mx-auto mb-6 relative">
+              <AlertCircle className="w-10 h-10 text-[var(--warning-11)]" />
+              <IconButton
+                icon={<Info />}
+                label="How to fix this?"
+                variant="primary"
+                size="sm"
                 onClick={() => setShowGuide(true)}
-                className="absolute -top-2 -right-2 p-2 bg-blue-500 text-white rounded-full shadow-lg hover:bg-blue-600 transition-all scale-110"
-                title="How to fix this?"
-              >
-                <Info className="w-4 h-4" />
-              </button>
+                className="absolute -top-2 -right-2 rounded-full shadow-lg"
+              />
             </div>
-            <div className="flex items-center justify-center gap-2 mb-2">
-              <h2 className="text-xl font-bold text-white">PostgreSQL Required</h2>
-            </div>
-            <p className="text-sm text-[var(--text-secondary)] mb-8 leading-relaxed">
-              Database cloning is currently only supported for PostgreSQL connections. 
-              <button 
+            <h2 className="text-xl font-bold text-[var(--neutral-12)] mb-2">PostgreSQL Required</h2>
+            <p className="text-sm text-[var(--neutral-11)] mb-8 leading-relaxed">
+              Database cloning is currently only supported for PostgreSQL connections.
+              <button
                 onClick={() => setShowGuide(true)}
-                className="text-blue-400 hover:underline ml-1 font-medium"
+                className="text-[var(--accent-11)] hover:underline ml-1 font-medium"
               >
                 Learn more
               </button>
             </p>
-            <button 
-              onClick={onClose}
-              className="w-full py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold transition-all shadow-lg shadow-amber-500/20"
-            >
+            <Button variant="primary" size="md" onClick={onClose} className="w-full">
               Go Back
-            </button>
-          </div>
-        </div>
-        <ToolGuideWizard 
-          isOpen={showGuide} 
-          onClose={() => setShowGuide(false)} 
-          type="postgres-required" 
+            </Button>
+          </Dialog.Body>
+        </Dialog>
+        <ToolGuideWizard
+          isOpen={showGuide}
+          onClose={() => setShowGuide(false)}
+          type="postgres-required"
         />
       </>
     );
   }
 
   return (
-    <div className="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-8 backdrop-blur-sm">
-      <div className="bg-[var(--surface)] w-full max-w-lg rounded-xl shadow-2xl flex flex-col overflow-hidden border border-[var(--border)] animate-in zoom-in duration-200">
-        <div className="p-4 border-b border-[var(--border)] flex items-center justify-between bg-[var(--surface-raised)]">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-500/20 rounded-lg">
-              <Copy className="w-5 h-5 text-blue-500" />
-            </div>
-            <div>
-              <h2 className="text-lg font-bold">Clone Database</h2>
-              <p className="text-[10px] text-[var(--text-secondary)] uppercase tracking-widest font-bold opacity-60">
-                PostgreSQL Template Copy
-              </p>
-            </div>
+    <Dialog open={isOpen} onClose={onClose} size="lg">
+      <Dialog.Title onClose={onClose}>
+        <span className="flex items-center gap-3">
+          <span className="p-2 bg-[var(--accent-3)] rounded-lg">
+            <Copy className="w-5 h-5 text-[var(--accent-11)]" />
+          </span>
+          <span className="flex flex-col leading-tight">
+            <span className="text-base">Clone Database</span>
+            <span className="text-[10px] text-[var(--neutral-11)] uppercase tracking-widest font-bold opacity-60">
+              PostgreSQL Template Copy
+            </span>
+          </span>
+        </span>
+      </Dialog.Title>
+
+      <Dialog.Body className="space-y-6">
+        {error && (
+          <div className="p-3 bg-[var(--danger-3)] border border-[var(--danger-6)] rounded flex gap-3 text-[var(--danger-11)] text-sm">
+            <AlertCircle className="w-5 h-5 shrink-0" />
+            <span>{error}</span>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-colors">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
+        )}
 
-        <div className="p-6 space-y-6">
-          {error && (
-            <div className="p-3 bg-red-500/10 border border-red-500/30 rounded flex gap-3 text-red-500 text-sm">
-              <AlertCircle className="w-5 h-5 shrink-0" />
-              <span>{error}</span>
+        {success && (
+          <div className="p-3 bg-[var(--success-3)] border border-[var(--success-6)] rounded-lg text-[var(--success-11)] text-xs">
+            <div className="font-bold flex items-center gap-2 mb-1">
+              <Copy className="w-3 h-3" /> Successfully Cloned
             </div>
-          )}
-
-          {success && (
-            <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg text-green-400 text-xs mb-4">
-              <div className="font-bold flex items-center gap-2 mb-1">
-                <Copy className="w-3 h-3" /> Successfully Cloned
-              </div>
-              <p>{success}</p>
-              <div className="mt-2 text-[10px] opacity-70">
-                <span className="font-semibold">Time:</span> {elapsedTime}s 
-                {strategyUsed && (
-                  <> • <span className="font-semibold">Strategy:</span> {strategyUsed === "FILE_COPY" ? "Instant (FILE_COPY)" : "Standard (TEMPLATE)"}</>
-                )}
-              </div>
-              {strategyUsed === "TEMPLATE" && useInstantClone && (
-                <p className="mt-2 text-[10px] text-amber-400/80 leading-relaxed italic">
-                  Note: FILE_COPY was requested but the server fell back to Standard TEMPLATE. This happens if the PostgreSQL version is &lt; 15 or the filesystem (XFS/Btrfs) doesn't support COW.
-                </p>
+            <p>{success}</p>
+            <div className="mt-2 text-[10px] opacity-70">
+              <span className="font-semibold">Time:</span> {elapsedTime}s
+              {strategyUsed && (
+                <> • <span className="font-semibold">Strategy:</span> {strategyUsed === "FILE_COPY" ? "Instant (FILE_COPY)" : "Standard (TEMPLATE)"}</>
               )}
             </div>
-          )}
-
-          <div className="space-y-4">
-            <div>
-              <label className="block text-xs font-bold text-[var(--text-secondary)] mb-1 uppercase tracking-wider">
-                Source Database
-              </label>
-              <select
-                value={sourceDB}
-                onChange={(e) => setSourceDB(e.target.value)}
-                className="w-full bg-[var(--background)] border border-[var(--border)] rounded px-3 py-2 text-sm outline-none focus:border-blue-500 disabled:opacity-50"
-                disabled={isLoading}
-              >
-                <option value="">Select database to clone...</option>
-                {databases.map(db => (
-                  <option key={db} value={db}>{db}</option>
-                ))}
-              </select>
-            </div>
-
-             <div>
-              <label className="block text-xs font-bold text-[var(--text-secondary)] mb-1 uppercase tracking-wider">
-                New Database Name
-              </label>
-              <input
-                type="text"
-                value={targetDB}
-                onChange={(e) => setTargetDB(e.target.value)}
-                placeholder="e.g. dev_clone_db"
-                className="w-full bg-[var(--background)] border border-[var(--border)] rounded px-3 py-2 text-sm outline-none focus:border-blue-500 disabled:opacity-50"
-                disabled={isLoading}
-              />
-            </div>
-            
-            <label className="flex items-center gap-2 cursor-pointer group mt-4">
-              <div className="relative">
-                <input 
-                  type="checkbox" 
-                  className="sr-only peer"
-                  checked={useInstantClone}
-                  onChange={(e) => setUseInstantClone(e.target.checked)}
-                  disabled={isLoading}
-                />
-                <div className="w-8 h-4 bg-[var(--surface-raised)] rounded-full peer peer-checked:bg-blue-500 transition-colors after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:after:translate-x-4"></div>
-              </div>
-              <div className="flex flex-col">
-                <span className="text-xs font-bold text-[var(--text-primary)]">Use Instant Clone (FILE_COPY)</span>
-                <span className="text-[10px] text-[var(--text-secondary)]">Requires PostgreSQL 15+ and supported file system (XFS/BTRFS/ZFS)</span>
-              </div>
-            </label>
-
-            <label className="flex items-center gap-2 cursor-pointer group mt-2">
-              <div className="relative">
-                <input 
-                  type="checkbox" 
-                  className="sr-only peer"
-                  checked={directExecute}
-                  onChange={(e) => setDirectExecute(e.target.checked)}
-                  disabled={isLoading}
-                />
-                <div className="w-8 h-4 bg-[var(--surface-raised)] rounded-full peer peer-checked:bg-amber-500 transition-colors after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:after:translate-x-4"></div>
-              </div>
-              <div className="flex flex-col">
-                <span className="text-xs font-bold text-[var(--text-primary)]">Direct Execute</span>
-                <span className="text-[10px] text-[var(--text-secondary)]">If unchecked, generates a SQL script to run manually</span>
-              </div>
-            </label>
-            
-            {directExecute && (
-              <div className="bg-amber-500/10 border border-amber-500/20 p-3 rounded text-[11px] text-amber-500 leading-relaxed mt-2">
-                <strong>Warning:</strong> Active connections to the source database will be terminated during the cloning process.
-              </div>
+            {strategyUsed === "TEMPLATE" && useInstantClone && (
+              <p className="mt-2 text-[10px] text-[var(--warning-11)] leading-relaxed italic">
+                Note: FILE_COPY was requested but the server fell back to Standard TEMPLATE. This happens if the PostgreSQL version is &lt; 15 or the filesystem (XFS/Btrfs) doesn't support COW.
+              </p>
             )}
           </div>
-        </div>
+        )}
 
-        <div className="p-4 border-t border-[var(--border)] bg-[var(--surface-raised)] flex justify-end gap-3">
-          <button 
-            onClick={onClose}
-            className="px-4 py-2 hover:bg-white/5 rounded transition-colors text-sm font-bold"
+        <div className="space-y-4">
+          <Select
+            label="SOURCE DATABASE"
+            placeholder="Select database to clone..."
+            value={sourceDB}
+            onValueChange={setSourceDB}
             disabled={isLoading}
-          >
-            Cancel
-          </button>
-          <button 
-            onClick={handleClone}
-            disabled={isLoading || !sourceDB || !targetDB}
-            className={`px-6 py-2 ${directExecute ? 'bg-blue-500 hover:bg-blue-600 shadow-blue-500/20' : 'bg-amber-500 hover:bg-amber-600 shadow-amber-500/20'} disabled:opacity-50 rounded text-white font-bold text-sm shadow-lg transition-all flex items-center gap-2`}
-          >
-            {isLoading ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                {directExecute ? `CLONING... (${elapsedTime}s)` : 'GENERATING...'}
-              </>
-            ) : (
-              <>
-                <Copy className="w-4 h-4" />
-                {directExecute ? 'CLONE DATABASE' : 'GENERATE SCRIPT'}
-              </>
-            )}
-          </button>
+            options={databases.map(db => ({ label: db, value: db }))}
+          />
+
+          <Input
+            label="NEW DATABASE NAME"
+            value={targetDB}
+            onChange={(e) => setTargetDB(e.target.value)}
+            placeholder="e.g. dev_clone_db"
+            disabled={isLoading}
+          />
+
+          <label className="flex items-center gap-2 cursor-pointer group mt-4">
+            <div className="relative">
+              <input
+                type="checkbox"
+                className="sr-only peer"
+                checked={useInstantClone}
+                onChange={(e) => setUseInstantClone(e.target.checked)}
+                disabled={isLoading}
+              />
+              <div className="w-8 h-4 bg-[var(--neutral-5)] rounded-full peer peer-checked:bg-[var(--accent-9)] transition-colors after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:after:translate-x-4"></div>
+            </div>
+            <div className="flex flex-col">
+              <span className="text-xs font-bold text-[var(--neutral-12)]">Use Instant Clone (FILE_COPY)</span>
+              <span className="text-[10px] text-[var(--neutral-11)]">Requires PostgreSQL 15+ and supported file system (XFS/BTRFS/ZFS)</span>
+            </div>
+          </label>
+
+          <label className="flex items-center gap-2 cursor-pointer group mt-2">
+            <div className="relative">
+              <input
+                type="checkbox"
+                className="sr-only peer"
+                checked={directExecute}
+                onChange={(e) => setDirectExecute(e.target.checked)}
+                disabled={isLoading}
+              />
+              <div className="w-8 h-4 bg-[var(--neutral-5)] rounded-full peer peer-checked:bg-[var(--warning-9)] transition-colors after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:after:translate-x-4"></div>
+            </div>
+            <div className="flex flex-col">
+              <span className="text-xs font-bold text-[var(--neutral-12)]">Direct Execute</span>
+              <span className="text-[10px] text-[var(--neutral-11)]">If unchecked, generates a SQL script to run manually</span>
+            </div>
+          </label>
+
+          {directExecute && (
+            <div className="bg-[var(--warning-3)] border border-[var(--warning-6)] p-3 rounded text-[11px] text-[var(--warning-11)] leading-relaxed mt-2">
+              <strong>Warning:</strong> Active connections to the source database will be terminated during the cloning process.
+            </div>
+          )}
         </div>
-      </div>
-    </div>
+      </Dialog.Body>
+
+      <Dialog.Footer>
+        <Button variant="ghost" size="md" onClick={onClose} disabled={isLoading}>
+          Cancel
+        </Button>
+        <Button
+          variant={directExecute ? "primary" : "secondary"}
+          size="md"
+          onClick={handleClone}
+          loading={isLoading}
+          disabled={!sourceDB || !targetDB}
+          leftIcon={isLoading ? undefined : <Copy className="w-4 h-4" />}
+        >
+          {isLoading
+            ? (directExecute ? `Cloning… (${elapsedTime}s)` : "Generating…")
+            : (directExecute ? "Clone Database" : "Generate Script")}
+        </Button>
+      </Dialog.Footer>
+    </Dialog>
   );
 }
