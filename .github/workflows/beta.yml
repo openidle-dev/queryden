@@ -338,7 +338,9 @@ jobs:
             printf "Rolling beta channel. This tag/release is recreated on every successful beta build — the URL \`beta-latest\` is what the in-app updater points at when the user opts into the beta channel.\n\n"
             printf "**Do not** treat this like a versioned release: contents are replaced without notice. The \`version\` field inside \`beta.json\` is the source of truth for what's currently published.\n\n"
             printf "**Version:** \`%s\`\n\n" "$BETA_VERSION"
-            printf "---\n\n"
+            # Use '%s' so the leading "---" isn't parsed by printf as options
+            # (bash printf treats "---\n\n" as flags → "printf: --: invalid option").
+            printf '%s\n\n' "---"
             printf "## Changes\n\n"
             cat release-notes-manifest.md
           } > release-notes-body.md
