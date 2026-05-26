@@ -1143,11 +1143,11 @@ const isInJoinContext = /(\b|^)(JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|INNER\s+JOIN|CROSS
           {/* Status Indicator - Left side of query area (DataGrip style) */}
           <div className="flex items-center gap-2 shrink-0">
             {isExecuting ? (
-              <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
+              <Loader2 className="w-4 h-4 animate-spin text-[var(--warning-11)]" />
             ) : hasError ? (
-              <XCircle className="w-4 h-4 text-red-400" />
+              <XCircle className="w-4 h-4 text-[var(--danger-11)]" />
             ) : hasSuccess ? (
-              <CheckCircle className="w-4 h-4 text-emerald-400" />
+              <CheckCircle className="w-4 h-4 text-[var(--success-11)]" />
             ) : (
               <CodeIcon className="w-3 h-3 text-[var(--accent-9)]" />
             )}

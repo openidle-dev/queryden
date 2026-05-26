@@ -39,10 +39,10 @@ export function AIAssistantDialog({ isOpen, onClose, currentQuery, onUpdateQuery
 
   return (
     <Dialog open={isOpen} onClose={onClose} size="xl">
-      <Dialog.Title onClose={onClose} className="bg-gradient-to-r from-purple-500/10 to-transparent">
+      <Dialog.Title onClose={onClose} className="bg-gradient-to-r from-[var(--accent-3)] to-transparent">
         <span className="inline-flex items-center gap-3">
-          <span className="p-1.5 bg-purple-500/20 rounded-lg">
-            <Sparkles className="w-4 h-4 text-purple-400" />
+          <span className="p-1.5 bg-[var(--accent-3)] rounded-lg">
+            <Sparkles className="w-4 h-4 text-[var(--accent-11)]" />
           </span>
           <span className="flex flex-col leading-tight">
             <span>AI SQL Assistant</span>
@@ -69,7 +69,7 @@ export function AIAssistantDialog({ isOpen, onClose, currentQuery, onUpdateQuery
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
                   placeholder="e.g. 'Write a query to find the top 5 customers by order volume this month' or 'Optimize the current query for speed'"
-                  className="w-full h-32 p-4 pb-12 bg-[var(--surface-base)] border border-purple-500/30 rounded-lg outline-none focus:border-purple-500 resize-none text-sm text-[var(--neutral-12)] placeholder:text-[var(--neutral-9)]"
+                  className="w-full h-32 p-4 pb-12 bg-[var(--surface-base)] border border-[var(--accent-6)] rounded-lg outline-none focus:border-[var(--accent-6)] resize-none text-sm text-[var(--neutral-12)] placeholder:text-[var(--neutral-9)]"
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
@@ -85,7 +85,7 @@ export function AIAssistantDialog({ isOpen, onClose, currentQuery, onUpdateQuery
                     disabled={!prompt.trim()}
                     size="sm"
                     leftIcon={isGenerating ? undefined : <Send className="w-3.5 h-3.5" />}
-                    className="bg-purple-500 hover:bg-purple-600 text-white disabled:bg-[var(--neutral-6)] disabled:text-[var(--neutral-11)]"
+                    className="bg-[var(--accent-9)] hover:bg-[var(--accent-10)] text-white disabled:bg-[var(--neutral-6)] disabled:text-[var(--neutral-11)]"
                   >
                     Generate
                   </Button>
@@ -100,7 +100,7 @@ export function AIAssistantDialog({ isOpen, onClose, currentQuery, onUpdateQuery
                   onClick={() => setPrompt(suggestion)}
                   variant="secondary"
                   size="xs"
-                  className="flex-1 text-[var(--neutral-11)] hover:text-purple-400 hover:border-purple-500/30"
+                  className="flex-1 text-[var(--neutral-11)] hover:text-[var(--accent-11)] hover:border-[var(--accent-6)]"
                 >
                   {suggestion}
                 </Button>

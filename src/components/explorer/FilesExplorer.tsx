@@ -66,7 +66,7 @@ export function FilesExplorer() {
                   </button>
                   <button 
                     onClick={(e) => { e.stopPropagation(); removeQuery(q.id); }}
-                    className="p-1 rounded hover:bg-rose-500/20 text-rose-400"
+                    className="p-1 rounded hover:bg-[var(--danger-3)] text-[var(--danger-11)]"
                     title="Delete"
                   >
                     <Trash2 className="w-3.5 h-3.5" />

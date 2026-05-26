@@ -50,8 +50,8 @@ export function PsqlHelpDialog({ onClose, onSelectCommand }: PsqlHelpDialogProps
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-[#30363d] bg-[#22272e]">
           <div className="flex items-center gap-2.5">
-            <div className="p-1.5 bg-blue-500/10 rounded-md">
-              <code className="text-blue-400 font-bold text-base">\?</code>
+            <div className="p-1.5 bg-[var(--accent-3)] rounded-md">
+              <code className="text-[var(--accent-11)] font-bold text-base">\?</code>
             </div>
             <div>
               <h3 className="text-sm font-bold text-gray-100 uppercase tracking-tight">psql Meta-commands</h3>
@@ -75,7 +75,7 @@ export function PsqlHelpDialog({ onClose, onSelectCommand }: PsqlHelpDialogProps
               placeholder="Filter commands..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full bg-[#0d1117] border border-[#30363d] rounded-md py-1.5 pl-9 pr-3 text-[13px] text-gray-200 focus:outline-none focus:border-blue-500/50 transition-all placeholder-gray-600"
+              className="w-full bg-[#0d1117] border border-[#30363d] rounded-md py-1.5 pl-9 pr-3 text-[13px] text-gray-200 focus:outline-none focus:border-[var(--accent-6)] transition-all placeholder-gray-600"
               autoFocus
             />
           </div>
@@ -120,12 +120,12 @@ export function PsqlHelpDialog({ onClose, onSelectCommand }: PsqlHelpDialogProps
                         }}
                         className="flex items-center gap-3 px-2 py-1.5 rounded-md hover:bg-[#2d333b] text-left group transition-all border border-transparent hover:border-[#444c56]/30"
                       >
-                        <code className="text-emerald-400 font-bold text-[12px] min-w-[70px] bg-[#1a2027] px-1.5 py-0.5 rounded border border-[#30363d] group-hover:border-emerald-500/30 transition-colors">
+                        <code className="text-[var(--success-11)] font-bold text-[12px] min-w-[70px] bg-[#1a2027] px-1.5 py-0.5 rounded border border-[#30363d] group-hover:border-[var(--success-6)] transition-colors">
                           {c.command}
                         </code>
                         <span className="text-[12px] text-gray-400 group-hover:text-gray-200 transition-colors flex-1 truncate">{c.description}</span>
                         <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                          <span className="text-[9px] bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded font-bold uppercase tracking-tighter">Use</span>
+                          <span className="text-[9px] bg-[var(--accent-3)] text-[var(--accent-11)] px-1.5 py-0.5 rounded font-bold uppercase tracking-tighter">Use</span>
                         </div>
                       </button>
                     ))}

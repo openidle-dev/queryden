@@ -28,19 +28,19 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.state.hasError) {
       return (
         <div className="min-h-screen bg-[#0f0f0f] flex items-center justify-center p-6 font-sans">
-          <div className="max-w-md w-full bg-[var(--surface-elevated)] border border-red-500/20 rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in duration-300">
-            <div className="p-6 border-b border-[var(--neutral-6)] bg-gradient-to-br from-red-500/10 to-transparent flex items-center gap-4">
-              <div className="p-3 bg-red-500/20 rounded-xl">
-                <AlertTriangle className="w-8 h-8 text-red-500" />
+          <div className="max-w-md w-full bg-[var(--surface-elevated)] border border-[var(--danger-6)] rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in duration-300">
+            <div className="p-6 border-b border-[var(--neutral-6)] bg-gradient-to-br from-[var(--danger-3)] to-transparent flex items-center gap-4">
+              <div className="p-3 bg-[var(--danger-3)] rounded-xl">
+                <AlertTriangle className="w-8 h-8 text-[var(--danger-11)]" />
               </div>
               <div>
                 <h1 className="text-xl font-bold text-white">Application Oops</h1>
-                <p className="text-xs text-red-400 font-mono">CRITICAL_SMOKE_ERROR</p>
+                <p className="text-xs text-[var(--danger-11)] font-mono">CRITICAL_SMOKE_ERROR</p>
               </div>
             </div>
             <div className="p-6 space-y-4">
               <div className="p-4 bg-[var(--surface-base)] rounded-lg border border-[var(--neutral-6)] font-mono text-[11px] text-[var(--neutral-11)] break-all max-h-40 overflow-auto">
-                <span className="text-red-400 font-bold">Error:</span> {this.state.error?.message}
+                <span className="text-[var(--danger-11)] font-bold">Error:</span> {this.state.error?.message}
                 <br /><br />
                 <span className="opacity-50">Stack Trace:</span> {this.state.error?.stack}
               </div>

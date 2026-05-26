@@ -257,7 +257,7 @@ export function AppLayout() {
                       onMouseEnter={() => setSelectedIndex(index)}
                       className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all text-left text-sm group ${
                         index === selectedIndex 
-                          ? 'bg-blue-500 text-white' 
+                          ? 'bg-[var(--accent-9)] text-white' 
                           : 'hover:bg-[var(--surface-elevated)] text-[var(--neutral-12)]'
                       }`}
                     >
@@ -271,7 +271,7 @@ export function AppLayout() {
                 <div className="p-8 flex flex-col items-center justify-center text-center">
                   {!isDatabaseReady ? (
                     <div className="w-full max-w-sm animate-in fade-in slide-in-from-bottom-2 duration-300">
-                      <div className="w-12 h-12 bg-amber-500/20 text-amber-500 rounded-full flex items-center justify-center mb-4 mx-auto">
+                      <div className="w-12 h-12 bg-[var(--warning-3)] text-[var(--warning-11)] rounded-full flex items-center justify-center mb-4 mx-auto">
                         <AlertTriangle className="w-6 h-6" />
                       </div>
                       <h3 className="text-base font-bold mb-2">Database Not Initialized</h3>
@@ -281,7 +281,7 @@ export function AppLayout() {
                       
                       <div className="bg-[var(--surface-elevated)] border border-[var(--neutral-6)] rounded-xl p-4 text-left space-y-4 shadow-sm mb-6">
                         <h4 className="text-[10px] uppercase font-black text-[var(--neutral-11)] tracking-widest flex items-center gap-2">
-                          <HelpCircle className="w-3 h-3 text-blue-500" /> Setup Guide
+                          <HelpCircle className="w-3 h-3 text-[var(--accent-11)]" /> Setup Guide
                         </h4>
                         
                         <div className="space-y-3">
@@ -485,16 +485,16 @@ function StepItem({ num, text, done, active, onClick }: {
 }) {
   return (
     <div 
-      className={`flex items-center gap-3 p-2 rounded-lg transition-colors ${onClick ? 'cursor-pointer hover:bg-white/5' : ''} ${active ? 'bg-blue-500/10 border border-blue-500/20' : ''}`}
+      className={`flex items-center gap-3 p-2 rounded-lg transition-colors ${onClick ? 'cursor-pointer hover:bg-white/5' : ''} ${active ? 'bg-[var(--accent-3)] border border-[var(--accent-6)]' : ''}`}
       onClick={onClick}
     >
       <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
-        done ? 'bg-green-500 text-white' : (active ? 'bg-blue-500 text-white' : 'bg-[var(--neutral-6)] text-[var(--neutral-11)]')
+        done ? 'bg-[var(--success-9)] text-white' : (active ? 'bg-[var(--accent-9)] text-white' : 'bg-[var(--neutral-6)] text-[var(--neutral-11)]')
       }`}>
         {done ? <CheckCircle className="w-3 h-3" /> : num}
       </div>
       <div className="flex-1">
-        <div className={`text-xs font-medium ${done ? 'text-[var(--neutral-11)] line-through' : (active ? 'text-blue-400' : 'text-[var(--neutral-12)]')}`}>
+        <div className={`text-xs font-medium ${done ? 'text-[var(--neutral-11)] line-through' : (active ? 'text-[var(--accent-11)]' : 'text-[var(--neutral-12)]')}`}>
           {text}
         </div>
       </div>

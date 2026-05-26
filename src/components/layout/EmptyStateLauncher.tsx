@@ -18,7 +18,7 @@ export function EmptyStateLauncher() {
     <div className="h-full w-full flex items-center justify-center bg-[var(--surface-base)] p-6 overflow-y-auto">
       <div className="w-full max-w-3xl space-y-8 animate-in fade-in zoom-in-95 duration-300">
         <div className="text-center space-y-4">
-          <div className="inline-flex p-4 rounded-2xl bg-gradient-to-br from-[var(--accent-9)] to-blue-600 shadow-xl shadow-[var(--accent-9)]/30 relative">
+          <div className="inline-flex p-4 rounded-2xl bg-gradient-to-br from-[var(--accent-9)] to-[var(--accent-10)] shadow-xl shadow-[var(--accent-9)]/30 relative">
             <div className="absolute inset-0 bg-[var(--accent-9)] blur-2xl opacity-20 rounded-full" />
             <Terminal className="w-10 h-10 text-white relative z-10" />
           </div>
@@ -80,7 +80,7 @@ function HasConnectionsActions() {
           icon={<FileText className="w-5 h-5" />}
           title="Saved Queries"
           description="Browse your query library"
-          accent="text-amber-400"
+          accent="text-[var(--warning-11)]"
           onClick={() => window.dispatchEvent(new CustomEvent("open-files-panel"))}
         />
       </div>

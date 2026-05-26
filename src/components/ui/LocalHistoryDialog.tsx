@@ -175,7 +175,7 @@ export function LocalHistoryDialog({ isOpen, onClose, filePath, dirPath, onRever
           <div className="flex items-center gap-1">
             <button
               onClick={async () => { await clearHistory(); setSelectedEntry(null); }}
-              className="p-1 rounded hover:bg-rose-500/20 text-rose-400 hover:text-rose-300"
+              className="p-1 rounded hover:bg-[var(--danger-3)] text-[var(--danger-11)] hover:text-[var(--danger-11)]"
               title="Clear all history"
             >
               <Trash2 className="w-3.5 h-3.5" />
@@ -292,14 +292,14 @@ export function LocalHistoryDialog({ isOpen, onClose, filePath, dirPath, onRever
                   {showDiff && diffResult ? (
                     <div className="p-4">
                       <div className="text-[10px] text-[var(--neutral-11)] mb-2 flex items-center gap-3">
-                        <span className="text-red-400">- removed ({diffResult.removed.length} lines)</span>
-                        <span className="text-green-400">+ added ({diffResult.added.length} lines)</span>
+                        <span className="text-[var(--danger-11)]">- removed ({diffResult.removed.length} lines)</span>
+                        <span className="text-[var(--success-11)]">+ added ({diffResult.added.length} lines)</span>
                       </div>
                       <pre className="text-xs font-mono leading-relaxed">
                         {diffResult.lines.map((line, i) => (
                           <div key={i} className={`${
-                            line.type === 'added' ? 'bg-green-500/15 text-green-300' :
-                            line.type === 'removed' ? 'bg-red-500/15 text-red-300' :
+                            line.type === 'added' ? 'bg-[var(--success-3)] text-[var(--success-11)]' :
+                            line.type === 'removed' ? 'bg-[var(--danger-3)] text-[var(--danger-11)]' :
                             'text-[var(--neutral-12)]'
                           }`}>
                             <span className="inline-block w-5 text-right mr-2 opacity-40 select-none text-[10px]">

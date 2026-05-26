@@ -122,7 +122,7 @@ export function UpdateNotification() {
             {/* Checking state */}
             {phase === "checking" && (
               <div className="p-8 text-center">
-                <Loader2 className="w-8 h-8 animate-spin mx-auto mb-3 text-blue-400" />
+                <Loader2 className="w-8 h-8 animate-spin mx-auto mb-3 text-[var(--accent-11)]" />
                 <p className="text-sm font-medium">Checking for updates…</p>
                 <p className="text-xs text-[var(--neutral-11)] mt-1">Contacting GitHub</p>
               </div>
@@ -131,8 +131,8 @@ export function UpdateNotification() {
             {/* Up to date */}
             {phase === "up-to-date" && currentVersion && (
               <div className="p-8 text-center">
-                <div className="w-14 h-14 bg-green-500/15 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <CheckCircle className="w-7 h-7 text-green-400" />
+                <div className="w-14 h-14 bg-[var(--success-3)] rounded-full flex items-center justify-center mx-auto mb-4">
+                  <CheckCircle className="w-7 h-7 text-[var(--success-11)]" />
                 </div>
                 <h4 className="text-base font-bold mb-1">You're up to date!</h4>
                 <p className="text-xs text-[var(--neutral-11)]">
@@ -151,12 +151,12 @@ export function UpdateNotification() {
             {phase === "available" && update && (
               <div className="p-5 space-y-4">
                 {/* Version badge */}
-                <div className="flex items-center gap-3 p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl">
-                  <div className="w-10 h-10 bg-amber-500/20 rounded-full flex items-center justify-center shrink-0">
-                    <Rocket className="w-5 h-5 text-amber-400" />
+                <div className="flex items-center gap-3 p-4 bg-[var(--warning-3)] border border-[var(--warning-6)] rounded-xl">
+                  <div className="w-10 h-10 bg-[var(--warning-3)] rounded-full flex items-center justify-center shrink-0">
+                    <Rocket className="w-5 h-5 text-[var(--warning-11)]" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="text-[10px] font-bold uppercase tracking-widest text-amber-400 mb-0.5">
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-[var(--warning-11)] mb-0.5">
                       New Version Available
                     </div>
                     <div className="text-sm font-bold">
@@ -178,7 +178,7 @@ export function UpdateNotification() {
                       <FileText className="w-3 h-3" /> What's New
                     </div>
                     <div className="p-4 bg-[var(--surface-base)] rounded-xl border border-[var(--neutral-6)] max-h-[200px] overflow-y-auto custom-scrollbar">
-                      <div className="prose-sm text-xs text-[var(--neutral-11)] leading-relaxed [&_h1]:text-base [&_h1]:font-bold [&_h1]:text-[var(--neutral-12)] [&_h1]:mb-2 [&_h2]:text-sm [&_h2]:font-bold [&_h2]:text-[var(--neutral-12)] [&_h2]:mb-2 [&_h3]:text-xs [&_h3]:font-bold [&_h3]:text-[var(--neutral-12)] [&_h3]:mb-1 [&_ul]:list-disc [&_ul]:pl-4 [&_ul]:space-y-1 [&_li]:text-xs [&_p]:mb-2 [&_code]:bg-white/10 [&_code]:px-1 [&_code]:rounded [&_code]:text-blue-300 [&_a]:text-blue-400 [&_a]:underline">
+                      <div className="prose-sm text-xs text-[var(--neutral-11)] leading-relaxed [&_h1]:text-base [&_h1]:font-bold [&_h1]:text-[var(--neutral-12)] [&_h1]:mb-2 [&_h2]:text-sm [&_h2]:font-bold [&_h2]:text-[var(--neutral-12)] [&_h2]:mb-2 [&_h3]:text-xs [&_h3]:font-bold [&_h3]:text-[var(--neutral-12)] [&_h3]:mb-1 [&_ul]:list-disc [&_ul]:pl-4 [&_ul]:space-y-1 [&_li]:text-xs [&_p]:mb-2 [&_code]:bg-white/10 [&_code]:px-1 [&_code]:rounded [&_code]:text-[var(--accent-11)] [&_a]:text-[var(--accent-11)] [&_a]:underline">
                         <ReactMarkdown>{update.body}</ReactMarkdown>
                       </div>
                     </div>
@@ -189,7 +189,7 @@ export function UpdateNotification() {
                 <div className="flex items-center gap-2">
                   <button
                     onClick={downloadUpdate}
-                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-500 hover:bg-blue-600 text-white text-sm font-bold rounded-xl transition-colors shadow-lg shadow-blue-500/20"
+                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-[var(--accent-9)] hover:bg-[var(--accent-10)] text-white text-sm font-bold rounded-xl transition-colors shadow-lg shadow-lg"
                   >
                     <Download className="w-4 h-4" />
                     Download Update
@@ -217,7 +217,7 @@ export function UpdateNotification() {
             {/* Downloading */}
             {phase === "downloading" && (
               <div className="p-8 text-center">
-                <Loader2 className="w-8 h-8 animate-spin mx-auto mb-3 text-blue-400" />
+                <Loader2 className="w-8 h-8 animate-spin mx-auto mb-3 text-[var(--accent-11)]" />
                 <h4 className="text-sm font-bold mb-1">Downloading update…</h4>
                 <p className="text-xs text-[var(--neutral-11)]">
                   {totalBytes
@@ -226,7 +226,7 @@ export function UpdateNotification() {
                 </p>
                 <div className="mt-4 h-1.5 bg-[var(--neutral-6)] rounded-full overflow-hidden w-48 mx-auto">
                   <div
-                    className="h-full bg-blue-500 rounded-full transition-all duration-150"
+                    className="h-full bg-[var(--accent-9)] rounded-full transition-all duration-150"
                     style={{ width: `${downloadProgress}%` }}
                   />
                 </div>
@@ -236,12 +236,12 @@ export function UpdateNotification() {
             {/* Ready to install */}
             {phase === "ready" && update && (
               <div className="p-5 space-y-4">
-                <div className="flex items-center gap-3 p-4 bg-green-500/10 border border-green-500/20 rounded-xl">
-                  <div className="w-10 h-10 bg-green-500/20 rounded-full flex items-center justify-center shrink-0">
-                    <CheckCircle className="w-5 h-5 text-green-400" />
+                <div className="flex items-center gap-3 p-4 bg-[var(--success-3)] border border-[var(--success-6)] rounded-xl">
+                  <div className="w-10 h-10 bg-[var(--success-3)] rounded-full flex items-center justify-center shrink-0">
+                    <CheckCircle className="w-5 h-5 text-[var(--success-11)]" />
                   </div>
                   <div className="flex-1">
-                    <div className="text-[10px] font-bold uppercase tracking-widest text-green-400 mb-0.5">
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-[var(--success-11)] mb-0.5">
                       Download Complete
                     </div>
                     <div className="text-sm font-bold">Ready to Install</div>
@@ -253,7 +253,7 @@ export function UpdateNotification() {
 
                 <button
                   onClick={installUpdate}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-green-500 hover:bg-green-600 text-white text-sm font-bold rounded-xl transition-colors shadow-lg shadow-green-500/20"
+                  className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-[var(--success-9)] hover:bg-[var(--success-10)] text-white text-sm font-bold rounded-xl transition-colors shadow-lg shadow-lg"
                 >
                   <Rocket className="w-4 h-4" />
                   Install & Restart
@@ -267,7 +267,7 @@ export function UpdateNotification() {
             {/* Installing */}
             {phase === "installing" && (
               <div className="p-8 text-center">
-                <Loader2 className="w-8 h-8 animate-spin mx-auto mb-3 text-green-400" />
+                <Loader2 className="w-8 h-8 animate-spin mx-auto mb-3 text-[var(--success-11)]" />
                 <h4 className="text-sm font-bold mb-1">Installing update…</h4>
                 <p className="text-xs text-[var(--neutral-11)]">
                   The app will restart momentarily.
@@ -278,10 +278,10 @@ export function UpdateNotification() {
             {/* Error */}
             {phase === "error" && (
               <div className="p-5 space-y-3">
-                <div className="flex items-start gap-3 p-4 bg-red-500/10 border border-red-500/20 rounded-xl">
-                  <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+                <div className="flex items-start gap-3 p-4 bg-[var(--danger-3)] border border-[var(--danger-6)] rounded-xl">
+                  <AlertTriangle className="w-5 h-5 text-[var(--danger-11)] shrink-0 mt-0.5" />
                   <div>
-                    <div className="text-sm font-bold text-red-400 mb-1">Update Error</div>
+                    <div className="text-sm font-bold text-[var(--danger-11)] mb-1">Update Error</div>
                     <div className="text-xs text-[var(--neutral-11)] break-words">
                       {error || "An unknown error occurred"}
                     </div>
@@ -303,7 +303,7 @@ export function UpdateNotification() {
                 <p className="text-sm font-medium opacity-50">No update information</p>
                 <button
                   onClick={checkForUpdates}
-                  className="mt-4 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-2 mx-auto"
+                  className="mt-4 px-4 py-2 bg-[var(--accent-9)] hover:bg-[var(--accent-10)] text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-2 mx-auto"
                 >
                   <RefreshCw className="w-3 h-3" /> Check for Updates
                 </button>
