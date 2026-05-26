@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect, memo, useRef, useDeferredValue } f
 import { 
   AlertCircle, Table2, Hash, Type, Calendar, Binary, Code as CodeIcon, 
   Filter, Shield, Download, FileJson, XCircle, Search, Copy, 
-  Trash2, Maximize2, Plus, RefreshCw, Zap, CheckCircle, Clock, ChevronRight, ChevronDown, X,
+  Trash2, Maximize2, Plus, RefreshCw, Zap, CheckCircle, Clock, ChevronDown, X,
   FileCode, Globe, Database, History as HistoryIcon, Image, File
 } from "lucide-react";
 import { useQueryHistory } from "../../store/queryHistoryStore";
@@ -18,6 +18,7 @@ import { FileType, toBlobUrl, revokeBlobUrl, formatFileSize, binaryToUtf8, isIma
 import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
 import { Input } from "../ui/Input";
+import { Menu, MenuItem, MenuLabel, MenuSeparator, MenuSub } from "../ui/Menu";
 
 // Shared accent-soft treatment for the binary-preview action pills (Save /
 // Copy / Open / Download). Reused ~9× across the preview's view modes.
@@ -763,30 +764,22 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
 
       {/* Context Menu */}
       {contextMenu && (
-        <div
-          className="fixed z-[100] w-56 bg-[var(--surface-overlay)] border border-[var(--neutral-6)] rounded-xl shadow-2xl py-1.5 animate-in zoom-in-95 duration-100"
-          style={{ top: contextMenu.y, left: contextMenu.x }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="px-3 py-1 text-[9px] uppercase font-bold text-[var(--neutral-11)] tracking-widest mb-1 border-b border-[var(--neutral-6)] pb-1">Selection Actions</div>
+        <Menu x={contextMenu.x} y={contextMenu.y}>
+          <MenuLabel bordered>Selection Actions</MenuLabel>
 
           {contextMenu.col && (
-            <button
-              onClick={() => { copyToClipboard(formatCellValue(contextMenu.row[contextMenu.col!])); setContextMenu(null); }}
-              className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--accent-9)] hover:text-white flex items-center gap-2 transition-colors cursor-pointer"
-            >
-              <Copy className="w-3.5 h-3.5" /> Copy Cell
-            </button>
+            <MenuItem icon={<Copy className="w-3.5 h-3.5" />} onClick={() => { copyToClipboard(formatCellValue(contextMenu.row[contextMenu.col!])); setContextMenu(null); }}>
+              Copy Cell
+            </MenuItem>
           )}
 
-          <button
-            onClick={() => { copyToClipboard(JSON.stringify(contextMenu.row, null, 2)); setContextMenu(null); }}
-            className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--accent-9)] hover:text-white flex items-center gap-2 transition-colors cursor-pointer"
-          >
-            <FileJson className="w-3.5 h-3.5" /> Copy Row as JSON
-          </button>
+          <MenuItem icon={<FileJson className="w-3.5 h-3.5" />} onClick={() => { copyToClipboard(JSON.stringify(contextMenu.row, null, 2)); setContextMenu(null); }}>
+            Copy Row as JSON
+          </MenuItem>
 
-          <button
+          <MenuItem
+            icon={<CheckCircle className="w-3.5 h-3.5 opacity-50" />}
+            disabled={isReadOnly}
             onClick={async () => {
                 try {
                     const text = await navigator.clipboard.readText();
@@ -799,52 +792,29 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
                 } catch { /* clipboard permission */ }
                 setContextMenu(null);
             }}
-            className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--accent-9)] hover:text-white flex items-center gap-2 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-            disabled={isReadOnly}
           >
-            <CheckCircle className="w-3.5 h-3.5 opacity-50" /> Paste to Cell
-          </button>
+            Paste to Cell
+          </MenuItem>
 
-          <div className="my-1 border-t border-[var(--neutral-6)] opacity-50" />
-          <div className="px-3 py-1 text-[9px] uppercase font-bold text-[var(--neutral-11)] tracking-widest mb-1 opacity-60">Record Details</div>
+          <MenuSeparator />
+          <MenuLabel subtle>Record Details</MenuLabel>
 
-          <button onClick={() => { setSelectedRow({row: contextMenu.row, idx: sortedResults.indexOf(contextMenu.row)}); setIsEditingRow(false); setContextMenu(null); }} className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--accent-9)] hover:text-white flex items-center gap-2 transition-colors cursor-pointer">
-            <Maximize2 className="w-3.5 h-3.5" /> View Details
-          </button>
-          <button onClick={() => { setSelectedRow({row: contextMenu.row, idx: sortedResults.indexOf(contextMenu.row)}); setIsEditingRow(true); setSelectedRowEdits({}); setContextMenu(null); }} className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--accent-9)] hover:text-white flex items-center gap-2 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed" disabled={isReadOnly}>
-            <RefreshCw className="w-3.5 h-3.5" /> Edit Record
-          </button>
+          <MenuItem icon={<Maximize2 className="w-3.5 h-3.5" />} onClick={() => { setSelectedRow({row: contextMenu.row, idx: sortedResults.indexOf(contextMenu.row)}); setIsEditingRow(false); setContextMenu(null); }}>
+            View Details
+          </MenuItem>
+          <MenuItem icon={<RefreshCw className="w-3.5 h-3.5" />} disabled={isReadOnly} onClick={() => { setSelectedRow({row: contextMenu.row, idx: sortedResults.indexOf(contextMenu.row)}); setIsEditingRow(true); setSelectedRowEdits({}); setContextMenu(null); }}>
+            Edit Record
+          </MenuItem>
 
-          <div className="my-1 border-t border-[var(--neutral-6)] opacity-50" />
+          <MenuSeparator />
 
-          <div className="relative group/sql">
-            <button className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--accent-9)] hover:text-white flex items-center justify-between transition-colors cursor-pointer">
-              <div className="flex items-center gap-2"><Database className="w-3.5 h-3.5" /> Generate SQL</div>
-              <ChevronRight className="w-3 h-3 opacity-50" />
-            </button>
-            <div className="hidden group-hover/sql:block absolute left-[calc(100%-8px)] top-0 w-48 bg-[var(--surface-overlay)] border border-[var(--neutral-6)] rounded-xl shadow-2xl py-1.5 animate-in slide-in-from-left-1 duration-150">
-               <div className="px-3 py-1 text-[9px] uppercase font-bold text-[var(--neutral-11)] tracking-widest mb-1 border-b border-[var(--neutral-6)] pb-1 opacity-60">Output Format</div>
-               <button
-                  onClick={() => generateSqlForSelected("INSERT")}
-                  className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--success-9)] hover:text-white flex items-center gap-2 transition-colors cursor-pointer"
-                >
-                  <Database className="w-3.5 h-3.5" /> SQL INSERTs
-                </button>
-                <button
-                  onClick={() => generateSqlForSelected("UPDATE")}
-                  className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--warning-9)] hover:text-white flex items-center gap-2 transition-colors cursor-pointer"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" /> SQL UPDATEs
-                </button>
-                <button
-                  onClick={() => generateSqlForSelected("DELETE")}
-                  className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--danger-9)] hover:text-white flex items-center gap-2 transition-colors cursor-pointer"
-                >
-                  <Trash2 className="w-3.5 h-3.5" /> SQL DELETEs
-                </button>
-            </div>
-          </div>
-        </div>
+          <MenuSub icon={<Database className="w-3.5 h-3.5" />} label="Generate SQL">
+            <MenuLabel bordered subtle>Output Format</MenuLabel>
+            <MenuItem tone="success" icon={<Database className="w-3.5 h-3.5" />} onClick={() => generateSqlForSelected("INSERT")}>SQL INSERTs</MenuItem>
+            <MenuItem tone="warning" icon={<RefreshCw className="w-3.5 h-3.5" />} onClick={() => generateSqlForSelected("UPDATE")}>SQL UPDATEs</MenuItem>
+            <MenuItem tone="danger" icon={<Trash2 className="w-3.5 h-3.5" />} onClick={() => generateSqlForSelected("DELETE")}>SQL DELETEs</MenuItem>
+          </MenuSub>
+        </Menu>
       )}
 
       {/* Detail/Edit Overlay */}
