@@ -46,24 +46,68 @@ export interface GridViewRef {
   focus: () => void;
 }
 
-const getTheme = (isDark: boolean): Partial<Theme> => ({
-  accentColor: "#06b6d4",
-  accentLight: isDark ? "rgba(6, 182, 212, 0.2)" : "rgba(6, 182, 212, 0.1)",
-  textDark: isDark ? "#f8fafc" : "#0f172a", // Main text color (white in dark, black in light)
-  textMedium: isDark ? "#94a3b8" : "#64748b",
-  textLight: isDark ? "#64748b" : "#94a3b8",
-  bgCell: isDark ? "#0f172a" : "#ffffff",
-  bgHeader: isDark ? "#1e293b" : "#f8fafc",
-  bgHeaderHasFocus: isDark ? "#334155" : "#e2e8f0",
-  bgHeaderHovered: isDark ? "#2d3748" : "#f1f5f9",
+// Glide Data Grid renders to a <canvas>, so it can't read CSS `var()` — the
+// theme needs literal color strings. These mirror the design-system tokens in
+// src/styles/globals.css (Radix Slate/Cyan). Keep them in sync if that scale
+// changes; the grid otherwise drifts away from the rest of the app's chrome
+// (which is what happened with the pre-design-system slate/#06b6d4 palette).
+type GridPalette = ReturnType<typeof getPalette>;
+
+const getPalette = (isDark: boolean) =>
+  isDark
+    ? {
+        cellBg: "#111113",        // --neutral-1
+        headerBg: "#18191b",      // --neutral-2
+        headerHoverBg: "#212225", // --neutral-3
+        headerFocusBg: "#272a2d", // --neutral-4
+        border: "#363a3f",        // --neutral-6
+        text: "#edeef0",          // --neutral-12
+        textMuted: "#b0b4ba",     // --neutral-11
+        textFaint: "#696e77",     // --neutral-9
+        accent: "#00a2c7",        // --accent-9
+        accentText: "#4ccce6",    // --accent-11
+        accentTint: "rgba(0, 162, 199, 0.2)",
+        numPos: "#63c174",        // --success-11
+        numNeg: "#ff6369",        // --danger-11
+        newTint: "rgba(70, 167, 88, 0.15)",   // --success-9
+        modTint: "rgba(255, 178, 36, 0.15)",  // --warning-9
+      }
+    : {
+        cellBg: "#fcfcfd",        // --neutral-1
+        headerBg: "#f9f9fb",      // --neutral-2
+        headerHoverBg: "#eff0f3", // --neutral-3
+        headerFocusBg: "#e7e8ec", // --neutral-4
+        border: "#d8d9e0",        // --neutral-6
+        text: "#1c2024",          // --neutral-12
+        textMuted: "#60646c",     // --neutral-11
+        textFaint: "#8b8d98",     // --neutral-9
+        accent: "#00a2c7",        // --accent-9
+        accentText: "#107d98",    // --accent-11
+        accentTint: "rgba(0, 162, 199, 0.12)",
+        numPos: "#2a7e3b",        // --success-11
+        numNeg: "#c62a2f",        // --danger-11
+        newTint: "rgba(70, 167, 88, 0.1)",    // --success-9
+        modTint: "rgba(255, 178, 36, 0.12)",  // --warning-9
+      };
+
+const getTheme = (p: GridPalette): Partial<Theme> => ({
+  accentColor: p.accent,
+  accentLight: p.accentTint,
+  textDark: p.text,
+  textMedium: p.textMuted,
+  textLight: p.textFaint,
+  bgCell: p.cellBg,
+  bgHeader: p.headerBg,
+  bgHeaderHasFocus: p.headerFocusBg,
+  bgHeaderHovered: p.headerHoverBg,
   headerFontStyle: "bold 12px var(--font-sans)",
   baseFontStyle: "13px 'JetBrains Mono', 'Fira Code', monospace",
-  textHeader: isDark ? "#f1f5f9" : "#0f172a",
+  textHeader: p.text,
   lineHeight: 1.4,
   fontFamily: "var(--font-sans)",
   // Added for overlay editor consistency
-  bgSearchResult: isDark ? "rgba(6, 182, 212, 0.2)" : "rgba(6, 182, 212, 0.1)",
-  drilldownBorder: isDark ? "#334155" : "#e2e8f0",
+  bgSearchResult: p.accentTint,
+  drilldownBorder: p.border,
   editorFontSize: "13px",
 });
 
@@ -108,7 +152,8 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
 
   const { theme } = useSettings();
   const isDark = theme === "dark" || (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
-  const gridTheme = useMemo(() => getTheme(isDark), [isDark]);
+  const palette = useMemo(() => getPalette(isDark), [isDark]);
+  const gridTheme = useMemo(() => getTheme(palette), [palette]);
 
   const gridColumns = useMemo<GridColumn[]>(() => 
     columns.map(col => ({ 
@@ -163,9 +208,9 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
     const themeOverride: any = {};
     
     if (isNew) {
-      themeOverride.bgCell = isDark ? "rgba(16, 185, 129, 0.15)" : "rgba(16, 185, 129, 0.1)";
+      themeOverride.bgCell = palette.newTint;
     } else if (isModified) {
-      themeOverride.bgCell = isDark ? "rgba(245, 158, 11, 0.15)" : "rgba(245, 158, 11, 0.1)";
+      themeOverride.bgCell = palette.modTint;
     }
 
     if (val === null || val === undefined) {
@@ -177,13 +222,13 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
         readonly: !canEdit,
         themeOverride: {
           ...themeOverride,
-          textDark: isDark ? "#4b5563" : "#94a3b8", // Greyed out NULL
+          textDark: palette.textFaint, // Greyed out NULL
         }
       };
     }
 
     // Common text color for data rows
-    themeOverride.textDark = isDark ? "#f8fafc" : "#0f172a";
+    themeOverride.textDark = palette.text;
 
     if (dateColumns.has(col)) {
       return {
@@ -194,7 +239,7 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
         readonly: !canEdit,
         themeOverride: {
           ...themeOverride,
-          textDark: isDark ? "#38bdf8" : "#0284c7",
+          textDark: palette.accentText,
           baseFontStyle: "italic 13px 'JetBrains Mono', monospace"
         }
       };
@@ -209,7 +254,7 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
         readonly: !canEdit,
         themeOverride: {
           ...themeOverride,
-          textDark: val > 0 ? (isDark ? "#4ade80" : "#16a34a") : (val < 0 ? (isDark ? "#f87171" : "#dc2626") : (isDark ? "#94a3b8" : "#64748b"))
+          textDark: val > 0 ? palette.numPos : (val < 0 ? palette.numNeg : palette.textMuted)
         }
       };
     }
@@ -244,7 +289,7 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
           readonly: true,
           themeOverride: {
             ...themeOverride,
-            textDark: isDark ? "#818cf8" : "#4f46e5",
+            textDark: palette.accentText,
           }
         };
       }
@@ -270,7 +315,7 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
       readonly: !canEdit,
       themeOverride
     };
-  }, [data, columns, isProductionMode, isDark, isReadOnly, sensitiveColumns, dateColumns, binaryColumns]);
+  }, [data, columns, isProductionMode, palette, isReadOnly, sensitiveColumns, dateColumns, binaryColumns]);
 
   return (
     <div className="w-full h-full relative overflow-hidden bg-[var(--surface-base)]">
