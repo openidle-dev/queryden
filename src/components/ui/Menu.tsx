@@ -47,7 +47,6 @@ export const Menu = forwardRef<HTMLDivElement, MenuProps>(function Menu(
   return (
     <div
       ref={ref}
-      role="menu"
       className={cn(
         positioned && "fixed z-[100]",
         "w-56",
@@ -83,7 +82,6 @@ export const MenuItem = forwardRef<HTMLButtonElement, MenuItemProps>(function Me
     <button
       ref={ref}
       type={type}
-      role="menuitem"
       className={cn(itemBase, toneHover[tone], rightSlot && "justify-between", className)}
       {...rest}
     >
@@ -147,7 +145,7 @@ export interface MenuSubProps {
 export function MenuSub({ icon, label, width = "w-48", children }: MenuSubProps) {
   return (
     <div className="relative group/submenu">
-      <button type="button" role="menuitem" className={cn(itemBase, toneHover.default, "justify-between")}>
+      <button type="button" className={cn(itemBase, toneHover.default, "justify-between")}>
         <span className="flex items-center gap-2 min-w-0">
           {icon}
           {label}
