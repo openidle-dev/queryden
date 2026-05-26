@@ -9,6 +9,9 @@ import { useAppInfo } from "../../hooks/useAppInfo";
 import { useUpdateStore } from "../../store/updateStore";
 import { useSettings } from "../../store/settingsStore";
 import { parseChangelog } from "../../utils/parseChangelog";
+import { Button } from "../ui/Button";
+import { IconButton } from "../ui/IconButton";
+import { Input } from "../ui/Input";
 // Bundled CHANGELOG.md from the repo root via Vite's `?raw` loader. Locked to
 // the build's installed version — newer versions land via auto-update.
 import changelogRaw from "../../../CHANGELOG.md?raw";
@@ -50,45 +53,43 @@ export function HelpDialog({ isOpen, onClose }: HelpDialogProps) {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[150] bg-black/70 flex items-center justify-center p-8 backdrop-blur-md animate-in fade-in duration-300">
-      <div className="bg-[var(--surface)] w-full max-w-4xl h-[660px] rounded-2xl shadow-2xl flex overflow-hidden border border-[var(--border)] animate-in zoom-in-95 duration-200">
-        
+    <div className="fixed inset-0 z-[150] bg-black/60 flex items-center justify-center p-8 backdrop-blur-sm animate-in fade-in duration-300">
+      <div className="bg-[var(--surface-elevated)] w-full max-w-4xl h-[660px] rounded-lg shadow-2xl flex overflow-hidden border border-[var(--neutral-6)] animate-in zoom-in-95 duration-200">
+
         {/* Sidebar */}
-        <div className="w-64 border-r border-[var(--border)] bg-[var(--surface-raised)] flex flex-col font-sans">
-          <div className="p-6">
-            <div className="flex items-center gap-3 mb-8">
-              <img src="/img/icon.png" alt={appName} className="w-8 h-8 rounded-xl" />
-              <h2 className="font-bold text-lg tracking-tight">{appName}</h2>
-            </div>
-            
-            <nav className="space-y-1.5">
-              <TabButton
-                active={activeTab === "about"}
-                onClick={() => setActiveTab("about")}
-                icon={<Info className="w-4 h-4" />}
-                label="About"
-              />
-              <TabButton
-                active={activeTab === "changelog"}
-                onClick={() => setActiveTab("changelog")}
-                icon={<FileText className="w-4 h-4" />}
-                label="What's New"
-              />
-              <TabButton
-                active={activeTab === "report"}
-                onClick={() => setActiveTab("report")}
-                icon={<Bug className="w-4 h-4" />}
-                label="Log New Issue"
-              />
-            </nav>
+        <div className="w-64 border-r border-[var(--neutral-6)] bg-[var(--surface-panel)] flex flex-col font-sans">
+          <div className="h-12 px-4 border-b border-[var(--neutral-6)] flex items-center gap-2 shrink-0">
+            <img src="/img/icon.png" alt={appName} className="w-5 h-5 rounded-md" />
+            <h2 className="font-semibold text-sm tracking-tight">{appName}</h2>
           </div>
-          
-          <div className="mt-auto p-6 border-t border-[var(--border)]">
-            <div className="flex items-center justify-between text-[10px] uppercase font-bold text-[var(--text-secondary)] opacity-50 tracking-widest mb-4">
+
+          <nav className="p-3 space-y-1">
+            <TabButton
+              active={activeTab === "about"}
+              onClick={() => setActiveTab("about")}
+              icon={<Info className="w-4 h-4" />}
+              label="About"
+            />
+            <TabButton
+              active={activeTab === "changelog"}
+              onClick={() => setActiveTab("changelog")}
+              icon={<FileText className="w-4 h-4" />}
+              label="What's New"
+            />
+            <TabButton
+              active={activeTab === "report"}
+              onClick={() => setActiveTab("report")}
+              icon={<Bug className="w-4 h-4" />}
+              label="Log New Issue"
+            />
+          </nav>
+
+          <div className="mt-auto p-4 border-t border-[var(--neutral-6)]">
+            <div className="flex items-center justify-between text-[10px] uppercase font-bold text-[var(--neutral-11)] opacity-70 tracking-widest mb-3">
               <span>Community</span>
             </div>
             <div className="space-y-3">
-              <a href="https://github.com/openidle-dev/queryden" target="_blank" className="flex items-center gap-2 text-xs font-medium text-[var(--text-secondary)] hover:text-white transition-colors">
+              <a href="https://github.com/openidle-dev/queryden" target="_blank" className="flex items-center gap-2 text-xs font-medium text-[var(--neutral-11)] hover:text-[var(--neutral-12)] transition-colors">
                 <Github className="w-4 h-4" /> GitHub Repository
               </a>
             </div>
@@ -96,31 +97,32 @@ export function HelpDialog({ isOpen, onClose }: HelpDialogProps) {
         </div>
 
         {/* Content Area */}
-        <div className="flex-1 flex flex-col min-w-0 bg-[var(--background)] font-sans">
-          <div className="h-14 px-6 border-b border-[var(--border)] flex items-center justify-between bg-[var(--surface)]">
-            <h3 className="font-bold text-sm uppercase tracking-widest opacity-80">
+        <div className="flex-1 flex flex-col min-w-0 bg-[var(--surface-base)] font-sans">
+          <div className="h-12 px-4 border-b border-[var(--neutral-6)] flex items-center justify-between bg-[var(--surface-elevated)]">
+            <h3 className="font-semibold text-sm">
               {activeTab === "about" && "Application Info"}
               {activeTab === "changelog" && "What's New"}
               {activeTab === "report" && "Report an Issue"}
             </h3>
-            <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-colors group">
-              <X className="w-5 h-5 opacity-50 group-hover:opacity-100" />
-            </button>
+            <IconButton icon={<X />} label="Close" size="sm" variant="ghost" onClick={onClose} />
           </div>
 
           <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
             {activeTab === "about" && (
               <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                <div className="flex items-start gap-6 p-6 bg-[var(--surface-raised)] rounded-2xl border border-[var(--border)] shadow-sm">
+                <div className="flex items-start gap-6 p-6 bg-[var(--surface-panel)] rounded-lg border border-[var(--neutral-6)] shadow-sm">
                   <img src="/img/icon.png" alt={appName} className="w-20 h-20 rounded-2xl" />
                    <div className="flex-1">
-                      <h1 className="text-2xl font-black mb-1">{appName} <span className="text-blue-500 text-sm">v{appVersion}</span></h1>
-                      <p className="text-sm text-[var(--text-secondary)] leading-relaxed mb-4">
+                      <h1 className="text-2xl font-black mb-1">{appName} <span className="text-[var(--accent-11)] text-sm">v{appVersion}</span></h1>
+                      <p className="text-sm text-[var(--neutral-11)] leading-relaxed mb-4">
                         A premium database management environment built for the modern SQL expert. 
                         Engineered for speed, performance, and accessibility.
                       </p>
                       <div className="flex gap-4 text-xs font-bold">
-                        <button 
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          leftIcon={<BookOpen className="w-3 h-3" />}
                           onClick={async () => {
                             try {
                               const { openUrl } = await import("@tauri-apps/plugin-opener");
@@ -144,10 +146,9 @@ export function HelpDialog({ isOpen, onClose }: HelpDialogProps) {
                               }
                             }
                           }}
-                          className="bg-blue-500 text-white px-3 py-1 rounded-lg hover:bg-blue-600 transition-colors flex items-center gap-2"
                         >
-                          <BookOpen className="w-3 h-3" /> View Documentation Guide
-                        </button>
+                          View Documentation Guide
+                        </Button>
                       </div>
                    </div>
                 </div>
@@ -192,18 +193,18 @@ export function HelpDialog({ isOpen, onClose }: HelpDialogProps) {
 function ChangelogPanel({ installedVersion }: { installedVersion: string }) {
   const entries = useMemo(() => parseChangelog(changelogRaw), []);
   const prose =
-    "max-w-none text-sm text-[var(--text-secondary)] leading-relaxed " +
+    "max-w-none text-sm text-[var(--neutral-11)] leading-relaxed " +
     "[&_h2]:hidden " + // version heading rendered separately above
-    "[&_h3]:text-xs [&_h3]:font-bold [&_h3]:uppercase [&_h3]:tracking-widest [&_h3]:opacity-60 [&_h3]:mt-4 [&_h3]:mb-2 [&_h3]:text-[var(--text-primary)] " +
+    "[&_h3]:text-xs [&_h3]:font-bold [&_h3]:uppercase [&_h3]:tracking-widest [&_h3]:opacity-60 [&_h3]:mt-4 [&_h3]:mb-2 [&_h3]:text-[var(--neutral-12)] " +
     "[&_ul]:list-disc [&_ul]:pl-5 [&_ul]:space-y-2 [&_li]:text-[13px] " +
     "[&_p]:mb-3 " +
-    "[&_strong]:text-[var(--text-primary)] " +
-    "[&_code]:bg-white/10 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[12px] [&_code]:text-blue-300 " +
-    "[&_a]:text-blue-400 [&_a]:underline hover:[&_a]:text-blue-300";
+    "[&_strong]:text-[var(--neutral-12)] " +
+    "[&_code]:bg-[var(--neutral-4)] [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[12px] [&_code]:text-[var(--accent-11)] " +
+    "[&_a]:text-[var(--accent-11)] [&_a]:underline hover:[&_a]:text-[var(--accent-10)]";
 
   if (entries.length === 0) {
     return (
-      <div className="text-sm text-[var(--text-secondary)] italic">
+      <div className="text-sm text-[var(--neutral-11)] italic">
         No changelog content is available.
       </div>
     );
@@ -211,7 +212,7 @@ function ChangelogPanel({ installedVersion }: { installedVersion: string }) {
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-      <p className="text-xs text-[var(--text-secondary)] opacity-70">
+      <p className="text-xs text-[var(--neutral-11)] opacity-70">
         Release notes for QueryDen. Newer versions arrive via auto-update — open this dialog after updating to see what changed.
       </p>
       {entries.map((entry) => {
@@ -220,19 +221,19 @@ function ChangelogPanel({ installedVersion }: { installedVersion: string }) {
         return (
           <section
             key={entry.version}
-            className="p-5 bg-[var(--surface-raised)] rounded-2xl border border-[var(--border)]"
+            className="p-5 bg-[var(--surface-panel)] rounded-lg border border-[var(--neutral-6)]"
           >
             <header className="flex items-baseline gap-3 mb-3">
               <h2 className="text-lg font-black tracking-tight">
                 {isUnreleased ? "Unreleased" : `v${entry.version}`}
               </h2>
               {entry.date && (
-                <span className="text-[10px] uppercase font-bold tracking-widest text-[var(--text-secondary)] opacity-60">
+                <span className="text-[10px] uppercase font-bold tracking-widest text-[var(--neutral-11)] opacity-60">
                   {entry.date}
                 </span>
               )}
               {isCurrent && (
-                <span className="text-[10px] uppercase font-bold tracking-widest text-[var(--color-accent)] bg-[var(--color-accent)]/15 px-2 py-0.5 rounded-full">
+                <span className="text-[10px] uppercase font-bold tracking-widest text-[var(--accent-11)] bg-[var(--accent-3)] px-2 py-0.5 rounded-full">
                   Current
                 </span>
               )}
@@ -296,9 +297,9 @@ function IssueReporter({ appVersion, buildDate, updateChannel, sysInfo, activeCo
   if (isSubmitted) {
     return (
       <div className="flex flex-col items-center justify-center py-10 animate-in fade-in duration-300">
-        <CheckCircle className="w-12 h-12 text-green-400 mb-4" />
+        <CheckCircle className="w-12 h-12 text-[var(--success-11)] mb-4" />
         <h3 className="text-lg font-bold mb-1">{useEmail ? "Email Opened" : "GitHub Opened"}</h3>
-        <p className="text-xs text-[var(--text-secondary)] text-center opacity-70 max-w-xs leading-relaxed">
+        <p className="text-xs text-[var(--neutral-11)] text-center opacity-70 max-w-xs leading-relaxed">
           {useEmail
             ? "To attach a screenshot, drag-and-drop it into your email client."
             : "To attach a screenshot, drag-and-drop or paste it into the GitHub issue page that just opened."}
@@ -309,21 +310,21 @@ function IssueReporter({ appVersion, buildDate, updateChannel, sysInfo, activeCo
 
   return (
     <div className="space-y-4 animate-in fade-in duration-300">
-      <div className={`p-3 border rounded-lg flex items-start gap-3 ${useEmail ? 'bg-purple-500/5 border-purple-500/15' : 'bg-blue-500/5 border-blue-500/15'}`}>
-        {useEmail ? <Send className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" /> : <Bug className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />}
-        <p className="text-[11px] text-[var(--text-secondary)] leading-tight">
+      <div className="p-3 border rounded-lg flex items-start gap-3 bg-[var(--accent-3)] border-[var(--accent-6)]">
+        {useEmail ? <Send className="w-4 h-4 text-[var(--accent-11)] shrink-0 mt-0.5" /> : <Bug className="w-4 h-4 text-[var(--accent-11)] shrink-0 mt-0.5" />}
+        <p className="text-[11px] text-[var(--neutral-11)] leading-tight">
           {useEmail ? "Report via email to hello@openidle.com." : "Open an issue on our GitHub repository."}
         </p>
       </div>
 
       <div className="space-y-3">
         <div className="space-y-1.5">
-          <label className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] opacity-50">Report Type</label>
+          <label className="text-[10px] font-bold uppercase tracking-widest text-[var(--neutral-11)] opacity-50">Report Type</label>
           <div className="flex gap-1.5">
             {(["bug", "enhancement", "question"] as const).map(t => (
-              <button 
+              <button
                 key={t} onClick={() => setSeverity(t)}
-                className={`flex-1 px-3 py-2 rounded-lg text-[10px] font-bold transition-all ${severity === t ? "bg-blue-500 text-white shadow-sm border-blue-400" : "bg-[var(--surface-raised)] border border-[var(--border)] text-[var(--text-secondary)] hover:text-white hover:border-white/20"}`}
+                className={`flex-1 px-3 py-2 rounded-lg text-[10px] font-bold transition-all cursor-pointer border ${severity === t ? "bg-[var(--accent-9)] text-white border-[var(--accent-9)] shadow-sm" : "bg-[var(--surface-panel)] border-[var(--neutral-6)] text-[var(--neutral-11)] hover:text-[var(--neutral-12)] hover:border-[var(--neutral-7)]"}`}
               >
                 {t === "bug" ? "🐛 Bug" : t === "enhancement" ? "✨ Feature" : "❓ Question"}
               </button>
@@ -332,30 +333,30 @@ function IssueReporter({ appVersion, buildDate, updateChannel, sysInfo, activeCo
         </div>
 
         <div className="space-y-1.5">
-          <label className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] opacity-50">Issue Title</label>
-          <input 
+          <label className="text-[10px] font-bold uppercase tracking-widest text-[var(--neutral-11)] opacity-50">Issue Title</label>
+          <Input
+            inputSize="sm"
             value={title} onChange={e => setTitle(e.target.value)}
             placeholder="Short summary of the issue..."
-            className="w-full px-3 py-2 bg-[var(--surface-raised)] border border-[var(--border)] rounded-lg text-xs outline-none focus:border-blue-500/50 transition-all"
           />
         </div>
 
         <div className="space-y-1.5">
-          <label className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] opacity-50">Description</label>
-          <textarea 
+          <label className="text-[10px] font-bold uppercase tracking-widest text-[var(--neutral-11)] opacity-50">Description</label>
+          <textarea
             value={description} onChange={e => setDescription(e.target.value)}
             placeholder="Tell us what happened..."
             rows={3}
-            className="w-full px-3 py-2 bg-[var(--surface-raised)] border border-[var(--border)] rounded-lg text-xs outline-none focus:border-blue-500/50 resize-none transition-all"
+            className="w-full px-3 py-2 bg-[var(--surface-base)] border border-[var(--neutral-7)] rounded-md text-xs text-[var(--neutral-12)] placeholder:text-[var(--neutral-9)] outline-none focus:border-[var(--accent-8)] focus:ring-1 focus:ring-[var(--accent-8)]/30 resize-none transition-all"
           />
         </div>
 
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <div className="text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] opacity-50">Attach an image?</div>
-            <div className="h-[90px] p-3 bg-[var(--surface-raised)] border border-dashed border-[var(--border)] rounded-lg flex items-start gap-2.5">
-              <Paperclip className="w-3.5 h-3.5 text-blue-400 shrink-0 mt-0.5 opacity-80" />
-              <p className="text-[10px] text-[var(--text-secondary)] leading-snug">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-[var(--neutral-11)] opacity-50">Attach an image?</div>
+            <div className="h-[90px] p-3 bg-[var(--surface-panel)] border border-dashed border-[var(--neutral-6)] rounded-lg flex items-start gap-2.5">
+              <Paperclip className="w-3.5 h-3.5 text-[var(--neutral-11)] shrink-0 mt-0.5 opacity-80" />
+              <p className="text-[10px] text-[var(--neutral-11)] leading-snug">
                 {useEmail
                   ? "After we open your email client, drag-and-drop the image into the message."
                   : "After we open the GitHub page, drag-and-drop or paste the image into the issue body."}
@@ -364,22 +365,23 @@ function IssueReporter({ appVersion, buildDate, updateChannel, sysInfo, activeCo
           </div>
 
           <div className="flex flex-col justify-end gap-3">
-            <div className="p-2 bg-[var(--surface-raised)] border border-[var(--border)] rounded-lg text-[9px] text-[var(--text-secondary)] space-y-0.5">
+            <div className="p-2 bg-[var(--surface-panel)] border border-[var(--neutral-6)] rounded-lg text-[9px] text-[var(--neutral-11)] space-y-0.5">
               <div><span className="opacity-50">App:</span> v{appVersion} ({buildDate?.slice(0, 7) || "dev"})</div>
               <div><span className="opacity-50">OS:</span> {sysInfo?.os_name?.toString().split(' ')[0] || "?"}</div>
             </div>
-            <button
+            <Button
+              variant={useEmail ? "secondary" : "primary"}
               onClick={submitIssue} disabled={!title.trim()}
-              className={`w-full py-2.5 rounded-lg text-xs font-bold text-white shadow-lg transition-all ${useEmail ? 'bg-purple-500' : 'bg-green-500'} disabled:opacity-20`}
+              className="w-full"
             >
               {useEmail ? "Send via Email" : "Create Issue"}
-            </button>
+            </Button>
           </div>
         </div>
       </div>
 
       <div className="flex justify-center pt-1">
-        <button onClick={() => setUseEmail(!useEmail)} className="text-[10px] font-bold text-blue-400 hover:underline opacity-60">
+        <button onClick={() => setUseEmail(!useEmail)} className="text-[10px] font-bold text-[var(--accent-11)] hover:underline opacity-60 cursor-pointer">
           {useEmail ? "Need GitHub Account?" : "Don't have a GitHub account?"}
         </button>
       </div>
@@ -391,12 +393,12 @@ function IssueReporter({ appVersion, buildDate, updateChannel, sysInfo, activeCo
 
 function TabButton({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string }) {
   return (
-    <button 
+    <button
       onClick={onClick}
-      className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all ${
-        active 
-          ? "bg-blue-500 text-white shadow-lg shadow-blue-500/20" 
-          : "text-[var(--text-secondary)] hover:bg-white/5 hover:text-white"
+      className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-bold transition-all cursor-pointer ${
+        active
+          ? "bg-[var(--accent-9)] text-white shadow-lg"
+          : "text-[var(--neutral-11)] hover:bg-[var(--neutral-4)] hover:text-[var(--neutral-12)]"
       }`}
     >
       {icon}
@@ -407,8 +409,8 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
 
 function InfoCard({ title, value, icon }: { title: string; value: string; icon: React.ReactNode }) {
   return (
-    <div className="p-4 bg-[var(--surface-raised)] border border-[var(--border)] rounded-xl flex flex-col gap-1 shadow-sm hover:border-blue-500/30 transition-colors">
-      <div className="flex items-center gap-2 text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-widest opacity-60">
+    <div className="p-4 bg-[var(--surface-panel)] border border-[var(--neutral-6)] rounded-lg flex flex-col gap-1 shadow-sm hover:border-[var(--accent-8)]/40 transition-colors">
+      <div className="flex items-center gap-2 text-[10px] font-bold text-[var(--neutral-11)] uppercase tracking-widest opacity-60">
         {icon} {title}
       </div>
       <div className="text-sm font-bold truncate">{value}</div>
