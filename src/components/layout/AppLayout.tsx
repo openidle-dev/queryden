@@ -258,7 +258,7 @@ export function AppLayout() {
                       className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all text-left text-sm group ${
                         index === selectedIndex 
                           ? 'bg-[var(--accent-9)] text-white' 
-                          : 'hover:bg-[var(--surface-elevated)] text-[var(--neutral-12)]'
+                          : 'hover:bg-[var(--neutral-4)] text-[var(--neutral-12)]'
                       }`}
                     >
                       <result.icon className={`w-4 h-4 ${index === selectedIndex ? 'text-white' : 'text-[var(--accent-9)]'}`} />
