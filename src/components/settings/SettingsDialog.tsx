@@ -231,17 +231,17 @@ function AppearanceSettings() {
 
           <div>
             <label className="block text-xs font-medium mb-1.5">Editor Font Family</label>
-            <select
+            <Select
               value={settings.editorFontFamily || "JetBrains Mono"}
-              onChange={(e) => settings.setSetting("editorFontFamily", e.target.value)}
-              className="w-full px-3 py-1.5 text-sm rounded bg-[var(--surface-base)] border border-[var(--neutral-6)] outline-none focus:border-[var(--accent-8)] text-[var(--neutral-12)]"
-            >
-              <option value="JetBrains Mono">JetBrains Mono</option>
-              <option value="Fira Code">Fira Code</option>
-              <option value="Cascadia Code">Cascadia Code</option>
-              <option value="Source Code Pro">Source Code Pro</option>
-              <option value="monospace">System Monospace</option>
-            </select>
+              onValueChange={(v) => settings.setSetting("editorFontFamily", v)}
+              options={[
+                { label: "JetBrains Mono", value: "JetBrains Mono" },
+                { label: "Fira Code", value: "Fira Code" },
+                { label: "Cascadia Code", value: "Cascadia Code" },
+                { label: "Source Code Pro", value: "Source Code Pro" },
+                { label: "System Monospace", value: "monospace" },
+              ]}
+            />
             <p className="text-[10px] text-[var(--neutral-11)] mt-1 opacity-60">Applies to the SQL editor only.</p>
           </div>
 
@@ -300,15 +300,11 @@ function KeymapSettings() {
       {/* Keymap Preset */}
       <div>
         <label className="block text-xs font-medium mb-2">Keymap Preset</label>
-        <select
+        <Select
           value={selectedPreset}
-          onChange={(e) => handlePresetChange(e.target.value)}
-          className="w-full px-3 py-2 text-sm rounded bg-[var(--surface-base)] border border-[var(--neutral-6)] outline-none focus:border-[var(--accent-8)] text-[var(--neutral-12)]"
-        >
-          {defaultKeymaps.map((preset) => (
-            <option key={preset.id} value={preset.id}>{preset.name}</option>
-          ))}
-        </select>
+          onValueChange={(v) => handlePresetChange(v)}
+          options={defaultKeymaps.map((preset) => ({ label: preset.name, value: preset.id }))}
+        />
       </div>
 
       {/* Common Shortcuts */}
@@ -337,29 +333,29 @@ function SQLCompletionSettings() {
       {/* Suggest Objects From */}
       <div>
         <label className="block text-xs font-medium mb-2">Suggest objects from</label>
-        <select
+        <Select
           value={settings.suggestObjectsFrom}
-          onChange={(e) => settings.setSetting("suggestObjectsFrom", e.target.value as any)}
-          className="w-full px-3 py-2 text-sm rounded bg-[var(--surface-base)] border border-[var(--neutral-6)] outline-none focus:border-[var(--accent-8)] text-[var(--neutral-12)]"
-        >
-          <option value="currentScope">Current schema only</option>
-          <option value="allSchemas">All available schemas</option>
-        </select>
+          onValueChange={(v) => settings.setSetting("suggestObjectsFrom", v as any)}
+          options={[
+            { label: "Current schema only", value: "currentScope" },
+            { label: "All available schemas", value: "allSchemas" },
+          ]}
+        />
         <p className="text-xs text-[var(--neutral-11)] mt-1">Which schemas to suggest objects from</p>
       </div>
 
       {/* Qualify Objects */}
       <div>
         <label className="block text-xs font-medium mb-2">Qualify objects</label>
-        <select
+        <Select
           value={settings.qualifyObjects}
-          onChange={(e) => settings.setSetting("qualifyObjects", e.target.value as any)}
-          className="w-full px-3 py-2 text-sm rounded bg-[var(--surface-base)] border border-[var(--neutral-6)] outline-none focus:border-[var(--accent-8)] text-[var(--neutral-12)]"
-        >
-          <option value="onCollisions">On collisions</option>
-          <option value="always">Always</option>
-          <option value="never">Never</option>
-        </select>
+          onValueChange={(v) => settings.setSetting("qualifyObjects", v as any)}
+          options={[
+            { label: "On collisions", value: "onCollisions" },
+            { label: "Always", value: "always" },
+            { label: "Never", value: "never" },
+          ]}
+        />
       </div>
 
       {/* JOIN Completion */}
@@ -680,12 +676,15 @@ function ImportExportSettings() {
       {/* CSV Delimiter */}
       <div>
         <label className="block text-xs font-medium mb-2">CSV Delimiter</label>
-        <select className="w-full px-3 py-2 text-sm rounded bg-[var(--surface-base)] border border-[var(--neutral-6)] outline-none focus:border-[var(--accent-8)] text-[var(--neutral-12)]">
-          <option value=",">Comma (,)</option>
-          <option value=";">Semicolon (;)</option>
-          <option value="\t">Tab</option>
-          <option value="|">Pipe (|)</option>
-        </select>
+        <Select
+          defaultValue=","
+          options={[
+            { label: "Comma (,)", value: "," },
+            { label: "Semicolon (;)", value: ";" },
+            { label: "Tab", value: "\\t" },
+            { label: "Pipe (|)", value: "|" },
+          ]}
+        />
       </div>
 
       {/* Include Headers */}
@@ -709,10 +708,13 @@ function ImportExportSettings() {
       {/* Quote Character */}
       <div>
         <label className="block text-xs font-medium mb-2">Quote character</label>
-        <select className="w-full px-3 py-2 text-sm rounded bg-[var(--surface-base)] border border-[var(--neutral-6)] outline-none focus:border-[var(--accent-8)] text-[var(--neutral-12)]">
-          <option value="&quot;">Double quotes (&quot;)</option>
-          <option value="'">Single quotes (')</option>
-        </select>
+        <Select
+          defaultValue={'"'}
+          options={[
+            { label: 'Double quotes (")', value: '"' },
+            { label: "Single quotes (')", value: "'" },
+          ]}
+        />
       </div>
     </div>
   );
@@ -816,34 +818,31 @@ function AISettings() {
 
         <div>
           <label className="block text-xs font-medium mb-2">Model Selection</label>
-          <select
+          <Select
             value={ai.model}
-            onChange={(e) => ai.setModel(e.target.value)}
-            className="w-full px-3 py-2 text-sm rounded bg-[var(--surface-base)] border border-[var(--neutral-6)] outline-none focus:border-[var(--accent-8)] text-[var(--neutral-12)]"
-          >
-            {ai.provider === "openai" && (
-              <>
-                <option value="gpt-4o">GPT-4o (Recommended)</option>
-                <option value="gpt-4-turbo">GPT-4 Turbo</option>
-                <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
-              </>
-            )}
-            {ai.provider === "google" && (
-              <>
-                <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
-                <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
-              </>
-            )}
-            {ai.provider === "anthropic" && (
-              <>
-                <option value="claude-3-5-sonnet">Claude 3.5 Sonnet</option>
-                <option value="claude-3-opus">Claude 3 Opus</option>
-              </>
-            )}
-            {ai.provider === "local" && (
-              <option value="llama3">Llama 3 (via Ollama)</option>
-            )}
-          </select>
+            onValueChange={(v) => ai.setModel(v)}
+            options={
+              ai.provider === "openai"
+                ? [
+                    { label: "GPT-4o (Recommended)", value: "gpt-4o" },
+                    { label: "GPT-4 Turbo", value: "gpt-4-turbo" },
+                    { label: "GPT-3.5 Turbo", value: "gpt-3.5-turbo" },
+                  ]
+                : ai.provider === "google"
+                  ? [
+                      { label: "Gemini 1.5 Pro", value: "gemini-1.5-pro" },
+                      { label: "Gemini 1.5 Flash", value: "gemini-1.5-flash" },
+                    ]
+                  : ai.provider === "anthropic"
+                    ? [
+                        { label: "Claude 3.5 Sonnet", value: "claude-3-5-sonnet" },
+                        { label: "Claude 3 Opus", value: "claude-3-opus" },
+                      ]
+                    : ai.provider === "local"
+                      ? [{ label: "Llama 3 (via Ollama)", value: "llama3" }]
+                      : []
+            }
+          />
         </div>
       </div>
     </div>
@@ -870,15 +869,15 @@ function CopyTransferSettings() {
       <div className="space-y-4">
         <div>
           <label className="text-xs font-medium block mb-1">Copy Method</label>
-          <select
+          <Select
             value={settings.copyMethod}
-            onChange={(e) => setSetting("copyMethod", e.target.value)}
-            className="w-full bg-[var(--surface-base)] border border-[var(--neutral-6)] rounded px-3 py-2 text-xs outline-none"
-          >
-            <option value="insert">INSERT...SELECT (Same server)</option>
-            <option value="copy">COPY TO/FROM (Fastest - Same server)</option>
-            <option value="pgdump">pg_dump/pg_restore (Cross-server)</option>
-          </select>
+            onValueChange={(v) => setSetting("copyMethod", v)}
+            options={[
+              { label: "INSERT...SELECT (Same server)", value: "insert" },
+              { label: "COPY TO/FROM (Fastest - Same server)", value: "copy" },
+              { label: "pg_dump/pg_restore (Cross-server)", value: "pgdump" },
+            ]}
+          />
           <p className="text-[10px] text-[var(--neutral-11)] mt-1">
             {settings.copyMethod === "insert" && "Uses INSERT INTO...SELECT - works across databases on same server"}
             {settings.copyMethod === "copy" && "Native PostgreSQL COPY - fastest for bulk data, requires same server"}
@@ -942,15 +941,15 @@ function CopyTransferSettings() {
 
         <div>
           <label className="text-xs font-medium block mb-1">Logging Level</label>
-          <select
+          <Select
             value={settings.copyLoggingLevel}
-            onChange={(e) => setSetting("copyLoggingLevel", e.target.value)}
-            className="w-full bg-[var(--surface-base)] border border-[var(--neutral-6)] rounded px-3 py-2 text-xs outline-none"
-          >
-            <option value="minimal">Minimal</option>
-            <option value="normal">Normal</option>
-            <option value="verbose">Verbose</option>
-          </select>
+            onValueChange={(v) => setSetting("copyLoggingLevel", v)}
+            options={[
+              { label: "Minimal", value: "minimal" },
+              { label: "Normal", value: "normal" },
+              { label: "Verbose", value: "verbose" },
+            ]}
+          />
         </div>
       </div>
 

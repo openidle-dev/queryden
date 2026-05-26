@@ -5,6 +5,7 @@ import { Dialog } from "../ui/Dialog";
 import { Input } from "../ui/Input";
 import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
+import { Select } from "../ui/Select";
 
 interface CreateTableDialogProps {
   isOpen: boolean;
@@ -135,13 +136,13 @@ export function CreateTableDialog({ isOpen, onClose, onCreate, dbType }: CreateT
                         />
                       </td>
                       <td className="p-1 px-2">
-                        <select
+                        <Select
                           value={col.type}
-                          onChange={(e) => handleColumnChange(idx, "type", e.target.value)}
-                          className="w-full bg-transparent border-none rounded px-2 py-1 text-xs text-[var(--neutral-12)] focus:ring-1 focus:ring-[var(--accent-8)]/40 outline-none appearance-none cursor-pointer"
-                        >
-                          {commonTypes.map(t => <option key={t} value={t} className="bg-[var(--surface-elevated)]">{t}</option>)}
-                        </select>
+                          onValueChange={(v) => handleColumnChange(idx, "type", v)}
+                          selectSize="sm"
+                          className="h-auto py-1 border-none bg-transparent"
+                          options={commonTypes.map(t => ({ label: t, value: t }))}
+                        />
                       </td>
                       <td className="p-1 text-center">
                         <input
