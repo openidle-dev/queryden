@@ -4,6 +4,12 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 
 ## [Unreleased]
 
+## [1.0.21] - 2026-05-26
+
+### Fixed
+- **[#179](https://github.com/openidle-dev/queryden/issues/179) — App window wouldn't close (X button / Alt+F4 did nothing).** The unsaved-queries close handler from #121 registers `getCurrentWindow().onCloseRequested(...)`, and Tauri v2's JS implementation of that listener auto-calls `window.destroy()` after the handler unless `preventDefault()` was called — so it routes **every** OS close through `destroy()`, including the common no-dirty-tabs case. `destroy()` requires the `core:window:allow-destroy` permission, but the capability file only granted `core:default` (whose `core:window:default` set is read-only getters), so the IPC was denied and the window silently stayed open. A regression: before #121 added the listener, the native close path closed the window directly. Fix adds `core:window:allow-destroy` to `src-tauri/capabilities/default.json`. Reported on Windows; affected all platforms.
+- **[#180](https://github.com/openidle-dev/queryden/issues/180) — Boot splash now matches the design system.** The splash in `index.html` still used the pre-design-system palette — background `#0b0f17` and a cyan→purple wordmark gradient (`#06b6d4` → `#8b5cf6`) — which clashed with the running app, whose accent is solid Radix Cyan `--accent-9` `#00a2c7` with no purple anywhere. Retuned the splash to mirror the tokens in `src/styles/globals.css`: background `#111113` (`--neutral-1`), text `#edeef0` (`--neutral-12`), wordmark an in-brand cyan gradient `#00a2c7` → `#4ccce6` (`--accent-9` → `--accent-11`), accent glow/drop-shadow `rgba(0,162,199,…)`, tagline `#696e77` (`--neutral-9`). Also aligned the native window `backgroundColor` in `tauri.conf.json` (`[11,15,23]` → `[17,17,19]`) so there's no color flash before the webview paints. Values are hardcoded hex because the splash renders before CSS variables exist.
+
 ## [1.0.20] - 2026-05-26
 
 ### Added
