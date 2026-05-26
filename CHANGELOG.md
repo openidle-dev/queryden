@@ -4,6 +4,8 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 
 ## [Unreleased]
 
+## [1.0.23] - 2026-05-26
+
 ### Added
 - **[#194](https://github.com/openidle-dev/queryden/issues/194) — New "Blue" theme (dark navy surfaces + blue accent).** A third selectable theme alongside Dark/Light/System, with a navy slate neutral scale and a blue accent (`--accent-9` `#3b82f6`), giving a VS Code "Dark+" feel. Added as a `.theme-blue` token block in `src/styles/globals.css`; only the raw neutral/accent scales are overridden, so the surface-elevation and legacy semantic aliases resolve through `var()` against them. Wired through `ThemeContext` (theme type + `<html>` class application), `settingsStore` (theme union), and the Appearance theme dropdown. Because the Glide results grid and Monaco editors render to `<canvas>`/their own DOM and can't read CSS `var()`, each gets a dedicated blue palette: `GridView.tsx` gains a navy grid palette (literal hex mirrored from the tokens), and a shared `src/utils/monacoThemes.ts` defines a custom `queryden-blue` Monaco theme (navy chrome over `vs-dark` syntax colors) now used by the SQL editor, Compare diff, and Definition viewer.
 
