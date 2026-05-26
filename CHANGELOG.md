@@ -4,6 +4,8 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 
 ## [Unreleased]
 
+## [1.0.22] - 2026-05-26
+
 ### Fixed
 - **[#187](https://github.com/openidle-dev/queryden/issues/187) — Results data grid now matches the design system.** The Glide data grid in `src/components/ui/GridView.tsx` still used the pre-design-system palette — `accentColor: #06b6d4` (old cyan), Tailwind-slate cell/header backgrounds (`#0f172a`/`#1e293b`/`#334155`) that read bluer than the Radix Slate neutrals, sky-blue date cells (`#38bdf8`), and indigo binary-cell labels (`#818cf8`) — so the table looked off-theme next to the now-tokenized results toolbar and buttons. Remapped the entire grid palette to the `globals.css` tokens (neutral scale for surfaces/text/borders, `--accent-9`/`--accent-11` for the selection accent and date/binary text, `--success-11`/`--danger-11` for numeric +/− coloring, `--success-9`/`--warning-9` tints for new/modified rows), for both dark and light themes. The grid renders to `<canvas>` and can't read CSS `var()`, so the values are literal hex mirrored from the tokens with per-line comments mapping each back to its variable.
 
