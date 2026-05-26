@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { ChevronRight, ChevronDown, Database, Table, Folder, FolderOpen, Plus, Search, Server, Columns, Hash, Eye, Variable, Trash2, Edit2, Play, Zap, Code, Download, Upload, Loader2, Terminal, Check, AlertCircle, Square, X } from "lucide-react";
+import { ChevronRight, ChevronDown, Database, Table, Folder, FolderOpen, Plus, Search, Server, Columns, Hash, Eye, Variable, Trash2, Edit2, Play, Zap, Code, Download, Upload, Loader2, Terminal, Check, AlertCircle, Square } from "lucide-react";
 import { ImportExportDialog } from "./ImportExportDialog";
 import { PROVIDERS } from "../../config/providers";
 import { DatabaseConnection } from "../../contexts/ConnectionContext";
@@ -16,6 +16,7 @@ import { buildConnectionTree, type FolderTreeNode } from "../../utils/folderTree
 import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
 import { Menu, MenuItem, MenuLabel, MenuSeparator } from "../ui/Menu";
+import { Dialog } from "../ui/Dialog";
 
 interface TreeNode {
   id: string;
@@ -2498,136 +2499,135 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
 
       {/* Backup Dialog */}
       {backupDialogOpen && backupTarget && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/70" onClick={() => setBackupDialogOpen(false)} />
-          <div className="relative w-[500px] bg-[var(--surface)] border border-[var(--border)] rounded-2xl shadow-2xl p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-bold text-lg">Backup Database</h3>
-              <button onClick={() => setBackupDialogOpen(false)} className="p-1 hover:bg-[var(--border)] rounded"><ChevronRight className="w-4 h-4" /></button>
+        <Dialog
+          open
+          onClose={() => { if (!backupLoading) setBackupDialogOpen(false); }}
+          dismissOnBackdrop={!backupLoading}
+          dismissOnEsc={!backupLoading}
+          className="max-w-[500px]"
+        >
+          <Dialog.Title onClose={backupLoading ? undefined : () => setBackupDialogOpen(false)}>Backup Database</Dialog.Title>
+          <Dialog.Body>
+            <div className="mb-4">
+              <p className="text-sm text-[var(--neutral-11)] mb-2">Database: <span className="font-medium text-[var(--neutral-12)]">{backupTarget.dbName}</span></p>
+              <p className="text-sm text-[var(--neutral-11)]">Connection: <span className="font-medium text-[var(--neutral-12)]">{backupTarget.connName}</span></p>
             </div>
             <div className="mb-4">
-              <p className="text-sm text-[var(--text-secondary)] mb-2">Database: <span className="font-medium text-[var(--text-primary)]">{backupTarget.dbName}</span></p>
-              <p className="text-sm text-[var(--text-secondary)]">Connection: <span className="font-medium text-[var(--text-primary)]">{backupTarget.connName}</span></p>
-            </div>
-            <div className="mb-4">
-              <label className="text-xs font-bold uppercase text-[var(--text-secondary)]">Backup Type</label>
+              <label className="text-xs font-bold uppercase text-[var(--neutral-11)]">Backup Type</label>
               <div className="mt-2 space-y-2">
                 <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="radio" checked={backupType === "sql-schema"} onChange={() => setBackupType("sql-schema")} className="text-indigo-500" />
+                  <input type="radio" checked={backupType === "sql-schema"} onChange={() => setBackupType("sql-schema")} className="accent-[var(--accent-9)]" />
                   <span className="text-sm">SQL Dump (Schema Only)</span>
                 </label>
                 <label className={`flex items-center gap-2 cursor-pointer ${activeConnection?.type !== 'postgres' && activeConnection?.type !== 'supabase' ? 'opacity-40 grayscale pointer-events-none' : ''}`}>
-                  <input 
-                    type="radio" 
-                    checked={backupType === "sql-full"} 
-                    onChange={() => setBackupType("sql-full")} 
-                    className="text-indigo-500"
-                    disabled={activeConnection?.type !== 'postgres' && activeConnection?.type !== 'supabase'} 
+                  <input
+                    type="radio"
+                    checked={backupType === "sql-full"}
+                    onChange={() => setBackupType("sql-full")}
+                    className="accent-[var(--accent-9)]"
+                    disabled={activeConnection?.type !== 'postgres' && activeConnection?.type !== 'supabase'}
                   />
                   <span className="text-sm">SQL Dump (Schema + Data) <span className="text-[10px] opacity-70 ml-1">(PG Only)</span></span>
                 </label>
                 <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="radio" checked={backupType === "json"} onChange={() => setBackupType("json")} className="text-indigo-500" />
+                  <input type="radio" checked={backupType === "json"} onChange={() => setBackupType("json")} className="accent-[var(--accent-9)]" />
                   <span className="text-sm">JSON Backup (Portable)</span>
                 </label>
                 <label className={`flex items-center gap-2 cursor-pointer ${activeConnection?.type !== 'postgres' && activeConnection?.type !== 'supabase' ? 'opacity-40 grayscale pointer-events-none' : ''}`}>
-                  <input 
-                    type="radio" 
-                    checked={backupType === "directory"} 
-                    onChange={() => setBackupType("directory")} 
-                    className="text-indigo-500"
-                    disabled={activeConnection?.type !== 'postgres' && activeConnection?.type !== 'supabase'} 
+                  <input
+                    type="radio"
+                    checked={backupType === "directory"}
+                    onChange={() => setBackupType("directory")}
+                    className="accent-[var(--accent-9)]"
+                    disabled={activeConnection?.type !== 'postgres' && activeConnection?.type !== 'supabase'}
                   />
                   <span className="text-sm">Directory Backup <span className="text-[10px] opacity-70 ml-1">(PG Only)</span></span>
                 </label>
               </div>
             </div>
             {backupLoading && (
-              <div className="mb-4 p-3 bg-indigo-500/10 border border-indigo-500/30 rounded-lg">
-                <div className="flex items-center gap-2 text-indigo-400"><Loader2 className="w-4 h-4 animate-spin" /><span className="text-sm font-medium">Backing up...</span></div>
-                <p className="text-xs text-indigo-300 mt-1">{backupStatus}</p>
+              <div className="p-3 bg-[var(--accent-3)] border border-[var(--accent-6)] rounded-lg">
+                <div className="flex items-center gap-2 text-[var(--accent-11)]"><Loader2 className="w-4 h-4 animate-spin" /><span className="text-sm font-medium">Backing up...</span></div>
+                <p className="text-xs text-[var(--accent-11)] opacity-80 mt-1">{backupStatus}</p>
               </div>
             )}
-            <div className="flex justify-end gap-2 text-xs">
-              {!['postgres', 'supabase'].includes(activeConnection?.type || '') && (
-                <div className="mr-auto text-[var(--text-secondary)] italic flex items-center gap-1">
-                  <AlertCircle className="w-3 h-3" /> Some options limited for {activeConnection?.type}
-                </div>
-              )}
-              <button 
-                onClick={() => { if (backupLoading) { backupStopRef.current = true; setBackupStatus("Stopping..."); } else { setBackupDialogOpen(false); } }} 
-                className="px-4 py-2 rounded-lg hover:bg-[var(--border)] transition-colors"
-              >
-                {backupLoading ? "Stop Backup" : "Cancel"}
-              </button>
-              <button 
-                onClick={executeBackup} 
-                disabled={backupLoading} 
-                className="px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 flex items-center gap-2 disabled:opacity-50 shadow-lg shadow-indigo-500/20 transition-all font-semibold"
-              >
-                <Loader2 className={`w-3 h-3 ${backupLoading ? "animate-spin" : ""}`} />
-                {backupLoading ? "Processing..." : "Start Backup"}
-              </button>
-            </div>
-          </div>
-        </div>
+          </Dialog.Body>
+          <Dialog.Footer>
+            {!['postgres', 'supabase'].includes(activeConnection?.type || '') && (
+              <div className="mr-auto text-xs text-[var(--neutral-11)] italic flex items-center gap-1">
+                <AlertCircle className="w-3 h-3" /> Some options limited for {activeConnection?.type}
+              </div>
+            )}
+            <Button
+              variant={backupLoading ? "destructive" : "secondary"}
+              size="sm"
+              onClick={() => { if (backupLoading) { backupStopRef.current = true; setBackupStatus("Stopping..."); } else { setBackupDialogOpen(false); } }}
+            >
+              {backupLoading ? "Stop Backup" : "Cancel"}
+            </Button>
+            <Button variant="primary" size="sm" onClick={executeBackup} disabled={backupLoading} loading={backupLoading}>
+              {backupLoading ? "Processing..." : "Start Backup"}
+            </Button>
+          </Dialog.Footer>
+        </Dialog>
       )}
 
       {/* Restore Dialog */}
       {restoreDialogOpen && backupTarget && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/70" onClick={() => !restoreLoading && setRestoreDialogOpen(false)} />
-          <div className="relative w-[500px] bg-[var(--surface)] border border-[var(--border)] rounded-2xl shadow-2xl p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-bold text-lg flex items-center gap-2"><Upload className="w-5 h-5 text-indigo-400" /> Restore Database</h3>
-              <button onClick={() => setRestoreDialogOpen(false)} className="p-1 hover:bg-[var(--border)] rounded transition-colors" disabled={restoreLoading}><X className="w-5 h-5" /></button>
-            </div>
-            <div className="mb-4 p-4 bg-[var(--surface-light)] border border-[var(--border)] rounded-xl">
+        <Dialog
+          open
+          onClose={() => { if (!restoreLoading) setRestoreDialogOpen(false); }}
+          dismissOnBackdrop={!restoreLoading}
+          dismissOnEsc={!restoreLoading}
+          className="max-w-[500px]"
+        >
+          <Dialog.Title onClose={restoreLoading ? undefined : () => setRestoreDialogOpen(false)}>
+            <span className="flex items-center gap-2"><Upload className="w-4 h-4 text-[var(--accent-11)]" /> Restore Database</span>
+          </Dialog.Title>
+          <Dialog.Body>
+            <div className="mb-4 p-4 bg-[var(--surface-base)] border border-[var(--neutral-6)] rounded-xl">
               <div className="flex justify-between items-start">
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] mb-1">Target Database</p>
-                  <p className="text-sm font-semibold text-emerald-400">{backupTarget.dbName}</p>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--neutral-11)] mb-1">Target Database</p>
+                  <p className="text-sm font-semibold text-[var(--success-11)]">{backupTarget.dbName}</p>
                 </div>
                 <div className="text-right">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] mb-1">Server</p>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--neutral-11)] mb-1">Server</p>
                   <p className="text-sm font-medium">{backupTarget.connName} ({activeConnection?.type})</p>
                 </div>
               </div>
             </div>
-            
+
             {!restoreLoading ? (
-              <button onClick={executeRestore} className="w-full px-4 py-3 rounded-lg border border-[var(--border)] hover:bg-[var(--border)] flex items-center justify-center gap-2">
-                <Upload className="w-4 h-4" />Select Backup File to Restore
-              </button>
+              <Button variant="secondary" onClick={executeRestore} className="w-full" leftIcon={<Upload className="w-4 h-4" />}>
+                Select Backup File to Restore
+              </Button>
             ) : (
               <div className="space-y-3">
-                <div className="p-4 bg-indigo-500/10 border border-indigo-500/30 rounded-lg">
-                  <div className="flex items-center gap-2 text-indigo-400 mb-2"><Loader2 className="w-4 h-4 animate-spin" /><span className="text-sm font-medium">Restoring...</span></div>
-                  <p className="text-xs text-indigo-300">{backupStatus}</p>
+                <div className="p-4 bg-[var(--accent-3)] border border-[var(--accent-6)] rounded-lg">
+                  <div className="flex items-center gap-2 text-[var(--accent-11)] mb-2"><Loader2 className="w-4 h-4 animate-spin" /><span className="text-sm font-medium">Restoring...</span></div>
+                  <p className="text-xs text-[var(--accent-11)] opacity-80">{backupStatus}</p>
                 </div>
-                <button 
-                  onClick={() => { backupStopRef.current = true; setBackupStatus("Stopping..."); }} 
-                  className="w-full px-4 py-2 rounded-lg bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 text-sm font-medium flex items-center justify-center gap-2"
-                >
-                  <Square className="w-4 h-4" />Stop Restore
-                </button>
+                <Button variant="destructive" onClick={() => { backupStopRef.current = true; setBackupStatus("Stopping..."); }} className="w-full" leftIcon={<Square className="w-4 h-4" />}>
+                  Stop Restore
+                </Button>
               </div>
             )}
-            
+
             {backupStatus.includes("complete") && !restoreLoading && (
-              <div className="mt-4 p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg">
-                <div className="flex items-center gap-2 text-emerald-400"><Check className="w-4 h-4" /><span className="text-sm font-medium">Restore Complete!</span></div>
+              <div className="mt-4 p-3 bg-[var(--success-3)] border border-[var(--success-6)] rounded-lg">
+                <div className="flex items-center gap-2 text-[var(--success-11)]"><Check className="w-4 h-4" /><span className="text-sm font-medium">Restore Complete!</span></div>
               </div>
             )}
-            
+
             {backupStatus.includes("Error") && !restoreLoading && (
-              <div className="mt-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
-                <div className="flex items-center gap-2 text-red-400 mb-2"><AlertCircle className="w-4 h-4" /><span className="text-sm font-medium">Errors Encountered</span></div>
-                <pre className="text-xs text-red-300 mt-1 whitespace-pre-wrap max-h-48 overflow-y-auto scrollbar-thin">{backupStatus}</pre>
+              <div className="mt-4 p-3 bg-[var(--danger-3)] border border-[var(--danger-6)] rounded-lg">
+                <div className="flex items-center gap-2 text-[var(--danger-11)] mb-2"><AlertCircle className="w-4 h-4" /><span className="text-sm font-medium">Errors Encountered</span></div>
+                <pre className="text-xs text-[var(--danger-11)] opacity-80 mt-1 whitespace-pre-wrap max-h-48 overflow-y-auto scrollbar-thin">{backupStatus}</pre>
               </div>
             )}
-          </div>
-        </div>
+          </Dialog.Body>
+        </Dialog>
       )}
       <CreateTableDialog
         isOpen={isCreateTableOpen}
@@ -2688,48 +2688,35 @@ function MoveToFolderDialog({ target, folders, onCancel, onPick }: MoveToFolderD
     target.kind === "folder" ? descendantFolderIds(target.id, folders) : new Set<string>();
 
   return (
-    <div
-      className="fixed inset-0 z-[200] bg-black/50 flex items-center justify-center"
-      onClick={onCancel}
-    >
-      <div
-        className="bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-xl w-[360px] max-h-[480px] flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="px-4 py-3 border-b border-[var(--border)] flex items-center justify-between">
-          <div className="text-sm font-semibold">Move "{target.name}" to…</div>
-          <button onClick={onCancel} className="p-1 rounded hover:bg-[var(--border)]">
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-        <div className="flex-1 overflow-y-auto py-1">
-          <button
-            onClick={() => onPick(null)}
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
-          >
-            <FolderOpen className="w-3.5 h-3.5 text-yellow-500" />
-            <span className="font-medium">Root</span>
-          </button>
-          {flat
-            .filter(({ folder }) => !excluded.has(folder.id))
-            .map(({ folder, depth }) => (
-              <button
-                key={folder.id}
-                onClick={() => onPick(folder.id)}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
-                style={{ paddingLeft: `${12 + depth * 16}px` }}
-              >
-                <Folder className="w-3.5 h-3.5 text-yellow-500" />
-                <span>{folder.name}</span>
-              </button>
-            ))}
-          {flat.length === 0 && (
-            <div className="px-3 py-4 text-center text-xs text-[var(--text-secondary)] italic">
-              No folders yet. Use the + button in the toolbar to create one.
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
+    <Dialog open onClose={onCancel} className="max-w-[360px] max-h-[480px]">
+      <Dialog.Title onClose={onCancel}>Move "{target.name}" to…</Dialog.Title>
+      <Dialog.Body className="p-0 py-1">
+        <button
+          onClick={() => onPick(null)}
+          className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--neutral-4)] cursor-pointer"
+        >
+          <FolderOpen className="w-3.5 h-3.5 text-yellow-500" />
+          <span className="font-medium">Root</span>
+        </button>
+        {flat
+          .filter(({ folder }) => !excluded.has(folder.id))
+          .map(({ folder, depth }) => (
+            <button
+              key={folder.id}
+              onClick={() => onPick(folder.id)}
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--neutral-4)] cursor-pointer"
+              style={{ paddingLeft: `${12 + depth * 16}px` }}
+            >
+              <Folder className="w-3.5 h-3.5 text-yellow-500" />
+              <span>{folder.name}</span>
+            </button>
+          ))}
+        {flat.length === 0 && (
+          <div className="px-3 py-4 text-center text-xs text-[var(--neutral-11)] italic">
+            No folders yet. Use the + button in the toolbar to create one.
+          </div>
+        )}
+      </Dialog.Body>
+    </Dialog>
   );
 }
