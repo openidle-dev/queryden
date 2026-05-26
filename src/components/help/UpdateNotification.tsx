@@ -14,6 +14,8 @@ import {
 } from "lucide-react";
 import { releaseUrl, useUpdateStore } from "../../store/updateStore";
 import ReactMarkdown from "react-markdown";
+import { Button } from "../ui/Button";
+import { IconButton } from "../ui/IconButton";
 
 export function UpdateNotification() {
   const {
@@ -109,12 +111,7 @@ export function UpdateNotification() {
               <ArrowUpCircle className="w-4 h-4 text-[var(--accent-9)]" />
               <h3 className="text-sm font-bold">Software Updates</h3>
             </div>
-            <button
-              onClick={() => setShowPanel(false)}
-              className="p-1 hover:bg-white/10 rounded-lg transition-colors"
-            >
-              <X className="w-4 h-4 opacity-50 hover:opacity-100" />
-            </button>
+            <IconButton icon={<X />} label="Close" size="sm" variant="ghost" onClick={() => setShowPanel(false)} />
           </div>
 
           {/* Content */}
@@ -138,12 +135,9 @@ export function UpdateNotification() {
                 <p className="text-xs text-[var(--neutral-11)]">
                   QueryDen v{currentVersion} is the latest version.
                 </p>
-                <button
-                  onClick={checkForUpdates}
-                  className="mt-4 px-4 py-2 bg-white/5 hover:bg-white/10 rounded-lg text-xs font-medium transition-colors flex items-center gap-2 mx-auto"
-                >
-                  <RefreshCw className="w-3 h-3" /> Check again
-                </button>
+                <Button variant="secondary" size="sm" onClick={checkForUpdates} className="mt-4 mx-auto" leftIcon={<RefreshCw className="w-3 h-3" />}>
+                  Check again
+                </Button>
               </div>
             )}
 
@@ -178,7 +172,7 @@ export function UpdateNotification() {
                       <FileText className="w-3 h-3" /> What's New
                     </div>
                     <div className="p-4 bg-[var(--surface-base)] rounded-xl border border-[var(--neutral-6)] max-h-[200px] overflow-y-auto custom-scrollbar">
-                      <div className="prose-sm text-xs text-[var(--neutral-11)] leading-relaxed [&_h1]:text-base [&_h1]:font-bold [&_h1]:text-[var(--neutral-12)] [&_h1]:mb-2 [&_h2]:text-sm [&_h2]:font-bold [&_h2]:text-[var(--neutral-12)] [&_h2]:mb-2 [&_h3]:text-xs [&_h3]:font-bold [&_h3]:text-[var(--neutral-12)] [&_h3]:mb-1 [&_ul]:list-disc [&_ul]:pl-4 [&_ul]:space-y-1 [&_li]:text-xs [&_p]:mb-2 [&_code]:bg-white/10 [&_code]:px-1 [&_code]:rounded [&_code]:text-[var(--accent-11)] [&_a]:text-[var(--accent-11)] [&_a]:underline">
+                      <div className="prose-sm text-xs text-[var(--neutral-11)] leading-relaxed [&_h1]:text-base [&_h1]:font-bold [&_h1]:text-[var(--neutral-12)] [&_h1]:mb-2 [&_h2]:text-sm [&_h2]:font-bold [&_h2]:text-[var(--neutral-12)] [&_h2]:mb-2 [&_h3]:text-xs [&_h3]:font-bold [&_h3]:text-[var(--neutral-12)] [&_h3]:mb-1 [&_ul]:list-disc [&_ul]:pl-4 [&_ul]:space-y-1 [&_li]:text-xs [&_p]:mb-2 [&_code]:bg-[var(--neutral-4)] [&_code]:px-1 [&_code]:rounded [&_code]:text-[var(--accent-11)] [&_a]:text-[var(--accent-11)] [&_a]:underline">
                         <ReactMarkdown>{update.body}</ReactMarkdown>
                       </div>
                     </div>
@@ -187,29 +181,21 @@ export function UpdateNotification() {
 
                 {/* Download button + release-page escape hatch */}
                 <div className="flex items-center gap-2">
-                  <button
-                    onClick={downloadUpdate}
-                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-[var(--accent-9)] hover:bg-[var(--accent-10)] text-white text-sm font-bold rounded-xl transition-colors shadow-lg shadow-lg"
-                  >
-                    <Download className="w-4 h-4" />
+                  <Button variant="primary" onClick={downloadUpdate} className="flex-1 font-bold shadow-lg" leftIcon={<Download className="w-4 h-4" />}>
                     Download Update
-                  </button>
+                  </Button>
                   <a
                     href={releaseUrl(update.version)}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="p-2.5 bg-white/5 hover:bg-white/10 rounded-xl transition-colors"
+                    className="p-2.5 bg-[var(--neutral-4)] hover:bg-[var(--neutral-5)] rounded-md transition-colors"
                     title="View release on GitHub"
                   >
                     <ExternalLink className="w-4 h-4 opacity-70" />
                   </a>
-                  <button
-                    onClick={() => { dismiss(); setShowPanel(false); }}
-                    className="px-4 py-2.5 bg-white/5 hover:bg-white/10 rounded-xl text-sm font-medium transition-colors"
-                    title="Dismiss"
-                  >
+                  <Button variant="secondary" onClick={() => { dismiss(); setShowPanel(false); }} title="Dismiss">
                     Later
-                  </button>
+                  </Button>
                 </div>
               </div>
             )}
@@ -251,13 +237,14 @@ export function UpdateNotification() {
                   </div>
                 </div>
 
-                <button
+                <Button
+                  variant="primary"
                   onClick={installUpdate}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-[var(--success-9)] hover:bg-[var(--success-10)] text-white text-sm font-bold rounded-xl transition-colors shadow-lg shadow-lg"
+                  leftIcon={<Rocket className="w-4 h-4" />}
+                  className="w-full py-3 h-auto font-bold shadow-lg bg-[var(--success-9)] hover:bg-[var(--success-10)]"
                 >
-                  <Rocket className="w-4 h-4" />
                   Install & Restart
-                </button>
+                </Button>
                 <p className="text-[10px] text-center text-[var(--neutral-11)] opacity-60">
                   QueryDen will close and relaunch after the update.
                 </p>
@@ -287,12 +274,9 @@ export function UpdateNotification() {
                     </div>
                   </div>
                 </div>
-                <button
-                  onClick={() => { reset(); checkForUpdates(); }}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-white/5 hover:bg-white/10 rounded-xl text-sm font-medium transition-colors"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" /> Try Again
-                </button>
+                <Button variant="secondary" onClick={() => { reset(); checkForUpdates(); }} className="w-full" leftIcon={<RefreshCw className="w-3.5 h-3.5" />}>
+                  Try Again
+                </Button>
               </div>
             )}
 
@@ -301,12 +285,9 @@ export function UpdateNotification() {
               <div className="p-8 text-center">
                 <Bell className="w-8 h-8 mx-auto mb-3 opacity-30" />
                 <p className="text-sm font-medium opacity-50">No update information</p>
-                <button
-                  onClick={checkForUpdates}
-                  className="mt-4 px-4 py-2 bg-[var(--accent-9)] hover:bg-[var(--accent-10)] text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-2 mx-auto"
-                >
-                  <RefreshCw className="w-3 h-3" /> Check for Updates
-                </button>
+                <Button variant="primary" size="sm" onClick={checkForUpdates} className="mt-4 mx-auto font-bold" leftIcon={<RefreshCw className="w-3 h-3" />}>
+                  Check for Updates
+                </Button>
               </div>
             )}
           </div>

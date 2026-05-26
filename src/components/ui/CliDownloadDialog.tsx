@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Download, X, Terminal, AlertCircle } from "lucide-react";
 import { useCliStore } from "../../store/cliStore";
+import { Button } from "./Button";
+import { IconButton } from "./IconButton";
 
 interface CliDownloadDialogProps {
   isOpen: boolean;
@@ -48,12 +50,7 @@ export function CliDownloadDialog({
           <h2 className="text-sm font-semibold flex-1 text-[var(--neutral-12)]">
             Download CLI Tool
           </h2>
-          <button
-            onClick={onClose}
-            className="p-1 hover:bg-[var(--neutral-6)] rounded transition-colors text-[var(--neutral-11)]"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <IconButton icon={<X />} label="Close" size="sm" variant="ghost" onClick={onClose} />
         </div>
 
         {/* Content */}
@@ -99,29 +96,19 @@ export function CliDownloadDialog({
 
         {/* Footer */}
         <div className="p-4 border-t border-[var(--neutral-6)] flex justify-end gap-2">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-xs rounded hover:bg-[var(--surface-hover)] text-[var(--neutral-11)]"
-          >
+          <Button variant="ghost" size="sm" onClick={onClose}>
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
             onClick={handleDownload}
             disabled={isDownloading}
-            className="px-4 py-2 text-xs rounded bg-[var(--accent-9)] hover:opacity-80 disabled:opacity-50 text-white flex items-center gap-2"
+            loading={isDownloading}
+            leftIcon={!isDownloading ? <Download className="w-3.5 h-3.5" /> : undefined}
           >
-            {isDownloading ? (
-              <>
-                <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Downloading...
-              </>
-            ) : (
-              <>
-                <Download className="w-3.5 h-3.5" />
-                Download & Install
-              </>
-            )}
-          </button>
+            {isDownloading ? "Downloading..." : "Download & Install"}
+          </Button>
         </div>
       </div>
     </div>

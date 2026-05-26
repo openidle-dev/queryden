@@ -1,6 +1,8 @@
 import { useState, useMemo } from "react";
 import { X, Clock, RotateCcw, Search, FileText, Trash2, ChevronRight, ChevronDown, FolderOpen } from "lucide-react";
 import { useLocalHistory, LocalHistoryEntry } from "../../store/localHistoryStore";
+import { Button } from "./Button";
+import { IconButton } from "./IconButton";
 
 interface LocalHistoryDialogProps {
   isOpen: boolean;
@@ -173,16 +175,8 @@ export function LocalHistoryDialog({ isOpen, onClose, filePath, dirPath, onRever
             </span>
           </div>
           <div className="flex items-center gap-1">
-            <button
-              onClick={async () => { await clearHistory(); setSelectedEntry(null); }}
-              className="p-1 rounded hover:bg-[var(--danger-3)] text-[var(--danger-11)] hover:text-[var(--danger-11)]"
-              title="Clear all history"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
-            <button onClick={onClose} className="p-1 rounded hover:bg-[var(--neutral-6)]">
-              <X className="w-4 h-4" />
-            </button>
+            <IconButton size="sm" onClick={async () => { await clearHistory(); setSelectedEntry(null); }} title="Clear all history" label="Clear all history" icon={<Trash2 />} className="text-[var(--danger-11)] hover:bg-[var(--danger-3)]" />
+            <IconButton size="sm" variant="ghost" onClick={onClose} label="Close" icon={<X />} />
           </div>
         </div>
 
@@ -278,13 +272,9 @@ export function LocalHistoryDialog({ isOpen, onClose, filePath, dirPath, onRever
                       </button>
                     )}
                     {onRevert && (
-                      <button
-                        onClick={() => handleRevert(selectedEntry)}
-                        className="text-[10px] px-2 py-1 rounded bg-[var(--accent-9)] text-white hover:bg-[var(--accent-10)] flex items-center gap-1 transition-colors"
-                      >
-                        <RotateCcw className="w-3 h-3" />
+                      <Button size="xs" variant="primary" onClick={() => handleRevert(selectedEntry)} leftIcon={<RotateCcw className="w-3 h-3" />}>
                         Revert
-                      </button>
+                      </Button>
                     )}
                   </div>
                 </div>

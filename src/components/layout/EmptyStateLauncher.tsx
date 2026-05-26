@@ -1,5 +1,6 @@
 import { Terminal, Plus, FileText, ArrowLeft } from "lucide-react";
 import { useConnections } from "../../contexts/useConnections";
+import { Button } from "../ui/Button";
 
 const SUPPORTED_ENGINES = [
   "PostgreSQL",
@@ -41,13 +42,14 @@ export function EmptyStateLauncher() {
 function ZeroConnectionsActions() {
   return (
     <div className="flex flex-col items-center gap-6">
-      <button
+      <Button
+        variant="primary"
         onClick={() => window.dispatchEvent(new CustomEvent("open-new-connection"))}
-        className="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-[var(--accent-9)] text-white font-bold text-sm hover:bg-[var(--accent-10)] transition-colors shadow-lg shadow-[var(--accent-9)]/30"
+        leftIcon={<Plus className="w-4 h-4" />}
+        className="px-6 py-3 h-auto text-sm font-bold shadow-lg shadow-[var(--accent-9)]/30"
       >
-        <Plus className="w-4 h-4" />
         New Connection
-      </button>
+      </Button>
       <div className="text-center space-y-2">
         <div className="text-[10px] uppercase font-bold text-[var(--neutral-11)] tracking-widest opacity-60">
           Supported engines

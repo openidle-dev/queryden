@@ -1,6 +1,7 @@
 import { Suspense, lazy, useState } from "react";
 import { useSavedQueries } from "../../store/savedQueryStore";
 import { Folder, FileCode, Play, Trash2, Code2, Loader2, Clock } from "lucide-react";
+import { IconButton } from "../ui/IconButton";
 
 const LocalHistoryDialog = lazy(() => import("../ui/LocalHistoryDialog").then((m) => ({ default: m.LocalHistoryDialog })));
 
@@ -23,13 +24,7 @@ export function FilesExplorer() {
           <Folder className="w-4 h-4" />
           Saved Queries
         </h2>
-        <button
-          onClick={() => setShowLocalHistory(true)}
-          className="p-1 rounded hover:bg-[var(--neutral-6)] text-[var(--neutral-11)] hover:text-[var(--neutral-12)]"
-          title="Local History"
-        >
-          <Clock className="w-4 h-4" />
-        </button>
+        <IconButton size="sm" onClick={() => setShowLocalHistory(true)} title="Local History" label="Local History" icon={<Clock />} />
       </div>
 
       <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
@@ -54,23 +49,11 @@ export function FilesExplorer() {
               <div className="flex items-center justify-between mb-1">
                 <div className="flex items-center gap-2 overflow-hidden">
                   <Code2 className="w-3.5 h-3.5 text-[var(--accent-9)] shrink-0" />
-                  <span className="text-xs font-bold truncate tracking-wide text-gray-200">{q.name}</span>
+                  <span className="text-xs font-bold truncate tracking-wide text-[var(--neutral-12)]">{q.name}</span>
                 </div>
                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); handleOpenQuery(q); }}
-                    className="p-1 rounded hover:bg-[var(--accent-9)]/20 text-[var(--accent-9)]"
-                    title="Open in Editor"
-                  >
-                    <Play className="w-3.5 h-3.5" />
-                  </button>
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); removeQuery(q.id); }}
-                    className="p-1 rounded hover:bg-[var(--danger-3)] text-[var(--danger-11)]"
-                    title="Delete"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                  <IconButton size="xs" onClick={(e) => { e.stopPropagation(); handleOpenQuery(q); }} title="Open in Editor" label="Open in Editor" icon={<Play />} className="text-[var(--accent-11)] hover:bg-[var(--accent-3)]" />
+                  <IconButton size="xs" onClick={(e) => { e.stopPropagation(); removeQuery(q.id); }} title="Delete" label="Delete" icon={<Trash2 />} className="text-[var(--danger-11)] hover:bg-[var(--danger-3)]" />
                 </div>
               </div>
               <div className="text-[10px] font-mono text-[var(--neutral-11)] truncate opacity-60 pl-5">

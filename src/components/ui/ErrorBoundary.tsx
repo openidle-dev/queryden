@@ -1,5 +1,6 @@
 import { Component, ErrorInfo, ReactNode } from "react";
 import { AlertTriangle, RefreshCw } from "lucide-react";
+import { Button } from "./Button";
 
 interface Props {
   children: ReactNode;
@@ -47,13 +48,14 @@ export class ErrorBoundary extends Component<Props, State> {
               <p className="text-xs text-[var(--neutral-11)] text-center px-4">
                 Something went wrong in the UI rendering. This is likely a bug in the component tree.
               </p>
-              <button
+              <Button
+                variant="primary"
                 onClick={() => window.location.reload()}
-                className="w-full py-3 bg-[var(--accent-9)] text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-[var(--accent-10)] transition-all shadow-lg shadow-[var(--accent-9)]/20"
+                leftIcon={<RefreshCw className="w-4 h-4" />}
+                className="w-full py-3 h-auto font-bold shadow-lg shadow-[var(--accent-9)]/20"
               >
-                <RefreshCw className="w-4 h-4" />
                 Reload Application
-              </button>
+              </Button>
             </div>
           </div>
         </div>
