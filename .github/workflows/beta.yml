@@ -213,7 +213,7 @@ jobs:
             done
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: beta-bundle-${{ matrix.target }}
           path: |
@@ -243,7 +243,7 @@ jobs:
           persist-credentials: false
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -422,7 +422,7 @@ jobs:
           gh release delete beta-latest --yes --cleanup-tag --repo ${{ github.repository }} || true
 
       - name: Create beta-latest pre-release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: beta-latest
           name: "Beta (rolling)"
