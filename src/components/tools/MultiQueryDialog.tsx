@@ -12,6 +12,7 @@ import { Dialog } from "../ui/Dialog";
 import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
 import { Select } from "../ui/Select";
+import { Menu, MenuItem, MenuLabel, MenuSeparator, MenuSub } from "../ui/Menu";
 
 interface MultiQueryDialogProps {
   isOpen: boolean;
@@ -34,8 +35,6 @@ interface SelectedTarget {
   connectionId: string;
   database: string;
 }
-
-const menuItemClass = "w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--accent-9)] hover:text-white flex items-center gap-2 transition-colors";
 
 export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
   const { connections, vaultCredentials } = useConnections();
@@ -768,56 +767,25 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
                   <div className="flex-1 relative min-h-0 bg-[var(--surface-base)]">
                     {/* Context Menu */}
                     {contextMenu && (
-                      <div
-                        className="fixed z-[500] w-56 bg-[var(--surface-overlay)] border border-[var(--neutral-6)] rounded-xl shadow-2xl py-1.5 animate-in zoom-in-95 duration-100"
-                        style={{ top: contextMenu.y, left: contextMenu.x }}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <div className="px-3 py-1 text-[9px] uppercase font-bold text-[var(--neutral-11)] tracking-widest mb-1 border-b border-[var(--neutral-6)] pb-1">Selection Actions</div>
+                      <Menu x={contextMenu.x} y={contextMenu.y} className="z-[500]">
+                        <MenuLabel bordered>Selection Actions</MenuLabel>
                         {contextMenu.col && (
-                          <button
-                            onClick={() => { copyToClipboard(String(contextMenu.row[contextMenu.col!] || "")); setContextMenu(null); }}
-                            className={menuItemClass}
-                          >
-                            <Copy className="w-3.5 h-3.5" /> Copy Cell
-                          </button>
+                          <MenuItem icon={<Copy className="w-3.5 h-3.5" />} onClick={() => { copyToClipboard(String(contextMenu.row[contextMenu.col!] || "")); setContextMenu(null); }}>
+                            Copy Cell
+                          </MenuItem>
                         )}
-                        <button
-                          onClick={() => { copyToClipboard(JSON.stringify(contextMenu.row, null, 2)); setContextMenu(null); }}
-                          className={menuItemClass}
-                        >
-                          <FileJson className="w-3.5 h-3.5" /> Copy Row as JSON
-                        </button>
-                        <div className="my-1 border-t border-[var(--neutral-6)] opacity-50" />
+                        <MenuItem icon={<FileJson className="w-3.5 h-3.5" />} onClick={() => { copyToClipboard(JSON.stringify(contextMenu.row, null, 2)); setContextMenu(null); }}>
+                          Copy Row as JSON
+                        </MenuItem>
+                        <MenuSeparator />
 
-                        <div className="relative group/sql">
-                          <button className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--accent-9)] hover:text-white flex items-center justify-between transition-colors">
-                            <div className="flex items-center gap-2"><Database className="w-3.5 h-3.5" /> Generate SQL</div>
-                            <ChevronRight className="w-3 h-3 opacity-50" />
-                          </button>
-                          <div className="hidden group-hover/sql:block absolute left-[calc(100%-8px)] top-0 w-48 bg-[var(--surface-overlay)] border border-[var(--neutral-6)] rounded-xl shadow-2xl py-1.5 animate-in slide-in-from-left-1 duration-150">
-                             <div className="px-3 py-1 text-[9px] uppercase font-bold text-[var(--neutral-11)] tracking-widest mb-1 border-b border-[var(--neutral-6)] pb-1 opacity-60">Output Format</div>
-                             <button
-                                onClick={() => generateSqlForSelected("INSERT")}
-                                className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--success-9)] hover:text-white flex items-center gap-2 transition-colors"
-                              >
-                                <Database className="w-3.5 h-3.5" /> SQL INSERTs
-                              </button>
-                              <button
-                                onClick={() => generateSqlForSelected("UPDATE")}
-                                className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--warning-9)] hover:text-white flex items-center gap-2 transition-colors"
-                              >
-                                <RefreshCw className="w-3.5 h-3.5" /> SQL UPDATEs
-                              </button>
-                              <button
-                                onClick={() => generateSqlForSelected("DELETE")}
-                                className="w-full px-3 py-1.5 text-left text-[11px] hover:bg-[var(--danger-9)] hover:text-white flex items-center gap-2 transition-colors"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" /> SQL DELETEs
-                              </button>
-                          </div>
-                        </div>
-                      </div>
+                        <MenuSub icon={<Database className="w-3.5 h-3.5" />} label="Generate SQL">
+                          <MenuLabel bordered subtle>Output Format</MenuLabel>
+                          <MenuItem tone="success" icon={<Database className="w-3.5 h-3.5" />} onClick={() => generateSqlForSelected("INSERT")}>SQL INSERTs</MenuItem>
+                          <MenuItem tone="warning" icon={<RefreshCw className="w-3.5 h-3.5" />} onClick={() => generateSqlForSelected("UPDATE")}>SQL UPDATEs</MenuItem>
+                          <MenuItem tone="danger" icon={<Trash2 className="w-3.5 h-3.5" />} onClick={() => generateSqlForSelected("DELETE")}>SQL DELETEs</MenuItem>
+                        </MenuSub>
+                      </Menu>
                     )}
                     {currentResult?.error ? (
                       <div className="p-10 text-center"><AlertCircle className="w-12 h-12 text-[var(--danger-9)] mx-auto mb-4 opacity-50" /><h3 className="font-bold text-[var(--danger-11)] mb-2">Remote Execution Error</h3><pre className="text-xs text-[var(--danger-11)] opacity-80 whitespace-pre-wrap font-mono bg-[var(--danger-3)] p-4 rounded-xl border border-[var(--danger-6)]">{currentResult.error}</pre></div>
