@@ -4,6 +4,8 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 
 ## [Unreleased]
 
+## [1.0.20] - 2026-05-26
+
 ### Added
 - **[#144](https://github.com/openidle-dev/queryden/issues/144) — In-app "What's New" tab in the Help dialog.** Help → What's New now shows the bundled CHANGELOG.md as a list of per-version cards, newest first, with a "Current" badge on the version the user is running. CHANGELOG.md is bundled into the build via Vite's `?raw` loader and parsed by a new pure helper `src/utils/parseChangelog.ts` (7 Vitest cases). Each version block renders via the existing `react-markdown` + `remark-gfm` deps that the updater prompt already uses, so opening a new external dep was unnecessary. Pairs with #143 — the updater prompt was already rendering `update.body` as markdown (lines 175-186 of `UpdateNotification.tsx`); #143 fills the manifest's `notes` field with real CHANGELOG content, and this PR adds the standalone browse surface.
 
