@@ -187,13 +187,13 @@ const showIntentionActions = (editor: any, monaco: any, onRunRef: React.MutableR
 
   const menu = document.createElement("div");
   menu.id = "intention-actions-menu";
-  menu.className = "fixed z-[9999] bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-2xl py-1 min-w-[200px]";
+  menu.className = "fixed z-[9999] bg-[var(--surface-elevated)] border border-[var(--neutral-6)] rounded-lg shadow-2xl py-1 min-w-[200px]";
   menu.style.left = `${menuX}px`;
   menu.style.top = `${menuY}px`;
 
   // Add header with lightbulb icon
   const header = document.createElement("div");
-  header.className = "px-3 py-1.5 text-[10px] uppercase font-bold text-[var(--text-secondary)] tracking-widest border-b border-[var(--border)] mb-1";
+  header.className = "px-3 py-1.5 text-[10px] uppercase font-bold text-[var(--neutral-11)] tracking-widest border-b border-[var(--neutral-6)] mb-1";
   header.innerHTML = "💡 Intention Actions";
   menu.appendChild(header);
 
@@ -201,8 +201,8 @@ const showIntentionActions = (editor: any, monaco: any, onRunRef: React.MutableR
     const btn = document.createElement("button");
     btn.className = `w-full px-3 py-2 text-left text-xs flex items-center gap-2 transition-colors ${
       item.disabled
-        ? "text-[var(--text-secondary)] opacity-40 cursor-not-allowed"
-        : "hover:bg-[var(--color-accent)] hover:text-white"
+        ? "text-[var(--neutral-11)] opacity-40 cursor-not-allowed"
+        : "hover:bg-[var(--accent-9)] hover:text-white"
     }`;
     btn.innerHTML = `<span>💡</span><span>${item.label}</span>`;
     if (!item.disabled) {
@@ -446,7 +446,7 @@ export const QueryEditor = memo(function QueryEditor({
 
       const menu = document.createElement("div");
       menu.id = "monaco-editor-context-menu";
-      menu.className = "fixed z-[9999] bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-2xl py-1 min-w-[160px]";
+      menu.className = "fixed z-[9999] bg-[var(--surface-elevated)] border border-[var(--neutral-6)] rounded-lg shadow-2xl py-1 min-w-[160px]";
       menu.style.left = `${menuX}px`;
       menu.style.top = `${menuY}px`;
 
@@ -471,15 +471,15 @@ export const QueryEditor = memo(function QueryEditor({
       items.forEach(item => {
         if (item.separator) {
           const hr = document.createElement("div");
-          hr.className = "my-1 border-t border-[var(--border)]";
+          hr.className = "my-1 border-t border-[var(--neutral-6)]";
           menu.appendChild(hr);
           return;
         }
         const btn = document.createElement("button");
         btn.className = `w-full px-3 py-1.5 text-left text-[11px] flex items-center gap-2 transition-colors ${
           item.disabled
-            ? "text-[var(--text-secondary)] opacity-40 cursor-not-allowed"
-            : "hover:bg-[var(--color-accent)] hover:text-white"
+            ? "text-[var(--neutral-11)] opacity-40 cursor-not-allowed"
+            : "hover:bg-[var(--accent-9)] hover:text-white"
         }`;
         btn.innerText = item.label;
         if (!item.disabled) {
@@ -1137,8 +1137,8 @@ const isInJoinContext = /(\b|^)(JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|INNER\s+JOIN|CROSS
   };
 
   return (
-    <div className="h-full w-full flex flex-col bg-[var(--surface)]">
-      <div className="h-7 flex items-center justify-between px-3 bg-[var(--surface)] border-b border-[var(--border)] shrink-0">
+    <div className="h-full w-full flex flex-col bg-[var(--surface-elevated)]">
+      <div className="h-7 flex items-center justify-between px-3 bg-[var(--surface-elevated)] border-b border-[var(--neutral-6)] shrink-0">
         <div className="flex items-center gap-3">
           {/* Status Indicator - Left side of query area (DataGrip style) */}
           <div className="flex items-center gap-2 shrink-0">
@@ -1149,32 +1149,32 @@ const isInJoinContext = /(\b|^)(JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|INNER\s+JOIN|CROSS
             ) : hasSuccess ? (
               <CheckCircle className="w-4 h-4 text-emerald-400" />
             ) : (
-              <CodeIcon className="w-3 h-3 text-[var(--color-accent)]" />
+              <CodeIcon className="w-3 h-3 text-[var(--accent-9)]" />
             )}
           </div>
           
           {/* Connection name in brackets + query preview */}
           <div className="flex items-center gap-2">
             {connectionName && (
-              <span className="text-xs font-bold text-[var(--color-accent)] opacity-90">
+              <span className="text-xs font-bold text-[var(--accent-9)] opacity-90">
                 [{connectionName}]
               </span>
             )}
-            <span className="text-xs font-medium text-[var(--text-primary)]">SQL Editor</span>
+            <span className="text-xs font-medium text-[var(--neutral-12)]">SQL Editor</span>
             {databaseName && (
-              <span className="text-[9px] text-[var(--text-secondary)] opacity-60">
+              <span className="text-[9px] text-[var(--neutral-11)] opacity-60">
                 / {databaseName}
               </span>
             )}
           </div>
           
           {/* Keyboard shortcuts hint */}
-          <span className="text-[9px] text-[var(--text-secondary)] opacity-50 ml-2 hidden sm:inline">Ctrl+Enter: run at cursor • Ctrl+Shift+Enter: run all • Ctrl+Shift+L: format</span>
+          <span className="text-[9px] text-[var(--neutral-11)] opacity-50 ml-2 hidden sm:inline">Ctrl+Enter: run at cursor • Ctrl+Shift+Enter: run all • Ctrl+Shift+L: format</span>
         </div>
         <div className="flex items-center gap-2">
            <button 
              onClick={() => editorRef.current?.getAction('editor.action.formatDocument')?.run()}
-             className="text-[9px] px-1.5 py-0.5 rounded border border-[var(--border)] hover:bg-[var(--border)] transition-colors opacity-70 hover:opacity-100"
+             className="text-[9px] px-1.5 py-0.5 rounded border border-[var(--neutral-6)] hover:bg-[var(--neutral-6)] transition-colors opacity-70 hover:opacity-100"
            >
              Format SQL
            </button>

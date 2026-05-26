@@ -17,15 +17,15 @@ export function FilesExplorer() {
   };
 
   return (
-    <div className="h-full flex flex-col bg-[var(--surface)] text-[var(--text-primary)]">
-      <div className="p-3 border-b border-[var(--border)] flex items-center justify-between shadow-sm z-10 shrink-0">
-        <h2 className="text-xs font-bold uppercase tracking-wider text-[var(--text-secondary)] flex items-center gap-2">
+    <div className="h-full flex flex-col bg-[var(--surface-elevated)] text-[var(--neutral-12)]">
+      <div className="p-3 border-b border-[var(--neutral-6)] flex items-center justify-between shadow-sm z-10 shrink-0">
+        <h2 className="text-xs font-bold uppercase tracking-wider text-[var(--neutral-11)] flex items-center gap-2">
           <Folder className="w-4 h-4" />
           Saved Queries
         </h2>
         <button
           onClick={() => setShowLocalHistory(true)}
-          className="p-1 rounded hover:bg-[var(--border)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+          className="p-1 rounded hover:bg-[var(--neutral-6)] text-[var(--neutral-11)] hover:text-[var(--neutral-12)]"
           title="Local History"
         >
           <Clock className="w-4 h-4" />
@@ -42,24 +42,24 @@ export function FilesExplorer() {
           <div className="flex flex-col items-center justify-center h-40 opacity-40 text-center px-4">
             <FileCode className="w-10 h-10 mb-3" />
             <p className="text-sm font-bold">No saved queries</p>
-            <p className="text-[10px] mt-1 text-[var(--text-secondary)]">Save queries from the main toolbar to access them here.</p>
+            <p className="text-[10px] mt-1 text-[var(--neutral-11)]">Save queries from the main toolbar to access them here.</p>
           </div>
         ) : (
           queries.map((q) => (
             <div
               key={q.id}
               onClick={() => handleOpenQuery(q)}
-              className="flex flex-col p-2 rounded hover:bg-[var(--background)] border border-transparent hover:border-[var(--border)] cursor-pointer group transition-all"
+              className="flex flex-col p-2 rounded hover:bg-[var(--surface-base)] border border-transparent hover:border-[var(--neutral-6)] cursor-pointer group transition-all"
             >
               <div className="flex items-center justify-between mb-1">
                 <div className="flex items-center gap-2 overflow-hidden">
-                  <Code2 className="w-3.5 h-3.5 text-[var(--color-accent)] shrink-0" />
+                  <Code2 className="w-3.5 h-3.5 text-[var(--accent-9)] shrink-0" />
                   <span className="text-xs font-bold truncate tracking-wide text-gray-200">{q.name}</span>
                 </div>
                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                   <button 
                     onClick={(e) => { e.stopPropagation(); handleOpenQuery(q); }}
-                    className="p-1 rounded hover:bg-[var(--color-accent)]/20 text-[var(--color-accent)]"
+                    className="p-1 rounded hover:bg-[var(--accent-9)]/20 text-[var(--accent-9)]"
                     title="Open in Editor"
                   >
                     <Play className="w-3.5 h-3.5" />
@@ -73,7 +73,7 @@ export function FilesExplorer() {
                   </button>
                 </div>
               </div>
-              <div className="text-[10px] font-mono text-[var(--text-secondary)] truncate opacity-60 pl-5">
+              <div className="text-[10px] font-mono text-[var(--neutral-11)] truncate opacity-60 pl-5">
                 {q.database} • {new Date(q.createdAt).toLocaleDateString()}
               </div>
             </div>

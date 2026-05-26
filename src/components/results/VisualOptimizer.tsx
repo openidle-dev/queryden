@@ -696,7 +696,7 @@ Provide your analysis in plain English with specific SQL fix suggestions.`;
         <div className="flex flex-col items-center justify-center h-full p-8">
           <AlertTriangle className="w-12 h-12 text-red-400 mb-4" />
           <h3 className="font-bold text-red-400">Database Error</h3>
-          <p className="text-xs mt-2 text-[var(--text-secondary)]">The query returned an error:</p>
+          <p className="text-xs mt-2 text-[var(--neutral-11)]">The query returned an error:</p>
           <pre className="text-xs font-mono mt-4 p-4 bg-red-500/10 border border-red-500/30 rounded-xl text-red-300 max-w-lg whitespace-pre-wrap">
             {dbError}
           </pre>
@@ -705,7 +705,7 @@ Provide your analysis in plain English with specific SQL fix suggestions.`;
     }
 
     return (
-      <div className="flex flex-col items-center justify-center h-full p-8 text-[var(--text-secondary)] opacity-50">
+      <div className="flex flex-col items-center justify-center h-full p-8 text-[var(--neutral-11)] opacity-50">
         <AlertTriangle className="w-12 h-12 mb-4" />
         <h3 className="font-bold">Invalid Plan Format</h3>
         <p className="text-xs mt-2">
@@ -723,7 +723,7 @@ Provide your analysis in plain English with specific SQL fix suggestions.`;
             : "Run EXPLAIN on your query and try again."}
         </p>
         {rawData && rawData.length > 0 && (
-          <div className="mt-4 p-3 bg-[var(--surface)] rounded-lg border border-[var(--border)] max-w-lg">
+          <div className="mt-4 p-3 bg-[var(--surface-elevated)] rounded-lg border border-[var(--neutral-6)] max-w-lg">
             <p className="text-[9px] font-mono opacity-60">Raw output preview:</p>
             <pre className="text-[9px] font-mono mt-2 max-h-24 overflow-auto">
               {JSON.stringify(rawData.slice(0, 2), null, 2)}
@@ -735,15 +735,15 @@ Provide your analysis in plain English with specific SQL fix suggestions.`;
   }
 
   const containerClass = isFullscreen
-    ? "fixed inset-0 z-[200] flex bg-[var(--background)] animate-in fade-in zoom-in-95 duration-200"
-    : "flex h-full bg-[var(--background)] animate-in fade-in duration-300";
+    ? "fixed inset-0 z-[200] flex bg-[var(--surface-base)] animate-in fade-in zoom-in-95 duration-200"
+    : "flex h-full bg-[var(--surface-base)] animate-in fade-in duration-300";
 
   return (
     <div className={containerClass}>
       {/* Left Pane: Plan Tree */}
-      <div className="flex-1 flex flex-col min-w-0 border-r border-[var(--border)]">
+      <div className="flex-1 flex flex-col min-w-0 border-r border-[var(--neutral-6)]">
         {/* Header */}
-        <div className="p-3 border-b border-[var(--border)] flex items-center justify-between bg-[var(--surface)]">
+        <div className="p-3 border-b border-[var(--neutral-6)] flex items-center justify-between bg-[var(--surface-elevated)]">
           <div className="flex items-center gap-2">
             <Layout className="w-4 h-4 text-blue-400" />
             <h3 className="font-bold text-xs uppercase tracking-widest">Execution Journey</h3>
@@ -753,22 +753,22 @@ Provide your analysis in plain English with specific SQL fix suggestions.`;
           </div>
           <div className="flex items-center gap-2">
             {/* View Toggle */}
-            <div className="flex items-center bg-[var(--background)] rounded-lg p-0.5 border border-[var(--border)]">
+            <div className="flex items-center bg-[var(--surface-base)] rounded-lg p-0.5 border border-[var(--neutral-6)]">
               <button
                 onClick={() => setActiveView("tree")}
-                className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${activeView === "tree" ? "bg-[var(--color-accent)] text-white" : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"}`}
+                className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${activeView === "tree" ? "bg-[var(--accent-9)] text-white" : "text-[var(--neutral-11)] hover:text-[var(--neutral-12)]"}`}
               >
                 Tree
               </button>
               <button
                 onClick={() => setActiveView("explain")}
-                className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${activeView === "explain" ? "bg-purple-500 text-white" : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"}`}
+                className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${activeView === "explain" ? "bg-purple-500 text-white" : "text-[var(--neutral-11)] hover:text-[var(--neutral-12)]"}`}
               >
                 Explain
               </button>
               <button
                 onClick={() => setActiveView("analyze")}
-                className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${activeView === "analyze" ? "bg-emerald-500 text-white" : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"}`}
+                className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${activeView === "analyze" ? "bg-emerald-500 text-white" : "text-[var(--neutral-11)] hover:text-[var(--neutral-12)]"}`}
               >
                 Analyze
               </button>
@@ -784,7 +784,7 @@ Provide your analysis in plain English with specific SQL fix suggestions.`;
                title={!canUseAI ? "Enable AI in Settings to unlock AI Explain" : "Get AI-powered analysis of this query plan"}
                className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-[10px] font-bold transition-all border ${
                  !canUseAI
-                   ? "bg-[var(--background)]/50 border-[var(--border)] text-[var(--text-secondary)] cursor-not-allowed opacity-40"
+                   ? "bg-[var(--surface-base)]/50 border-[var(--neutral-6)] text-[var(--neutral-11)] cursor-not-allowed opacity-40"
                    : isAIExplaining
                    ? "bg-amber-500/10 border-amber-500/20 text-amber-400"
                    : "bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20"
@@ -816,7 +816,7 @@ Provide your analysis in plain English with specific SQL fix suggestions.`;
 
         {/* Stats Bar */}
         {stats && (
-          <div className="px-4 py-2 border-b border-[var(--border)] bg-[var(--surface)] flex items-center gap-3 overflow-x-auto">
+          <div className="px-4 py-2 border-b border-[var(--neutral-6)] bg-[var(--surface-elevated)] flex items-center gap-3 overflow-x-auto">
             {[...stats.typeMap.entries()]
               .sort((a, b) => b[1] - a[1])
               .slice(0, 6)
@@ -844,7 +844,7 @@ Provide your analysis in plain English with specific SQL fix suggestions.`;
           {activeView === "explain" && (
             <div className={`${isFullscreen ? "max-w-4xl" : "max-w-2xl"} mx-auto space-y-4 pb-12`}>
               <h4 className="text-xs font-bold text-purple-400 uppercase tracking-widest mb-4">Explain Plan</h4>
-              <pre className="text-[10px] font-mono bg-[var(--surface)] p-4 rounded-xl border border-[var(--border)] overflow-auto whitespace-pre-wrap">
+              <pre className="text-[10px] font-mono bg-[var(--surface-elevated)] p-4 rounded-xl border border-[var(--neutral-6)] overflow-auto whitespace-pre-wrap">
                 {JSON.stringify(rawData, null, 2)}
               </pre>
             </div>
@@ -854,22 +854,22 @@ Provide your analysis in plain English with specific SQL fix suggestions.`;
               <h4 className="text-xs font-bold text-emerald-400 uppercase tracking-widest mb-4">Execution Analysis</h4>
               {executionTime > 0 && (
                 <div className="grid grid-cols-2 gap-3 mb-4">
-                  <div className="p-3 bg-[var(--surface)] rounded-lg border border-[var(--border)]">
-                    <p className="text-[9px] text-[var(--text-secondary)] uppercase">Total Time</p>
+                  <div className="p-3 bg-[var(--surface-elevated)] rounded-lg border border-[var(--neutral-6)]">
+                    <p className="text-[9px] text-[var(--neutral-11)] uppercase">Total Time</p>
                     <p className="text-lg font-bold text-emerald-400">{executionTime.toFixed(2)}ms</p>
                   </div>
-                  <div className="p-3 bg-[var(--surface)] rounded-lg border border-[var(--border)]">
-                    <p className="text-[9px] text-[var(--text-secondary)] uppercase">Hot Path Nodes</p>
+                  <div className="p-3 bg-[var(--surface-elevated)] rounded-lg border border-[var(--neutral-6)]">
+                    <p className="text-[9px] text-[var(--neutral-11)] uppercase">Hot Path Nodes</p>
                     <p className="text-lg font-bold text-amber-400">{hotPath.size}</p>
                   </div>
                   {stats && (
                     <>
-                      <div className="p-3 bg-[var(--surface)] rounded-lg border border-[var(--border)]">
-                        <p className="text-[9px] text-[var(--text-secondary)] uppercase">Total Nodes</p>
+                      <div className="p-3 bg-[var(--surface-elevated)] rounded-lg border border-[var(--neutral-6)]">
+                        <p className="text-[9px] text-[var(--neutral-11)] uppercase">Total Nodes</p>
                         <p className="text-lg font-bold text-blue-400">{stats.totalNodes}</p>
                       </div>
-                      <div className="p-3 bg-[var(--surface)] rounded-lg border border-[var(--border)]">
-                        <p className="text-[9px] text-[var(--text-secondary)] uppercase">Insights</p>
+                      <div className="p-3 bg-[var(--surface-elevated)] rounded-lg border border-[var(--neutral-6)]">
+                        <p className="text-[9px] text-[var(--neutral-11)] uppercase">Insights</p>
                         <p className="text-lg font-bold text-purple-400">{insights.length}</p>
                       </div>
                     </>
@@ -896,8 +896,8 @@ Provide your analysis in plain English with specific SQL fix suggestions.`;
       </div>
 
       {/* Right Pane: Optimization Advice */}
-      <div className={`${isFullscreen ? "w-[420px]" : "w-80"} flex flex-col bg-[var(--surface-raised)] shrink-0`}>
-        <div className="p-3 border-b border-[var(--border)] flex items-center justify-between">
+      <div className={`${isFullscreen ? "w-[420px]" : "w-80"} flex flex-col bg-[var(--surface-elevated)] shrink-0`}>
+        <div className="p-3 border-b border-[var(--neutral-6)] flex items-center justify-between">
           <div className="flex items-center gap-2">
             <TrendingUp className="w-4 h-4 text-emerald-400" />
             <h3 className="font-bold text-xs uppercase tracking-widest">Optimization Engine</h3>
@@ -926,25 +926,25 @@ Provide your analysis in plain English with specific SQL fix suggestions.`;
         </div>
 
         {/* Footer */}
-        <div className="p-3 bg-[var(--background)] border-t border-[var(--border)]">
-          <div className="text-[9px] font-bold text-[var(--text-secondary)] uppercase mb-2 opacity-40 tracking-widest text-center">Analysis Modules</div>
+        <div className="p-3 bg-[var(--surface-base)] border-t border-[var(--neutral-6)]">
+          <div className="text-[9px] font-bold text-[var(--neutral-11)] uppercase mb-2 opacity-40 tracking-widest text-center">Analysis Modules</div>
           <div className="grid grid-cols-3 gap-1.5 text-[8px]">
-            <div className="px-1.5 py-1 rounded bg-[var(--surface)] border border-[var(--border)] flex items-center gap-1 justify-center">
+            <div className="px-1.5 py-1 rounded bg-[var(--surface-elevated)] border border-[var(--neutral-6)] flex items-center gap-1 justify-center">
               <Database className="w-2.5 h-2.5 text-blue-400" /> Index
             </div>
-            <div className="px-1.5 py-1 rounded bg-[var(--surface)] border border-[var(--border)] flex items-center gap-1 justify-center">
+            <div className="px-1.5 py-1 rounded bg-[var(--surface-elevated)] border border-[var(--neutral-6)] flex items-center gap-1 justify-center">
               <Search className="w-2.5 h-2.5 text-emerald-400" /> Scans
             </div>
-            <div className="px-1.5 py-1 rounded bg-[var(--surface)] border border-[var(--border)] flex items-center gap-1 justify-center">
+            <div className="px-1.5 py-1 rounded bg-[var(--surface-elevated)] border border-[var(--neutral-6)] flex items-center gap-1 justify-center">
               <List className="w-2.5 h-2.5 text-amber-400" /> Joins
             </div>
-            <div className="px-1.5 py-1 rounded bg-[var(--surface)] border border-[var(--border)] flex items-center gap-1 justify-center">
+            <div className="px-1.5 py-1 rounded bg-[var(--surface-elevated)] border border-[var(--neutral-6)] flex items-center gap-1 justify-center">
               <Activity className="w-2.5 h-2.5 text-rose-400" /> Hot Path
             </div>
-            <div className="px-1.5 py-1 rounded bg-[var(--surface)] border border-[var(--border)] flex items-center gap-1 justify-center">
+            <div className="px-1.5 py-1 rounded bg-[var(--surface-elevated)] border border-[var(--neutral-6)] flex items-center gap-1 justify-center">
               <BarChart3 className="w-2.5 h-2.5 text-purple-400" /> Estimates
             </div>
-            <div className="px-1.5 py-1 rounded bg-[var(--surface)] border border-[var(--border)] flex items-center gap-1 justify-center">
+            <div className="px-1.5 py-1 rounded bg-[var(--surface-elevated)] border border-[var(--neutral-6)] flex items-center gap-1 justify-center">
               <Shield className="w-2.5 h-2.5 text-cyan-400" /> Cache
             </div>
           </div>
@@ -1082,15 +1082,15 @@ function TreeNode({ node, depth, isHot, totalTime }: { node: PlanNode; depth: nu
         className={`group relative flex items-start ${cardPad} ${cardRound} border transition-all ${
           isHot 
             ? "border-amber-500/50 bg-amber-500/5 shadow-lg shadow-amber-500/5" 
-            : "border-[var(--border)] bg-[var(--surface-raised)] hover:border-blue-500/30"
+            : "border-[var(--neutral-6)] bg-[var(--surface-elevated)] hover:border-blue-500/30"
         }`}
       >
         {depth > 0 && (
-          <div className={`absolute ${connLeft} top-1/2 ${connW} h-px bg-[var(--border)] opacity-50`} />
+          <div className={`absolute ${connLeft} top-1/2 ${connW} h-px bg-[var(--neutral-6)] opacity-50`} />
         )}
         
         <div className={`shrink-0 ${iconBoxSize} flex items-center justify-center border ${
-           isHot ? "bg-amber-500/20 border-amber-500/40" : "bg-[var(--background)] border-[var(--border)] opacity-80"
+           isHot ? "bg-amber-500/20 border-amber-500/40" : "bg-[var(--surface-base)] border-[var(--neutral-6)] opacity-80"
         }`}>
           {getIcon(node["Node Type"])}
         </div>
@@ -1106,7 +1106,7 @@ function TreeNode({ node, depth, isHot, totalTime }: { node: PlanNode; depth: nu
                <span className={`text-[9px] font-bold px-1 py-0.5 rounded ${
                  percent > 50 ? "bg-red-500/20 text-red-400" : 
                  percent > 15 ? "bg-amber-500/20 text-amber-400" : 
-                 "bg-[var(--border)] text-[var(--text-secondary)]"
+                 "bg-[var(--neutral-6)] text-[var(--neutral-11)]"
                }`}>
                  {percent.toFixed(1)}%
                </span>
@@ -1120,7 +1120,7 @@ function TreeNode({ node, depth, isHot, totalTime }: { node: PlanNode; depth: nu
           </div>
 
           {/* Cost bar */}
-          <div className="h-0.5 bg-[var(--border)] rounded-full mb-1.5 overflow-hidden">
+          <div className="h-0.5 bg-[var(--neutral-6)] rounded-full mb-1.5 overflow-hidden">
             <div
               className={`h-full rounded-full transition-all duration-700 ${
                 percent > 50 ? "bg-red-500" : percent > 15 ? "bg-amber-500" : "bg-blue-500"
@@ -1129,7 +1129,7 @@ function TreeNode({ node, depth, isHot, totalTime }: { node: PlanNode; depth: nu
             />
           </div>
 
-          <div className="flex flex-wrap gap-x-2 gap-y-0.5 items-center text-[9px] text-[var(--text-secondary)] font-medium">
+          <div className="flex flex-wrap gap-x-2 gap-y-0.5 items-center text-[9px] text-[var(--neutral-11)] font-medium">
             {node["Relation Name"] && <span className="flex items-center gap-0.5 text-blue-400"><Database className="w-2.5 h-2.5" /> {node["Relation Name"]}</span>}
             <span className="flex items-center gap-0.5">{actualRows.toLocaleString()} rows</span>
             <span className="flex items-center gap-0.5">{(node["Actual Total Time"] || 0).toFixed(2)}ms</span>
@@ -1139,7 +1139,7 @@ function TreeNode({ node, depth, isHot, totalTime }: { node: PlanNode; depth: nu
           </div>
 
           {!isVeryCompact && (node["Filter"] || node["Index Cond"]) && (
-            <div className="p-1.5 mt-1 bg-[var(--background)] rounded-md border border-[var(--border)] text-[9px] font-mono flex items-start gap-1.5">
+            <div className="p-1.5 mt-1 bg-[var(--surface-base)] rounded-md border border-[var(--neutral-6)] text-[9px] font-mono flex items-start gap-1.5">
                <Terminal className="w-2.5 h-2.5 mt-0.5 flex-shrink-0 opacity-40" />
                <span className="break-all opacity-80 leading-relaxed truncate">
                  {node["Index Cond"] ? <span className="text-emerald-400">IDX: </span> : <span className="text-amber-400">FLT: </span>}
@@ -1161,7 +1161,7 @@ function TreeNode({ node, depth, isHot, totalTime }: { node: PlanNode; depth: nu
       </div>
 
       {isExpanded && node.Plans && node.Plans.length > 0 && (
-        <div className={`${childIndentMl} ${childMt} ${childIndentPl} border-l-2 border-[var(--border)] ${childGap}`}>
+        <div className={`${childIndentMl} ${childMt} ${childIndentPl} border-l-2 border-[var(--neutral-6)] ${childGap}`}>
           {node.Plans.map((subPlan, i) => (
             <TreeNode key={i} node={subPlan} depth={depth + 1} isHot={isHot && ((subPlan["Actual Total Time"] || 0) / totalTime) > 0.15} totalTime={totalTime} />
           ))}

@@ -124,7 +124,7 @@ export function AppLayout() {
   }, []);
 
   return (
-    <div className={`theme-${theme} ${settings.compactMode ? 'compact-mode' : ''} h-screen flex flex-col bg-[var(--background)] text-[var(--text-primary)]`}>
+    <div className={`theme-${theme} ${settings.compactMode ? 'compact-mode' : ''} h-screen flex flex-col bg-[var(--surface-base)] text-[var(--neutral-12)]`}>
       {/* Top Tool Window Bar - DataGrip Style */}
       <header className="h-11 flex items-center justify-between px-2 bg-[var(--surface-panel)] border-b border-[var(--neutral-6)]">
         {/* Left: Tool Window Buttons */}
@@ -203,12 +203,12 @@ export function AppLayout() {
       {/* Search Bar */}
       {showSearch && (
         <div className="relative">
-          <div className="h-10 flex items-center gap-2 px-3 bg-[var(--surface)] border-b border-[var(--border)]">
-            <Search className="w-4 h-4 text-[var(--text-secondary)]" />
+          <div className="h-10 flex items-center gap-2 px-3 bg-[var(--surface-elevated)] border-b border-[var(--neutral-6)]">
+            <Search className="w-4 h-4 text-[var(--neutral-11)]" />
             <input
               type="text"
               placeholder="Search tables, views, functions... (Ctrl+Shift+F)"
-              className="w-full bg-transparent border-none outline-none text-sm placeholder:text-[var(--text-secondary)] py-2"
+              className="w-full bg-transparent border-none outline-none text-sm placeholder:text-[var(--neutral-11)] py-2"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => {
@@ -244,10 +244,10 @@ export function AppLayout() {
           </div>
           
           {searchQuery && (
-            <div className="absolute top-full left-0 right-0 z-50 bg-[var(--surface)] border-b border-x border-[var(--border)] shadow-2xl animate-in fade-in slide-in-from-top-1 duration-200 flex flex-col max-h-[400px]">
+            <div className="absolute top-full left-0 right-0 z-50 bg-[var(--surface-elevated)] border-b border-x border-[var(--neutral-6)] shadow-2xl animate-in fade-in slide-in-from-top-1 duration-200 flex flex-col max-h-[400px]">
               {searchResults.length > 0 ? (
                 <div className="p-2 space-y-1 overflow-y-auto">
-                  <div className="px-3 py-1 text-[10px] uppercase font-bold text-[var(--text-secondary)] opacity-50 tracking-widest">
+                  <div className="px-3 py-1 text-[10px] uppercase font-bold text-[var(--neutral-11)] opacity-50 tracking-widest">
                     Database Objects
                   </div>
                   {searchResults.map((result, index) => (
@@ -258,10 +258,10 @@ export function AppLayout() {
                       className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all text-left text-sm group ${
                         index === selectedIndex 
                           ? 'bg-blue-500 text-white' 
-                          : 'hover:bg-[var(--surface-raised)] text-[var(--text-primary)]'
+                          : 'hover:bg-[var(--surface-elevated)] text-[var(--neutral-12)]'
                       }`}
                     >
-                      <result.icon className={`w-4 h-4 ${index === selectedIndex ? 'text-white' : 'text-[var(--color-accent)]'}`} />
+                      <result.icon className={`w-4 h-4 ${index === selectedIndex ? 'text-white' : 'text-[var(--accent-9)]'}`} />
                       <span className="flex-1 font-medium">{result.name}</span>
                       <span className={`text-[10px] font-bold uppercase ${index === selectedIndex ? 'opacity-100' : 'opacity-50'}`}>{result.type}</span>
                     </button>
@@ -275,12 +275,12 @@ export function AppLayout() {
                         <AlertTriangle className="w-6 h-6" />
                       </div>
                       <h3 className="text-base font-bold mb-2">Database Not Initialized</h3>
-                      <p className="text-xs text-[var(--text-secondary)] mb-6">
+                      <p className="text-xs text-[var(--neutral-11)] mb-6">
                         The global search searches through your tables, views, and functions. You must connect and select a database first.
                       </p>
                       
-                      <div className="bg-[var(--surface-raised)] border border-[var(--border)] rounded-xl p-4 text-left space-y-4 shadow-sm mb-6">
-                        <h4 className="text-[10px] uppercase font-black text-[var(--text-secondary)] tracking-widest flex items-center gap-2">
+                      <div className="bg-[var(--surface-elevated)] border border-[var(--neutral-6)] rounded-xl p-4 text-left space-y-4 shadow-sm mb-6">
+                        <h4 className="text-[10px] uppercase font-black text-[var(--neutral-11)] tracking-widest flex items-center gap-2">
                           <HelpCircle className="w-3 h-3 text-blue-500" /> Setup Guide
                         </h4>
                         
@@ -328,11 +328,11 @@ export function AppLayout() {
                     </div>
                   ) : (
                     <>
-                      <div className="w-16 h-16 bg-[var(--border)] rounded-full flex items-center justify-center mb-4 opacity-50">
+                      <div className="w-16 h-16 bg-[var(--neutral-6)] rounded-full flex items-center justify-center mb-4 opacity-50">
                         <Search className="w-8 h-8" />
                       </div>
                       <h3 className="text-lg font-bold mb-1">No results for "{searchQuery}"</h3>
-                      <p className="text-sm text-[var(--text-secondary)] max-w-md">
+                      <p className="text-sm text-[var(--neutral-11)] max-w-md">
                         We couldn't find anything matching your search in the current database.
                       </p>
                       <div className="mt-6 flex gap-2">
@@ -361,11 +361,11 @@ export function AppLayout() {
                 </div>
               )}
               
-              <div className="mt-auto p-2 bg-[var(--surface-raised)] border-t border-[var(--border)] flex items-center justify-between text-[10px] font-medium text-[var(--text-secondary)]">
+              <div className="mt-auto p-2 bg-[var(--surface-elevated)] border-t border-[var(--neutral-6)] flex items-center justify-between text-[10px] font-medium text-[var(--neutral-11)]">
                 <div className="flex gap-4">
-                  <span><kbd className="bg-[var(--background)] px-1 rounded">↑↓</kbd> Navigate</span>
-                  <span><kbd className="bg-[var(--background)] px-1 rounded">Enter</kbd> Select</span>
-                  <span><kbd className="bg-[var(--background)] px-1 rounded">Esc</kbd> Close</span>
+                  <span><kbd className="bg-[var(--surface-base)] px-1 rounded">↑↓</kbd> Navigate</span>
+                  <span><kbd className="bg-[var(--surface-base)] px-1 rounded">Enter</kbd> Select</span>
+                  <span><kbd className="bg-[var(--surface-base)] px-1 rounded">Esc</kbd> Close</span>
                 </div>
                 <div>{searchResults.length} results found</div>
               </div>
@@ -387,7 +387,7 @@ export function AppLayout() {
                 maxSize={40}
                 order={1}
               >
-                <div className="h-full bg-[var(--surface)] border-r border-[var(--border)]">
+                <div className="h-full bg-[var(--surface-elevated)] border-r border-[var(--neutral-6)]">
                   {/* DatabaseExplorer stays mounted while the sidebar is visible
                       (even when Files is the active panel) — keeps its tree state
                       (expanded nodes, selection) intact across sidebar switches. */}
@@ -398,7 +398,7 @@ export function AppLayout() {
                 </div>
               </Panel>
 
-              <PanelResizeHandle className="w-1 bg-[var(--border)] hover:bg-[var(--color-accent)] transition-colors cursor-col-resize" />
+              <PanelResizeHandle className="w-1 bg-[var(--neutral-6)] hover:bg-[var(--accent-9)] transition-colors cursor-col-resize" />
             </>
           )}
 
@@ -414,7 +414,7 @@ export function AppLayout() {
       </div>
 
       {/* Status Bar */}
-      <div className="h-6 flex items-center justify-between px-3 bg-[var(--surface)] border-t border-[var(--border)] text-[10px] text-[var(--text-secondary)] shrink-0">
+      <div className="h-6 flex items-center justify-between px-3 bg-[var(--surface-elevated)] border-t border-[var(--neutral-6)] text-[10px] text-[var(--neutral-11)] shrink-0">
         {/* Left: Connection info */}
         <div className="flex items-center gap-3">
           {activeConnection ? (
@@ -424,7 +424,7 @@ export function AppLayout() {
                   className="w-2 h-2 rounded-full border border-black/20"
                   style={{ backgroundColor: activeConnection.color || "#06b6d4" }}
                 />
-                <span className="font-medium text-[var(--text-primary)]">{activeConnection.name}</span>
+                <span className="font-medium text-[var(--neutral-12)]">{activeConnection.name}</span>
               </div>
               {selectedDatabase && (
                 <>
@@ -448,8 +448,8 @@ export function AppLayout() {
         <div className="flex items-center gap-3">
           {/* Transaction indicator */}
           {statusInfo.txActive && (
-            <div className="flex items-center gap-1 text-[var(--color-warning)]">
-              <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-warning)] animate-pulse" />
+            <div className="flex items-center gap-1 text-[var(--warning-9)]">
+              <span className="w-1.5 h-1.5 rounded-full bg-[var(--warning-9)] animate-pulse" />
               <span>Tx{statusInfo.txStatements !== undefined && statusInfo.txStatements > 0 ? ` (${statusInfo.txStatements})` : ""}</span>
             </div>
           )}
@@ -489,17 +489,17 @@ function StepItem({ num, text, done, active, onClick }: {
       onClick={onClick}
     >
       <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
-        done ? 'bg-green-500 text-white' : (active ? 'bg-blue-500 text-white' : 'bg-[var(--border)] text-[var(--text-secondary)]')
+        done ? 'bg-green-500 text-white' : (active ? 'bg-blue-500 text-white' : 'bg-[var(--neutral-6)] text-[var(--neutral-11)]')
       }`}>
         {done ? <CheckCircle className="w-3 h-3" /> : num}
       </div>
       <div className="flex-1">
-        <div className={`text-xs font-medium ${done ? 'text-[var(--text-secondary)] line-through' : (active ? 'text-blue-400' : 'text-[var(--text-primary)]')}`}>
+        <div className={`text-xs font-medium ${done ? 'text-[var(--neutral-11)] line-through' : (active ? 'text-blue-400' : 'text-[var(--neutral-12)]')}`}>
           {text}
         </div>
       </div>
       {onClick && !done && (
-        <ChevronRight className="w-3 h-3 text-[var(--text-secondary)]" />
+        <ChevronRight className="w-3 h-3 text-[var(--neutral-11)]" />
       )}
     </div>
   );

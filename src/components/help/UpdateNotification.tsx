@@ -78,8 +78,8 @@ export function UpdateNotification() {
         onClick={handleBellClick}
         className={`relative flex items-center gap-2 px-3 py-1.5 rounded text-sm transition-all group ${
           showPanel
-            ? "bg-[var(--color-accent)]/20 text-[var(--color-accent)]"
-            : "hover:bg-[var(--border)]"
+            ? "bg-[var(--accent-9)]/20 text-[var(--accent-9)]"
+            : "hover:bg-[var(--neutral-6)]"
         }`}
         title={
           phase === "available"
@@ -89,24 +89,24 @@ export function UpdateNotification() {
             : "Check for updates"
         }
       >
-        <Bell className="w-4 h-4 group-hover:text-[var(--color-accent)]" />
+        <Bell className="w-4 h-4 group-hover:text-[var(--accent-9)]" />
 
         {/* Static unread-style dot. No animation, no icon swap; the dot is
             the only visual change between states. Sized + positioned to
             sit inside the icon's top-right rather than floating outside
             the button's padding. */}
         {showDot && (
-          <span className="absolute top-1 right-2 block w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] ring-2 ring-[var(--surface)]" />
+          <span className="absolute top-1 right-2 block w-1.5 h-1.5 rounded-full bg-[var(--accent-9)] ring-2 ring-[var(--surface-elevated)]" />
         )}
       </button>
 
       {/* Dropdown Panel */}
       {showPanel && (
-        <div className="absolute right-0 top-full mt-2 w-[420px] bg-[var(--surface)] border border-[var(--border)] rounded-xl shadow-2xl z-[200] animate-in fade-in slide-in-from-top-2 duration-200 overflow-hidden">
+        <div className="absolute right-0 top-full mt-2 w-[420px] bg-[var(--surface-elevated)] border border-[var(--neutral-6)] rounded-xl shadow-2xl z-[200] animate-in fade-in slide-in-from-top-2 duration-200 overflow-hidden">
           {/* Header */}
-          <div className="p-4 border-b border-[var(--border)] bg-[var(--surface-raised)] flex items-center justify-between">
+          <div className="p-4 border-b border-[var(--neutral-6)] bg-[var(--surface-elevated)] flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <ArrowUpCircle className="w-4 h-4 text-[var(--color-accent)]" />
+              <ArrowUpCircle className="w-4 h-4 text-[var(--accent-9)]" />
               <h3 className="text-sm font-bold">Software Updates</h3>
             </div>
             <button
@@ -124,7 +124,7 @@ export function UpdateNotification() {
               <div className="p-8 text-center">
                 <Loader2 className="w-8 h-8 animate-spin mx-auto mb-3 text-blue-400" />
                 <p className="text-sm font-medium">Checking for updates…</p>
-                <p className="text-xs text-[var(--text-secondary)] mt-1">Contacting GitHub</p>
+                <p className="text-xs text-[var(--neutral-11)] mt-1">Contacting GitHub</p>
               </div>
             )}
 
@@ -135,7 +135,7 @@ export function UpdateNotification() {
                   <CheckCircle className="w-7 h-7 text-green-400" />
                 </div>
                 <h4 className="text-base font-bold mb-1">You're up to date!</h4>
-                <p className="text-xs text-[var(--text-secondary)]">
+                <p className="text-xs text-[var(--neutral-11)]">
                   QueryDen v{currentVersion} is the latest version.
                 </p>
                 <button
@@ -162,7 +162,7 @@ export function UpdateNotification() {
                     <div className="text-sm font-bold">
                       v{update.version}
                     </div>
-                    <div className="text-[10px] text-[var(--text-secondary)] mt-0.5">
+                    <div className="text-[10px] text-[var(--neutral-11)] mt-0.5">
                       v{update.currentVersion} → v{update.version}
                       {update.date && (
                         <> · {new Date(update.date).toLocaleDateString()}</>
@@ -174,11 +174,11 @@ export function UpdateNotification() {
                 {/* Changelog */}
                 {update.body && (
                   <div className="space-y-2">
-                    <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] opacity-60">
+                    <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-[var(--neutral-11)] opacity-60">
                       <FileText className="w-3 h-3" /> What's New
                     </div>
-                    <div className="p-4 bg-[var(--background)] rounded-xl border border-[var(--border)] max-h-[200px] overflow-y-auto custom-scrollbar">
-                      <div className="prose-sm text-xs text-[var(--text-secondary)] leading-relaxed [&_h1]:text-base [&_h1]:font-bold [&_h1]:text-[var(--text-primary)] [&_h1]:mb-2 [&_h2]:text-sm [&_h2]:font-bold [&_h2]:text-[var(--text-primary)] [&_h2]:mb-2 [&_h3]:text-xs [&_h3]:font-bold [&_h3]:text-[var(--text-primary)] [&_h3]:mb-1 [&_ul]:list-disc [&_ul]:pl-4 [&_ul]:space-y-1 [&_li]:text-xs [&_p]:mb-2 [&_code]:bg-white/10 [&_code]:px-1 [&_code]:rounded [&_code]:text-blue-300 [&_a]:text-blue-400 [&_a]:underline">
+                    <div className="p-4 bg-[var(--surface-base)] rounded-xl border border-[var(--neutral-6)] max-h-[200px] overflow-y-auto custom-scrollbar">
+                      <div className="prose-sm text-xs text-[var(--neutral-11)] leading-relaxed [&_h1]:text-base [&_h1]:font-bold [&_h1]:text-[var(--neutral-12)] [&_h1]:mb-2 [&_h2]:text-sm [&_h2]:font-bold [&_h2]:text-[var(--neutral-12)] [&_h2]:mb-2 [&_h3]:text-xs [&_h3]:font-bold [&_h3]:text-[var(--neutral-12)] [&_h3]:mb-1 [&_ul]:list-disc [&_ul]:pl-4 [&_ul]:space-y-1 [&_li]:text-xs [&_p]:mb-2 [&_code]:bg-white/10 [&_code]:px-1 [&_code]:rounded [&_code]:text-blue-300 [&_a]:text-blue-400 [&_a]:underline">
                         <ReactMarkdown>{update.body}</ReactMarkdown>
                       </div>
                     </div>
@@ -219,12 +219,12 @@ export function UpdateNotification() {
               <div className="p-8 text-center">
                 <Loader2 className="w-8 h-8 animate-spin mx-auto mb-3 text-blue-400" />
                 <h4 className="text-sm font-bold mb-1">Downloading update…</h4>
-                <p className="text-xs text-[var(--text-secondary)]">
+                <p className="text-xs text-[var(--neutral-11)]">
                   {totalBytes
                     ? `${Math.round(downloadProgress)}% of ${formatSize(totalBytes)}`
                     : "Connecting…"}
                 </p>
-                <div className="mt-4 h-1.5 bg-[var(--border)] rounded-full overflow-hidden w-48 mx-auto">
+                <div className="mt-4 h-1.5 bg-[var(--neutral-6)] rounded-full overflow-hidden w-48 mx-auto">
                   <div
                     className="h-full bg-blue-500 rounded-full transition-all duration-150"
                     style={{ width: `${downloadProgress}%` }}
@@ -245,7 +245,7 @@ export function UpdateNotification() {
                       Download Complete
                     </div>
                     <div className="text-sm font-bold">Ready to Install</div>
-                    <div className="text-[10px] text-[var(--text-secondary)] mt-0.5">
+                    <div className="text-[10px] text-[var(--neutral-11)] mt-0.5">
                       QueryDen v{update.version}
                     </div>
                   </div>
@@ -258,7 +258,7 @@ export function UpdateNotification() {
                   <Rocket className="w-4 h-4" />
                   Install & Restart
                 </button>
-                <p className="text-[10px] text-center text-[var(--text-secondary)] opacity-60">
+                <p className="text-[10px] text-center text-[var(--neutral-11)] opacity-60">
                   QueryDen will close and relaunch after the update.
                 </p>
               </div>
@@ -269,7 +269,7 @@ export function UpdateNotification() {
               <div className="p-8 text-center">
                 <Loader2 className="w-8 h-8 animate-spin mx-auto mb-3 text-green-400" />
                 <h4 className="text-sm font-bold mb-1">Installing update…</h4>
-                <p className="text-xs text-[var(--text-secondary)]">
+                <p className="text-xs text-[var(--neutral-11)]">
                   The app will restart momentarily.
                 </p>
               </div>
@@ -282,7 +282,7 @@ export function UpdateNotification() {
                   <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
                   <div>
                     <div className="text-sm font-bold text-red-400 mb-1">Update Error</div>
-                    <div className="text-xs text-[var(--text-secondary)] break-words">
+                    <div className="text-xs text-[var(--neutral-11)] break-words">
                       {error || "An unknown error occurred"}
                     </div>
                   </div>
@@ -312,7 +312,7 @@ export function UpdateNotification() {
           </div>
 
           {/* Footer */}
-          <div className="p-3 border-t border-[var(--border)] bg-[var(--surface-raised)] flex items-center justify-between text-[10px] text-[var(--text-secondary)]">
+          <div className="p-3 border-t border-[var(--neutral-6)] bg-[var(--surface-elevated)] flex items-center justify-between text-[10px] text-[var(--neutral-11)]">
             <span>
               {currentVersion && (
                 <>Current: v{currentVersion}</>

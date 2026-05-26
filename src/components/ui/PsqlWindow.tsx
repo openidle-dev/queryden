@@ -259,16 +259,16 @@ export const PsqlWindow = memo(function PsqlWindow({
   }, [entries, liveOutput]);
 
   return (
-    <div className="h-full flex flex-col bg-[var(--background)]">
+    <div className="h-full flex flex-col bg-[var(--surface-base)]">
       {/* Toolbar */}
-      <div className="flex items-center gap-2 px-3 py-1.5 bg-[var(--surface)] border-b border-[var(--border)] shrink-0">
+      <div className="flex items-center gap-2 px-3 py-1.5 bg-[var(--surface-elevated)] border-b border-[var(--neutral-6)] shrink-0">
         <Terminal className="w-3.5 h-3.5 text-blue-400" />
-        <span className="text-xs font-semibold text-[var(--text-primary)]">psql Console</span>
+        <span className="text-xs font-semibold text-[var(--neutral-12)]">psql Console</span>
         {connectionName && (
-          <span className="text-[10px] text-[var(--color-accent)] opacity-70">[{connectionName}]</span>
+          <span className="text-[10px] text-[var(--accent-9)] opacity-70">[{connectionName}]</span>
         )}
         {databaseName && (
-          <span className="text-[10px] text-[var(--text-secondary)]">/ {databaseName}</span>
+          <span className="text-[10px] text-[var(--neutral-11)]">/ {databaseName}</span>
         )}
         <div className="flex-1" />
         {isExecuting && (
@@ -291,7 +291,7 @@ export const PsqlWindow = memo(function PsqlWindow({
             <XCircle className="w-3 h-3" /> Error
           </span>
         )}
-        <div className="w-px h-4 bg-[var(--border)] mx-1" />
+        <div className="w-px h-4 bg-[var(--neutral-6)] mx-1" />
         <button onClick={copyOutput} className="p-1 text-gray-500 hover:text-gray-300 transition-colors" title="Copy all output">
           {copied ? <CheckCircle className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
         </button>

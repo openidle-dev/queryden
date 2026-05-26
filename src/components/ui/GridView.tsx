@@ -273,7 +273,7 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
   }, [data, columns, isProductionMode, isDark, isReadOnly, sensitiveColumns, dateColumns, binaryColumns]);
 
   return (
-    <div className="w-full h-full relative overflow-hidden bg-[var(--background)]">
+    <div className="w-full h-full relative overflow-hidden bg-[var(--surface-base)]">
       <DataEditor
         width="100%"
         height="100%"
@@ -336,7 +336,7 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
                  dateVal = dateVal.replace(" ", "T").substring(0, 16);
                }
                return (
-                 <div className="w-full h-full bg-[var(--background)] p-1 flex items-center">
+                 <div className="w-full h-full bg-[var(--surface-base)] p-1 flex items-center">
                    <input 
                      type="datetime-local" 
                      value={dateVal}
@@ -344,7 +344,7 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
                      onKeyDown={e => { if (e.key === "Enter") onFinishedEditing(); }}
                      onBlur={() => onFinishedEditing()}
                      autoFocus
-                     className="w-full bg-transparent text-[var(--text-primary)] outline-none border-none text-[13px] font-mono"
+                     className="w-full bg-transparent text-[var(--neutral-12)] outline-none border-none text-[13px] font-mono"
                    />
                  </div>
                );
