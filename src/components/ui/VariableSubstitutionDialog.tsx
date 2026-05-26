@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { X, Variable, Hash, Calendar, ToggleLeft, AlertCircle } from "lucide-react";
+import { Button } from "./Button";
+import { IconButton } from "./IconButton";
 
 export interface QueryVariable {
   name: string;
@@ -238,13 +240,13 @@ export function VariableSubstitutionDialog({
   const typeIcon = (type: QueryVariable["type"]) => {
     switch (type) {
       case "number":
-        return <Hash className="w-3 h-3 text-[var(--color-accent)]" />;
+        return <Hash className="w-3 h-3 text-[var(--accent-9)]" />;
       case "date":
-        return <Calendar className="w-3 h-3 text-[var(--color-accent)]" />;
+        return <Calendar className="w-3 h-3 text-[var(--accent-9)]" />;
       case "boolean":
-        return <ToggleLeft className="w-3 h-3 text-[var(--color-accent)]" />;
+        return <ToggleLeft className="w-3 h-3 text-[var(--accent-9)]" />;
       default:
-        return <Variable className="w-3 h-3 text-[var(--color-accent)]" />;
+        return <Variable className="w-3 h-3 text-[var(--accent-9)]" />;
     }
   };
 
@@ -264,28 +266,23 @@ export function VariableSubstitutionDialog({
       className="fixed inset-0 z-[200] bg-black/60 flex items-center justify-center p-4 backdrop-blur-sm"
       onKeyDown={handleKeyDown}
     >
-      <div className="bg-[var(--surface)] rounded-lg shadow-2xl w-full max-w-lg border border-[var(--color-accent)]">
+      <div className="bg-[var(--surface-elevated)] rounded-lg shadow-2xl w-full max-w-lg border border-[var(--accent-9)]">
         {/* Header */}
-        <div className="p-4 border-b border-[var(--border)] flex items-center gap-3">
-          <Variable className="w-5 h-5 text-[var(--color-accent)]" />
-          <h2 className="text-sm font-semibold flex-1 text-[var(--text-primary)]">
+        <div className="p-4 border-b border-[var(--neutral-6)] flex items-center gap-3">
+          <Variable className="w-5 h-5 text-[var(--accent-9)]" />
+          <h2 className="text-sm font-semibold flex-1 text-[var(--neutral-12)]">
             Query Variables
           </h2>
-          <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--color-accent)]/20 text-[var(--color-accent)]">
+          <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--accent-9)]/20 text-[var(--accent-9)]">
             {variables.length} variable{variables.length !== 1 ? "s" : ""}
           </span>
-          <button
-            onClick={onCancel}
-            className="p-1 hover:bg-[var(--border)] rounded transition-colors text-[var(--text-secondary)]"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <IconButton icon={<X />} label="Close" size="sm" variant="ghost" onClick={onCancel} />
         </div>
 
         {/* Variable list */}
         <div className="p-4 max-h-[60vh] overflow-y-auto space-y-4">
           {variables.length === 0 ? (
-            <div className="text-center py-8 text-[var(--text-secondary)] text-xs">
+            <div className="text-center py-8 text-[var(--neutral-11)] text-xs">
               No variables found in query.
             </div>
           ) : (
@@ -293,16 +290,16 @@ export function VariableSubstitutionDialog({
               <div key={v.name} className="space-y-1">
                 <div className="flex items-center gap-2">
                   {typeIcon(v.type)}
-                  <label className="text-xs font-medium text-[var(--text-primary)]">
+                  <label className="text-xs font-medium text-[var(--neutral-12)]">
                     :{v.name}
                   </label>
                   {v.isOptional && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-warning)]/20 text-[var(--color-warning)]">
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--warning-9)]/20 text-[var(--warning-9)]">
                       optional
                     </span>
                   )}
                   {v.defaultValue && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-info)]/20 text-[var(--color-info)]">
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--accent-9)]/20 text-[var(--accent-9)]">
                       default: {v.defaultValue}
                     </span>
                   )}
@@ -316,10 +313,10 @@ export function VariableSubstitutionDialog({
                       setValues((prev) => ({ ...prev, [v.name]: e.target.value }))
                     }
                     placeholder={placeholder(v)}
-                    className="flex-1 bg-[var(--background)] border border-[var(--border)] rounded px-3 py-1.5 text-sm outline-none focus:border-[var(--color-accent)] text-[var(--text-primary)] placeholder:text-[var(--text-secondary)]"
+                    className="flex-1 bg-[var(--surface-base)] border border-[var(--neutral-6)] rounded px-3 py-1.5 text-sm outline-none focus:border-[var(--accent-9)] text-[var(--neutral-12)] placeholder:text-[var(--neutral-11)]"
                   />
                   {v.isOptional && values[v.name] === "" && (
-                    <span className="flex items-center text-[10px] text-[var(--text-secondary)] italic px-2">
+                    <span className="flex items-center text-[10px] text-[var(--neutral-11)] italic px-2">
                       NULL
                     </span>
                   )}
@@ -329,15 +326,15 @@ export function VariableSubstitutionDialog({
           )}
 
           {/* Preview */}
-          <div className="mt-4 pt-4 border-t border-[var(--border)]">
+          <div className="mt-4 pt-4 border-t border-[var(--neutral-6)]">
             <div className="flex items-center gap-2 mb-2">
-              <AlertCircle className="w-3 h-3 text-[var(--color-info)]" />
-              <span className="text-[10px] font-medium text-[var(--text-secondary)] uppercase tracking-wide">
+              <AlertCircle className="w-3 h-3 text-[var(--accent-9)]" />
+              <span className="text-[10px] font-medium text-[var(--neutral-11)] uppercase tracking-wide">
                 Substitution Preview
               </span>
             </div>
             <pre
-              className="text-[10px] text-[var(--text-secondary)] bg-[var(--background)] rounded p-2 overflow-x-auto whitespace-pre-wrap break-all font-mono leading-relaxed max-h-24 overflow-y-auto"
+              className="text-[10px] text-[var(--neutral-11)] bg-[var(--surface-base)] rounded p-2 overflow-x-auto whitespace-pre-wrap break-all font-mono leading-relaxed max-h-24 overflow-y-auto"
             >
               {substituteVariables(query, values)}
             </pre>
@@ -345,29 +342,23 @@ export function VariableSubstitutionDialog({
         </div>
 
         {/* Footer */}
-        <div className="p-4 border-t border-[var(--border)] flex items-center justify-between">
-          <label className="flex items-center gap-2 text-xs text-[var(--text-secondary)] cursor-pointer">
+        <div className="p-4 border-t border-[var(--neutral-6)] flex items-center justify-between">
+          <label className="flex items-center gap-2 text-xs text-[var(--neutral-11)] cursor-pointer">
             <input
               type="checkbox"
               checked={remember}
               onChange={(e) => setRemember(e.target.checked)}
-              className="accent-[var(--color-accent)]"
+              className="accent-[var(--accent-9)]"
             />
             Remember values for session
           </label>
           <div className="flex gap-2">
-            <button
-              onClick={onCancel}
-              className="px-4 py-2 text-xs rounded hover:bg-[var(--surface-hover)] text-[var(--text-secondary)]"
-            >
+            <Button variant="ghost" size="sm" onClick={onCancel}>
               Cancel
-            </button>
-            <button
-              onClick={() => onConfirm(values, remember)}
-              className="px-4 py-2 text-xs rounded bg-[var(--color-accent)] hover:opacity-80 text-white"
-            >
+            </Button>
+            <Button variant="primary" size="sm" onClick={() => onConfirm(values, remember)}>
               Execute
-            </button>
+            </Button>
           </div>
         </div>
       </div>
