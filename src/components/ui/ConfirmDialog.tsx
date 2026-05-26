@@ -100,7 +100,7 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
       <Dialog open={isOpen && !!options} onClose={handleCancel} size="md">
         {options && (
           <>
-            <Dialog.Title accentClassName="border-l-2" onClose={handleCancel}>
+            <Dialog.Title onClose={handleCancel}>
               <span className="inline-flex items-center gap-2">
                 <meta.Icon className="w-4 h-4" style={{ color: meta.color }} />
                 <span>{options.title}</span>
