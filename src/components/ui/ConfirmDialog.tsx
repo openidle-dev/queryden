@@ -4,6 +4,11 @@ import { Dialog } from "./Dialog";
 import { Button } from "./Button";
 import { Input } from "./Input";
 import { IconButton } from "./IconButton";
+import { Select } from "./Select";
+
+// Radix Select forbids empty-string item values, but the "No Profile" choice
+// uses "" by design. Map it through this sentinel for the Select and back.
+const NO_PROFILE_SENTINEL = "__no_profile__";
 
 interface ConfirmOptions {
   title: string;
@@ -135,25 +140,15 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
               {options.inputLabel && (
                 <div className="mt-4">
                   {options.selectOptions ? (
-                    // Native select kept here because Radix Select rejects
-                    // empty-string values ("No Profile" sentinel uses ""). Migration
-                    // to Radix tracked under #152.
-                    <div className="flex flex-col gap-1 min-w-0">
-                      <label className="text-xs font-medium text-[var(--neutral-12)] select-none">
-                        {options.inputLabel}
-                      </label>
-                      <select
-                        value={inputValue}
-                        onChange={(e) => setInputValue(e.target.value)}
-                        className="h-9 px-3 text-sm bg-[var(--surface-base)] border border-[var(--neutral-7)] rounded-md outline-none text-[var(--neutral-12)] focus:border-[var(--accent-8)] focus:ring-1 focus:ring-[var(--accent-8)]/30 cursor-pointer"
-                        autoFocus
-                      >
-                        <option value="">No Profile (Manual Login)</option>
-                        {options.selectOptions.map((opt) => (
-                          <option key={opt.value} value={opt.value}>{opt.label}</option>
-                        ))}
-                      </select>
-                    </div>
+                    <Select
+                      label={options.inputLabel}
+                      value={inputValue === "" ? NO_PROFILE_SENTINEL : inputValue}
+                      onValueChange={(v) => setInputValue(v === NO_PROFILE_SENTINEL ? "" : v)}
+                      options={[
+                        { label: "No Profile (Manual Login)", value: NO_PROFILE_SENTINEL },
+                        ...options.selectOptions.map((opt) => ({ label: opt.label, value: opt.value })),
+                      ]}
+                    />
                   ) : (
                     <Input
                       label={options.inputLabel}

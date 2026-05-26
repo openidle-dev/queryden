@@ -8,6 +8,7 @@ import { useKeymap } from "../../store/keymapStore";
 import { useState, useEffect } from "react";
 import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
+import { Select } from "../ui/Select";
 import { cn } from "../../lib/cn";
 
 const ISOLATION_LEVELS = [
@@ -17,6 +18,10 @@ const ISOLATION_LEVELS = [
   { label: "SERIALIZABLE", value: "SERIALIZABLE" },
   { label: "DEFAULT", value: "" },
 ];
+
+// Radix Select forbids empty-string item values, but DEFAULT isolation uses ""
+// by design. Map "" to a non-empty sentinel for the Select and back on change.
+const ISOLATION_DEFAULT_SENTINEL = "__default__";
 
 // Shared outline-button class for BEGIN / COMMIT / ROLLBACK. These deliberately
 // use a bordered, color-tinted treatment that doesn't map to any of the four
@@ -77,13 +82,7 @@ export function Toolbar() {
         {selectedDatabase && (
           <>
             <span className="text-[var(--neutral-7)]">/</span>
-            <select
-              className="bg-transparent border-none text-sm outline-none cursor-pointer"
-              value={selectedDatabase}
-              onChange={() => {}}
-            >
-              <option value={selectedDatabase}>{selectedDatabase}</option>
-            </select>
+            <span className="text-sm">{selectedDatabase}</span>
           </>
         )}
 
@@ -118,23 +117,20 @@ export function Toolbar() {
 
         {/* Transaction Controls */}
         <div className="flex items-center gap-1 ml-2 pl-2 border-l border-[var(--neutral-6)]">
-          {/* Isolation Level Selector — kept native because Radix Select rejects
-              empty-string values (DEFAULT uses "" by design). Migrating requires
-              a non-empty sentinel + bidirectional mapping; tracked under #152. */}
+          {/* Isolation Level Selector. DEFAULT uses "" which Radix Select forbids,
+              so map it through ISOLATION_DEFAULT_SENTINEL in both directions. */}
           {!txActive && (
-            <select
-              value={txIsolation}
-              onChange={(e) => setTxIsolation(e.target.value)}
-              className="bg-transparent border border-[var(--neutral-6)] rounded-sm px-1.5 py-1 text-[10px] text-[var(--neutral-11)] outline-none cursor-pointer hover:border-[var(--accent-8)] disabled:opacity-40"
-              title="Transaction Isolation Level"
+            <Select
+              value={txIsolation === "" ? ISOLATION_DEFAULT_SENTINEL : txIsolation}
+              onValueChange={(v) => setTxIsolation(v === ISOLATION_DEFAULT_SENTINEL ? "" : v)}
               disabled={!activeConnection}
-            >
-              {ISOLATION_LEVELS.map((lvl) => (
-                <option key={lvl.value} value={lvl.value}>
-                  {lvl.label || "Isolation"}
-                </option>
-              ))}
-            </select>
+              selectSize="sm"
+              className="h-7 text-[10px] bg-transparent text-[var(--neutral-11)]"
+              options={ISOLATION_LEVELS.map((lvl) => ({
+                label: lvl.label,
+                value: lvl.value === "" ? ISOLATION_DEFAULT_SENTINEL : lvl.value,
+              }))}
+            />
           )}
 
           <Button
