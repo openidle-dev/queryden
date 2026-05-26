@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { X, GitCompare, ChevronRight, AlertCircle, GitMerge, ArrowRight, Check, Play, Loader2, CheckSquare, Square, Info } from "lucide-react";
 import "../editor/monacoSetup";
 import { DiffEditor } from "@monaco-editor/react";
+import { defineMonacoThemes, resolveMonacoTheme } from "../../utils/monacoThemes";
 import { useConnections } from "../../contexts/useConnections";
 import { useTheme } from "../../contexts/ThemeContext";
 import { ToolGuideWizard } from "./ToolGuideWizard";
@@ -634,7 +635,8 @@ export function CompareDialog({ isOpen, onClose }: CompareDialogProps) {
                   language="sql"
                   original={leftDDL}
                   modified={rightDDL}
-                  theme={theme === "dark" ? "vs-dark" : "vs"}
+                  theme={resolveMonacoTheme(theme)}
+                  beforeMount={defineMonacoThemes}
                   options={{
                     renderSideBySide: true,
                     readOnly: true,

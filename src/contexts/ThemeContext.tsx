@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
 import { useSettings } from "../store/settingsStore";
 
-type Theme = "dark" | "light";
+type Theme = "dark" | "light" | "blue";
 
 interface ThemeContextType {
   theme: Theme;
@@ -11,9 +11,9 @@ interface ThemeContextType {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
-function resolveTheme(setting: "dark" | "light" | "system"): Theme {
+function resolveTheme(setting: "dark" | "light" | "blue" | "system"): Theme {
   if (setting === "system") {
-    return typeof window !== "undefined" 
+    return typeof window !== "undefined"
       ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
       : "dark";
   }
@@ -27,12 +27,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const newTheme = resolveTheme(settings.theme);
     setThemeState(newTheme);
-    document.documentElement.classList.remove("theme-dark", "theme-light");
+    document.documentElement.classList.remove("theme-dark", "theme-light", "theme-blue");
     document.documentElement.classList.add(`theme-${newTheme}`);
   }, [settings.theme]);
 
   useEffect(() => {
-    document.documentElement.classList.remove("theme-dark", "theme-light");
+    document.documentElement.classList.remove("theme-dark", "theme-light", "theme-blue");
     document.documentElement.classList.add(`theme-${theme}`);
   }, [theme]);
 
@@ -42,7 +42,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       if (settings.theme === "system") {
         const newTheme = resolveTheme("system");
         setThemeState(newTheme);
-        document.documentElement.classList.remove("theme-dark", "theme-light");
+        document.documentElement.classList.remove("theme-dark", "theme-light", "theme-blue");
         document.documentElement.classList.add(`theme-${newTheme}`);
       }
     };

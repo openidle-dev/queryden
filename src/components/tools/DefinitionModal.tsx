@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Code2, Copy, CheckCircle, XCircle } from "lucide-react";
 import "../editor/monacoSetup";
 import Editor from "@monaco-editor/react";
+import { defineMonacoThemes, resolveMonacoTheme } from "../../utils/monacoThemes";
 import { useConnections } from "../../contexts/useConnections";
 import { useTheme } from "../../contexts/ThemeContext";
 import { Dialog } from "../ui/Dialog";
@@ -75,7 +76,8 @@ export function DefinitionModal({ isOpen, tableName, onClose }: DefinitionModalP
           <Editor
             height="100%"
             language="sql"
-            theme={theme === "dark" ? "vs-dark" : "vs"}
+            theme={resolveMonacoTheme(theme)}
+            beforeMount={defineMonacoThemes}
             value={ddl || `-- No DDL found or object does not exist.\n-- Make sure you include the schema name if applicable.`}
             options={{
               readOnly: true,

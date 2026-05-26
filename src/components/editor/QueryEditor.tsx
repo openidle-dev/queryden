@@ -1,6 +1,7 @@
 import { useRef, useEffect, memo, useCallback, useMemo } from "react";
 import "./monacoSetup";
 import Editor, { OnMount } from "@monaco-editor/react";
+import { defineMonacoThemes, resolveMonacoTheme } from "../../utils/monacoThemes";
 import { Code as CodeIcon, Loader2, CheckCircle, XCircle } from "lucide-react";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useConnections } from "../../contexts/useConnections";
@@ -1185,9 +1186,10 @@ const isInJoinContext = /(\b|^)(JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|INNER\s+JOIN|CROSS
         <Editor
           height="100%"
           language="sql"
-          theme={theme === "dark" ? "vs-dark" : "vs"}
+          theme={resolveMonacoTheme(theme)}
           value={value}
           onChange={(value) => onChange(value || "")}
+          beforeMount={defineMonacoThemes}
           onMount={handleEditorMount}
           options={{
             minimap: { enabled: settings.editorMinimap },

@@ -10,6 +10,7 @@ import { useVault } from "../../store/vaultStore";
 import { PasswordInput } from "../ui/PasswordInput";
 import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
+import { Select } from "../ui/Select";
 
 type SettingsCategory = "appearance" | "sqlCompletion" | "queryExecution" | "explorer" | "keymap" | "templates" | "importExport" | "ai" | "copyTransfer" | "permissions" | "vault" | "updates";
 
@@ -174,18 +175,17 @@ function AppearanceSettings() {
       <div>
         <h4 className="text-xs font-bold uppercase tracking-wider text-[var(--neutral-11)] mb-3">Theme & Layout</h4>
         <div className="space-y-4">
-          <div>
-            <label className="block text-xs font-medium mb-1.5">Theme</label>
-            <select
-              value={settings.theme}
-              onChange={(e) => settings.setSetting("theme", e.target.value as any)}
-              className="w-full px-3 py-1.5 text-sm rounded bg-[var(--surface-base)] border border-[var(--neutral-6)] outline-none focus:border-[var(--accent-8)] text-[var(--neutral-12)]"
-            >
-              <option value="dark">Dark</option>
-              <option value="light">Light</option>
-              <option value="system">System</option>
-            </select>
-          </div>
+          <Select
+            label="Theme"
+            value={settings.theme}
+            onValueChange={(v) => settings.setSetting("theme", v as any)}
+            options={[
+              { label: "Dark", value: "dark" },
+              { label: "Light", value: "light" },
+              { label: "Blue", value: "blue" },
+              { label: "System", value: "system" },
+            ]}
+          />
 
           <ToggleOption
             label="Compact mode"
