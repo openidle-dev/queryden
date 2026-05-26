@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Plus, Trash2, AlertCircle } from "lucide-react";
 import { CreateTablePayload } from "../../contexts/ConnectionContext";
 import { Dialog } from "../ui/Dialog";
@@ -32,6 +32,7 @@ export function CreateTableDialog({ isOpen, onClose, onCreate, dbType }: CreateT
   ]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   const addColumn = () => {
     setColumns([...columns, { name: "", type: "TEXT", nullable: true, primaryKey: false, defaultValue: "" }]);
@@ -76,7 +77,7 @@ export function CreateTableDialog({ isOpen, onClose, onCreate, dbType }: CreateT
   };
 
   return (
-    <Dialog open={isOpen} onClose={onClose} size="xl">
+    <Dialog open={isOpen} onClose={onClose} size="xl" initialFocusRef={nameInputRef}>
       <Dialog.Title onClose={onClose}>
         <span className="inline-flex items-center gap-2">
           <Plus className="w-4 h-4 text-[var(--accent-9)]" />
@@ -87,8 +88,8 @@ export function CreateTableDialog({ isOpen, onClose, onCreate, dbType }: CreateT
       <form onSubmit={handleSubmit} className="contents">
         <Dialog.Body className="space-y-4">
           <Input
+            ref={nameInputRef}
             label="Table name"
-            autoFocus
             value={tableName}
             onChange={(e) => setTableName(e.target.value)}
             placeholder="e.g. users, products"

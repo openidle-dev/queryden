@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Database, AlertCircle, Globe, Settings, User, ChevronDown } from "lucide-react";
 import { CreateDatabasePayload } from "../../contexts/ConnectionContext";
 import { useConnections } from "../../contexts/useConnections";
@@ -32,6 +32,7 @@ export function CreateDatabaseDialog({ isOpen, onClose, onCreate, dbType }: Crea
 
   const [ownerList, setOwnerList] = useState<string[]>([]);
   const [templateList, setTemplateList] = useState<string[]>([]);
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -83,7 +84,7 @@ export function CreateDatabaseDialog({ isOpen, onClose, onCreate, dbType }: Crea
   };
 
   return (
-    <Dialog open={isOpen} onClose={onClose} size="md">
+    <Dialog open={isOpen} onClose={onClose} size="md" initialFocusRef={nameInputRef}>
       <Dialog.Title onClose={onClose}>
         <span className="inline-flex items-center gap-2">
           <Database className="w-4 h-4 text-[var(--success-9)]" />
@@ -94,8 +95,8 @@ export function CreateDatabaseDialog({ isOpen, onClose, onCreate, dbType }: Crea
       <form onSubmit={handleSubmit} className="contents">
         <Dialog.Body className="space-y-4">
           <Input
+            ref={nameInputRef}
             label="Database name"
-            autoFocus
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="my_new_database"
