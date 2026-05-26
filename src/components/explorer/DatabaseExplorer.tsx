@@ -13,6 +13,9 @@ import { CreateTableDialog } from "./CreateTableDialog";
 import { CreateDatabaseDialog } from "./CreateDatabaseDialog";
 import { logger } from "../../utils/logger";
 import { buildConnectionTree, type FolderTreeNode } from "../../utils/folderTree";
+import { Button } from "../ui/Button";
+import { IconButton } from "../ui/IconButton";
+import { Menu, MenuItem, MenuLabel, MenuSeparator } from "../ui/Menu";
 
 interface TreeNode {
   id: string;
@@ -169,9 +172,9 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
           
           if (element) {
             element.scrollIntoView({ behavior: "smooth", block: "center" });
-            element.style.outline = "2px solid var(--color-accent)";
+            element.style.outline = "2px solid var(--accent-9)";
             element.style.outlineOffset = "-2px";
-            element.style.backgroundColor = "color-mix(in srgb, var(--color-accent), transparent 80%)";
+            element.style.backgroundColor = "color-mix(in srgb, var(--accent-9), transparent 80%)";
             
             setTimeout(() => {
               element.style.outline = "none";
@@ -1225,12 +1228,12 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
               }
             }}
             id={`node-${node.id}`}
-            className={`w-full flex items-center gap-1 px-2 py-1 transition-colors text-sm text-left truncate ${
-              focusedNodeId === node.id 
-                ? "bg-indigo-500/20 ring-1 ring-inset ring-indigo-500/30" 
+            className={`w-full flex items-center gap-1 px-2 py-1 transition-colors text-sm text-left truncate cursor-pointer ${
+              focusedNodeId === node.id
+                ? "bg-[var(--accent-3)] ring-1 ring-inset ring-[var(--accent-6)]"
                 : node.icon === "server" && node.color
                   ? "hover:brightness-110"
-                  : "hover:bg-[var(--surface-raised)]"
+                  : "hover:bg-[var(--surface-elevated)]"
             }`}
             style={{ 
               paddingLeft: `${depth * 16 + 8}px`,
@@ -1276,22 +1279,22 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
             }}
           >
             {hasChildren || isFolder ? (
-              <span onClick={(e) => { e.stopPropagation(); toggleExpand(node.id); }} className="hover:bg-[var(--border)] rounded text-[var(--text-secondary)]">
+              <span onClick={(e) => { e.stopPropagation(); toggleExpand(node.id); }} className="hover:bg-[var(--neutral-5)] rounded text-[var(--neutral-11)]">
                 {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
               </span>
             ) : (
               <span className="w-3" />
             )}
-            {isDbLoading || isServerConnecting ? <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--color-accent)]" /> : getIcon(node.icon, isExpanded, node.providerType, node.color)}
-            <span className={`truncate ${node.icon === 'server' ? 'text-[var(--text-primary)] font-bold' : node.icon === 'database' ? 'text-[var(--text-secondary)] font-semibold' : 'text-[var(--text-primary)] opacity-90'}`}>
+            {isDbLoading || isServerConnecting ? <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--accent-9)]" /> : getIcon(node.icon, isExpanded, node.providerType, node.color)}
+            <span className={`truncate ${node.icon === 'server' ? 'text-[var(--neutral-12)] font-bold' : node.icon === 'database' ? 'text-[var(--neutral-11)] font-semibold' : 'text-[var(--neutral-12)] opacity-90'}`}>
               {node.name}
-              {node.icon === 'server' && activeConnection?.id === node.contextMenuId && <span className="ml-2 inline-block w-1.5 h-1.5 bg-[var(--color-success)] rounded-full" title="Connected" />}
+              {node.icon === 'server' && activeConnection?.id === node.contextMenuId && <span className="ml-2 inline-block w-1.5 h-1.5 bg-[var(--success-9)] rounded-full" title="Connected" />}
             </span>
             {(isSchemaLoading || isSchemasLoading || isTableDetailsLoading) && (
-              <Loader2 className="w-3 h-3 animate-spin ml-auto text-[var(--text-secondary)]" />
+              <Loader2 className="w-3 h-3 animate-spin ml-auto text-[var(--neutral-11)]" />
             )}
             {hasChildren && !(isSchemaLoading || isSchemasLoading || isTableDetailsLoading) && (
-              <span className="text-[10px] text-[var(--text-secondary)] ml-auto">{node.children?.length}</span>
+              <span className="text-[10px] text-[var(--neutral-11)] ml-auto">{node.children?.length}</span>
             )}
           </button>
           {hasChildren && isExpanded && node.children && renderTree(node.children, depth + 1)}
@@ -1466,7 +1469,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
   return (
     <div className="flex flex-col h-full" onClick={closeContextMenu}>
       {/* Header */}
-      <div className="p-2 border-b border-[var(--border)]">
+      <div className="p-2 border-b border-[var(--neutral-6)]">
         <div className="flex items-center justify-between mb-2">
           <h3 className="text-sm font-semibold">Database Explorer</h3>
           <div className="flex items-center gap-1">
@@ -1477,26 +1480,23 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                 undiscoverable — users had to click 2-3 times to
                 accidentally find that folders existed. */}
             <div className="relative">
-              <button
+              <IconButton
+                size="sm"
                 onClick={(e) => {
                   e.stopPropagation();
                   setViewModeMenuOpen((v) => !v);
                 }}
-                className={`p-1 rounded transition-all ${
-                  viewModeMenuOpen
-                    ? "bg-[var(--color-accent)]/20 text-[var(--color-accent)]"
-                    : "hover:bg-[var(--border)] text-[var(--text-secondary)]"
-                }`}
+                className={viewModeMenuOpen ? "bg-[var(--accent-3)] text-[var(--accent-11)] hover:bg-[var(--accent-4)]" : undefined}
                 title="View mode + new folder"
-              >
-                <FolderOpen className="w-4 h-4" />
-              </button>
+                label="View mode + new folder"
+                icon={<FolderOpen />}
+              />
               {viewModeMenuOpen && (
                 <div
-                  className="absolute right-0 top-full mt-1 z-50 min-w-[180px] bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-xl py-1"
+                  className="absolute right-0 top-full mt-1 z-50 min-w-[180px] bg-[var(--surface-overlay)] border border-[var(--neutral-6)] rounded-lg shadow-xl py-1"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-[var(--text-secondary)] opacity-60">
+                  <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-[var(--neutral-11)] opacity-60">
                     Group by
                   </div>
                   {(
@@ -1514,24 +1514,24 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                           setViewMode(opt.id);
                           setViewModeMenuOpen(false);
                         }}
-                        className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
+                        className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--neutral-4)] cursor-pointer"
                       >
                         <span
                           className={`w-3 h-3 rounded-full border-2 shrink-0 flex items-center justify-center ${
                             selected
-                              ? "border-[var(--color-accent)]"
-                              : "border-[var(--text-secondary)]"
+                              ? "border-[var(--accent-9)]"
+                              : "border-[var(--neutral-8)]"
                           }`}
                         >
                           {selected && (
-                            <span className="block w-1 h-1 rounded-full bg-[var(--color-accent)]" />
+                            <span className="block w-1 h-1 rounded-full bg-[var(--accent-9)]" />
                           )}
                         </span>
                         <span>{opt.label}</span>
                       </button>
                     );
                   })}
-                  <div className="h-px bg-[var(--border)] my-1" />
+                  <div className="h-px bg-[var(--neutral-6)] my-1" />
                   <button
                     onClick={async () => {
                       const name = window.prompt("New folder name");
@@ -1545,23 +1545,24 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                         setViewMode("folders");
                       }
                     }}
-                    className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--neutral-4)] cursor-pointer"
                   >
-                    <Plus className="w-3.5 h-3.5 text-emerald-400" />
+                    <Plus className="w-3.5 h-3.5 text-[var(--neutral-11)]" />
                     New folder…
                   </button>
                 </div>
               )}
             </div>
 
-            <button
+            <IconButton
+              size="sm"
               onClick={() => setShowImportExport(true)}
-              className="p-1 rounded hover:bg-[var(--border)]"
               title="Import / Export Connections"
-            >
-              <Upload className="w-4 h-4" />
-            </button>
-            <button
+              label="Import / Export Connections"
+              icon={<Upload />}
+            />
+            <IconButton
+              size="sm"
               onClick={() => {
                 let folderId: string | undefined;
                 if (focusedNodeId?.startsWith("folder-")) {
@@ -1569,16 +1570,15 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                 }
                 window.dispatchEvent(new CustomEvent("open-new-connection", { detail: { folderId } }));
               }}
-              className="p-1 rounded hover:bg-[var(--border)]"
               title="Add Connection"
-            >
-              <Plus className="w-4 h-4" />
-            </button>
+              label="Add Connection"
+              icon={<Plus />}
+            />
           </div>
         </div>
         <div className="relative flex gap-1">
           <div className="relative flex-1">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-[var(--text-secondary)]" />
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-[var(--neutral-11)]" />
             <input
               type="text"
               placeholder="Search..."
@@ -1589,17 +1589,16 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                   handleJumpToSearch();
                 }
               }}
-              className="w-full pl-7 pr-2 py-1 text-xs rounded bg-[var(--background)] border border-[var(--border)] outline-none focus:border-[var(--color-accent)]"
+              className="w-full pl-7 pr-2 py-1 text-xs rounded bg-[var(--surface-base)] border border-[var(--neutral-6)] outline-none focus:border-[var(--accent-8)] text-[var(--neutral-12)] placeholder:text-[var(--neutral-9)]"
             />
           </div>
-          <button 
-            onClick={() => {
-              handleJumpToSearch();
-            }}
-            className="px-2 py-0.5 rounded bg-[var(--color-accent)]/10 text-[var(--color-accent)] border border-[var(--color-accent)]/20 hover:bg-[var(--color-accent)]/20 text-[10px] font-bold"
+          <Button
+            size="xs"
+            onClick={() => { handleJumpToSearch(); }}
+            className="font-bold bg-[var(--accent-3)] text-[var(--accent-11)] border border-[var(--accent-6)] hover:bg-[var(--accent-4)]"
           >
             GO
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -1608,22 +1607,22 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
           ref={treeContainerRef}
           tabIndex={0}
           onKeyDown={handleTreeKeyDown}
-          className="w-full h-full overflow-y-auto pt-1 bg-[var(--surface)] scrollbar-thin outline-none focus:ring-1 focus:ring-indigo-500/30"
+          className="w-full h-full overflow-y-auto pt-1 bg-[var(--surface-panel)] scrollbar-thin outline-none focus:ring-1 focus:ring-[var(--accent-8)]/30"
         >
           {schemaTree.length > 0 ? (
             renderTree(schemaTree)
           ) : !initialLoadDone ? (
-            <div className="p-4 text-center text-xs text-[var(--text-secondary)] flex flex-col items-center">
+            <div className="p-4 text-center text-xs text-[var(--neutral-11)] flex flex-col items-center">
               <Loader2 className="w-6 h-6 mb-2 opacity-50 animate-spin" />
               <p>Loading connections...</p>
             </div>
           ) : (
-            <div className="p-4 text-center text-xs text-[var(--text-secondary)] flex flex-col items-center">
+            <div className="p-4 text-center text-xs text-[var(--neutral-11)] flex flex-col items-center">
               <Database className="w-6 h-6 mb-2 opacity-50" />
               <p>No connections configured</p>
               <button
                  onClick={() => window.dispatchEvent(new CustomEvent("open-new-connection"))}
-                 className="mt-2 text-[var(--color-accent)] hover:underline"
+                 className="mt-2 text-[var(--accent-11)] hover:underline cursor-pointer"
               >
                  Add a connection
               </button>
@@ -1635,14 +1634,14 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
       {/* Loading Status Bar */}
       {isLoading && (
         <div className="flex flex-col">
-          <div className="h-1 bg-[var(--surface-raised)] overflow-hidden">
-            <div 
-              className="h-full bg-[var(--color-accent)] animate-pulse" 
-              style={{ width: "100%" }} 
+          <div className="h-1 bg-[var(--surface-elevated)] overflow-hidden">
+            <div
+              className="h-full bg-[var(--accent-9)] animate-pulse"
+              style={{ width: "100%" }}
             />
           </div>
-          <div className="px-2 py-1.5 bg-[var(--surface)] border-t border-[var(--border)] text-[10px] flex items-center gap-2">
-            <Loader2 className="w-3 h-3 animate-spin text-[var(--color-accent)]" />
+          <div className="px-2 py-1.5 bg-[var(--surface-panel)] border-t border-[var(--neutral-6)] text-[10px] flex items-center gap-2">
+            <Loader2 className="w-3 h-3 animate-spin text-[var(--accent-9)]" />
             <span>{(() => {
               if (connectingConnectionIds.size > 0) {
                 const names = Array.from(connectingConnectionIds)
@@ -1672,18 +1671,15 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
           `folder:<id>` contextMenuId set by buildFolderNode — we branch
           here rather than maintaining a second piece of state. */}
       {contextMenu && contextMenu.connectionId.startsWith("folder:") && (
-        <div
-          className="fixed bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-xl py-1 z-50 min-w-[180px]"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-          onClick={(e) => e.stopPropagation()}
-        >
+        <Menu x={contextMenu.x} y={contextMenu.y} className="w-auto min-w-[180px]">
           {(() => {
             const folderId = contextMenu.connectionId.slice("folder:".length);
             const folder = folders.find((f) => f.id === folderId);
             if (!folder) return null;
             return (
               <>
-                <button
+                <MenuItem
+                  icon={<Edit2 className="w-3 h-3" />}
                   onClick={async () => {
                     const name = window.prompt("Rename folder", folder.name);
                     if (name && name.trim()) {
@@ -1691,11 +1687,11 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                     }
                     closeContextMenu();
                   }}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                 >
-                  <Edit2 className="w-3 h-3" /> Rename
-                </button>
-                <button
+                  Rename
+                </MenuItem>
+                <MenuItem
+                  icon={<Plus className="w-3 h-3" />}
                   onClick={async () => {
                     const name = window.prompt("New subfolder name");
                     if (name && name.trim()) {
@@ -1705,30 +1701,31 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                     }
                     closeContextMenu();
                   }}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                 >
-                  <Plus className="w-3 h-3 text-emerald-400" /> New subfolder
-                </button>
-                <button
+                  New subfolder
+                </MenuItem>
+                <MenuItem
+                  icon={<Database className="w-3 h-3" />}
                   onClick={() => {
                     window.dispatchEvent(new CustomEvent("open-new-connection", { detail: { folderId } }));
                     closeContextMenu();
                   }}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                 >
-                  <Database className="w-3 h-3 text-blue-400" /> New connection
-                </button>
-                <button
+                  New connection
+                </MenuItem>
+                <MenuItem
+                  icon={<FolderOpen className="w-3 h-3" />}
                   onClick={() => {
                     setMoveTarget({ kind: "folder", id: folderId, name: folder.name });
                     closeContextMenu();
                   }}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                 >
-                  <FolderOpen className="w-3 h-3 text-yellow-500" /> Move to folder…
-                </button>
-                <div className="h-px bg-[var(--border)] my-1" />
-                <button
+                  Move to folder…
+                </MenuItem>
+                <MenuSeparator />
+                <MenuItem
+                  tone="danger"
+                  icon={<Trash2 className="w-3 h-3" />}
                   onClick={async () => {
                     // Preview what would happen before asking. removeFolder
                     // reparents children to the deleted folder's parent.
@@ -1752,42 +1749,38 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                     }
                     closeContextMenu();
                   }}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)] text-red-400"
                 >
-                  <Trash2 className="w-3 h-3" /> Delete folder
-                </button>
+                  Delete folder
+                </MenuItem>
               </>
             );
           })()}
-        </div>
+        </Menu>
       )}
       {contextMenu && !contextMenu.connectionId.startsWith("folder:") && (
-        <div
-          className="fixed bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-xl py-1 z-50 min-w-[160px]"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <button
+        <Menu x={contextMenu.x} y={contextMenu.y} className="w-auto min-w-[160px]">
+          <MenuItem
+            icon={<Play className="w-3 h-3" />}
             onClick={() => {
               const conn = connections.find(c => c.id === contextMenu.connectionId);
               if (conn) handleConnect(conn);
               closeContextMenu();
             }}
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
           >
-            <Play className="w-3 h-3" /> Connect
-          </button>
-          <button
+            Connect
+          </MenuItem>
+          <MenuItem
+            icon={<Edit2 className="w-3 h-3" />}
             onClick={() => {
               const conn = connections.find(c => c.id === contextMenu.connectionId);
               if (conn) handleEdit(conn);
             }}
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
           >
-            <Edit2 className="w-3 h-3" /> Edit
-          </button>
+            Edit
+          </MenuItem>
           {viewMode === "folders" && (
-            <button
+            <MenuItem
+              icon={<FolderOpen className="w-3 h-3" />}
               onClick={() => {
                 const conn = connections.find((c) => c.id === contextMenu.connectionId);
                 if (conn) {
@@ -1795,12 +1788,13 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                 }
                 closeContextMenu();
               }}
-              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
             >
-              <FolderOpen className="w-3 h-3 text-yellow-500" /> Move to folder…
-            </button>
+              Move to folder…
+            </MenuItem>
           )}
-          <button
+          <MenuItem
+            tone="danger"
+            icon={<Trash2 className="w-3 h-3" />}
             onClick={async () => {
               const confirmed = await confirmDialog.confirm({
                 title: "Delete Connection",
@@ -1813,23 +1807,22 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                 handleDelete(contextMenu.connectionId);
               }
             }}
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)] text-red-400"
           >
-            <Trash2 className="w-3 h-3" /> Delete
-          </button>
-          <div className="h-px bg-[var(--border)] my-1" />
-          <button
+            Delete
+          </MenuItem>
+          <MenuSeparator />
+          <MenuItem
+            icon={<Plus className="w-3 h-3" />}
             onClick={() => {
               // We need to ensure we're connected to something to fetch owners/templates
               // But for now, we can just open it
               setIsCreateDatabaseOpen(true);
               closeContextMenu();
             }}
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
           >
-            <Plus className="w-3 h-3 text-emerald-400" /> Create Database...
-          </button>
-        </div>
+            Create Database...
+          </MenuItem>
+        </Menu>
       )}
 
       {/* Move-to-folder picker (#104). Excludes self + descendants when
@@ -1864,27 +1857,24 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
 
       {/* Schema Context Menu */}
       {schemaContextMenu && (
-        <div
-          className="fixed z-50 bg-[var(--surface)] border border-[var(--border)] shadow-xl rounded-lg py-1 min-w-[160px] animate-in fade-in zoom-in duration-100"
-          style={{ left: schemaContextMenu.x, top: schemaContextMenu.y }}
-        >
+        <Menu x={schemaContextMenu.x} y={schemaContextMenu.y} className="w-auto min-w-[160px]">
           {/* Database folder specific items if any (removed duplicate Create Database) */}
 
           {schemaContextMenu.node.icon === "database" && (
             <>
-              <button
+              <MenuItem
+                icon={<Terminal className="w-3 h-3" />}
                 onClick={() => {
                   window.dispatchEvent(new CustomEvent("open-query-window", {
                     detail: { connectionId: activeConnection?.id, connectionName: activeConnection?.name, database: schemaContextMenu.node.name }
                   }));
                   closeContextMenu();
                 }}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
               >
-                <Terminal className="w-3 h-3 text-[var(--color-accent)]" />
                 Open SQL Editor
-              </button>
-              <button
+              </MenuItem>
+              <MenuItem
+                icon={<Terminal className="w-3 h-3" />}
                 onClick={() => {
                   window.dispatchEvent(new CustomEvent("open-query-window-psql", {
                     detail: {
@@ -1895,21 +1885,20 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                   }));
                   closeContextMenu();
                 }}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
               >
-                <Terminal className="w-3 h-3 text-blue-400" />
                 Open PSQL (Console)
-              </button>
-              <button
+              </MenuItem>
+              <MenuItem
+                icon={<Zap className="w-3 h-3" />}
                 onClick={() => {
                   loadSchema(selectedDatabase || "");
                   closeContextMenu();
                 }}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
               >
-                <Zap className="w-3 h-3 text-yellow-500" /> Refresh Schema
-              </button>
-              <button
+                Refresh Schema
+              </MenuItem>
+              <MenuItem
+                icon={<Database className="w-3 h-3" />}
                 onClick={() => {
                   if (activeConnection && selectedDatabase) {
                     const currentSchemas = getSelectedSchemas(activeConnection.id, selectedDatabase);
@@ -1923,15 +1912,14 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                   }
                   closeContextMenu();
                 }}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
               >
-                <Database className="w-3 h-3 text-cyan-400" /> Select Schemas...
-              </button>
-              
-              <div className="h-px bg-[var(--border)] my-1" />
-              
+                Select Schemas...
+              </MenuItem>
+
+              <MenuSeparator />
+
               {/* Create Submenu */}
-              <div 
+              <div
                 className="relative group/submenu"
                 onMouseEnter={() => setActiveSubmenu("create")}
                 onMouseLeave={(e) => {
@@ -1941,117 +1929,117 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                   setActiveSubmenu(null);
                 }}
               >
-                <div className="w-full flex items-center justify-between px-3 py-1.5 text-xs hover:bg-[var(--border)] cursor-default transition-colors">
+                <div className="w-full flex items-center justify-between px-3 py-1.5 text-xs hover:bg-[var(--neutral-4)] cursor-default transition-colors">
                   <div className="flex items-center gap-2">
-                    <Plus className="w-3 h-3 text-green-400" /> Create
+                    <Plus className="w-3 h-3" /> Create
                   </div>
                   <ChevronRight className="w-3 h-3 opacity-50" />
                 </div>
-                
+
                 {activeSubmenu === "create" && (
-                  <div 
-                    className="absolute left-full top-0 ml-[-4px] bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-xl py-1 min-w-[180px] animate-in fade-in slide-in-from-left-2 duration-150 z-[60] submenu-panel"
+                  <div
+                    className="absolute left-full top-0 ml-[-4px] bg-[var(--surface-overlay)] border border-[var(--neutral-6)] rounded-lg shadow-xl py-1 min-w-[180px] animate-in fade-in slide-in-from-left-2 duration-150 z-[60] submenu-panel"
                     onMouseEnter={() => setActiveSubmenu("create")}
                   >
-                    <button
+                    <MenuItem
+                      icon={<Table className="w-3 h-3" />}
                       onClick={() => {
                         setCreateTableTarget({ schema: 'public' });
                         setIsCreateTableOpen(true);
                         closeContextMenu();
                       }}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                     >
-                      <Table className="w-3 h-3 text-blue-400" /> Table
-                    </button>
-                    <button
+                      Table
+                    </MenuItem>
+                    <MenuItem
+                      icon={<Eye className="w-3 h-3" />}
                       onClick={() => {
-                        window.dispatchEvent(new CustomEvent("open-query-with-text", { 
-                          detail: { query: getCreateTemplate("Views") || "", name: "New View" } 
+                        window.dispatchEvent(new CustomEvent("open-query-with-text", {
+                          detail: { query: getCreateTemplate("Views") || "", name: "New View" }
                         }));
                         closeContextMenu();
                       }}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                     >
-                      <Eye className="w-3 h-3 text-purple-400" /> View
-                    </button>
-                    <button
+                      View
+                    </MenuItem>
+                    <MenuItem
+                      icon={<Variable className="w-3 h-3" />}
                       onClick={() => {
-                        window.dispatchEvent(new CustomEvent("open-query-with-text", { 
-                          detail: { query: getCreateTemplate("Functions") || "", name: "New Function" } 
+                        window.dispatchEvent(new CustomEvent("open-query-with-text", {
+                          detail: { query: getCreateTemplate("Functions") || "", name: "New Function" }
                         }));
                         closeContextMenu();
                       }}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                     >
-                      <Variable className="w-3 h-3 text-red-400" /> Function
-                    </button>
-                    <button
+                      Function
+                    </MenuItem>
+                    <MenuItem
+                      icon={<Zap className="w-3 h-3" />}
                       onClick={() => {
-                        window.dispatchEvent(new CustomEvent("open-query-with-text", { 
-                          detail: { query: getCreateTemplate("Triggers") || "", name: "New Trigger" } 
+                        window.dispatchEvent(new CustomEvent("open-query-with-text", {
+                          detail: { query: getCreateTemplate("Triggers") || "", name: "New Trigger" }
                         }));
                         closeContextMenu();
                       }}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                     >
-                      <Zap className="w-3 h-3 text-orange-400" /> Trigger
-                    </button>
-                    <button
+                      Trigger
+                    </MenuItem>
+                    <MenuItem
+                      icon={<Hash className="w-3 h-3" />}
                       onClick={() => {
-                        window.dispatchEvent(new CustomEvent("open-query-with-text", { 
-                          detail: { query: getCreateTemplate("Indexes") || "", name: "New Index" } 
+                        window.dispatchEvent(new CustomEvent("open-query-with-text", {
+                          detail: { query: getCreateTemplate("Indexes") || "", name: "New Index" }
                         }));
                         closeContextMenu();
                       }}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                     >
-                      <Hash className="w-3 h-3 text-green-400" /> Index
-                    </button>
-                    <button
+                      Index
+                    </MenuItem>
+                    <MenuItem
+                      icon={<Server className="w-3 h-3" />}
                       onClick={() => {
-                        window.dispatchEvent(new CustomEvent("open-query-with-text", { 
-                          detail: { query: getCreateTemplate("Schemas") || "", name: "New Schema" } 
+                        window.dispatchEvent(new CustomEvent("open-query-with-text", {
+                          detail: { query: getCreateTemplate("Schemas") || "", name: "New Schema" }
                         }));
                         closeContextMenu();
                       }}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                     >
-                      <Server className="w-3 h-3 text-yellow-500" /> Schema
-                    </button>
-                    <button
+                      Schema
+                    </MenuItem>
+                    <MenuItem
+                      icon={<Hash className="w-3 h-3" />}
                       onClick={() => {
                         window.dispatchEvent(new CustomEvent("open-query-with-text", {
                           detail: { query: getCreateTemplate("Sequences") || "", name: "New Sequence" }
                         }));
                         closeContextMenu();
                       }}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                     >
-                      <Hash className="w-3 h-3 text-cyan-400" /> Sequence
-                    </button>
-                    <button
+                      Sequence
+                    </MenuItem>
+                    <MenuItem
+                      icon={<Variable className="w-3 h-3" />}
                       onClick={() => {
                         window.dispatchEvent(new CustomEvent("open-query-with-text", {
                           detail: { query: getCreateTemplate("Types") || "", name: "New Type" }
                         }));
                         closeContextMenu();
                       }}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                     >
-                      <Variable className="w-3 h-3 text-pink-400" /> Type
-                    </button>
-                    
-                    <div className="h-px bg-[var(--border)] my-1" />
-                    
-                    <button
+                      Type
+                    </MenuItem>
+
+                    <MenuSeparator />
+
+                    <MenuItem
+                      icon={<Database className="w-3 h-3" />}
                       onClick={() => {
                         setIsCreateDatabaseOpen(true);
                         closeContextMenu();
                       }}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                     >
-                      <Database className="w-3 h-3 text-emerald-400" /> Database (New)
-                    </button>
+                      Database (New)
+                    </MenuItem>
                   </div>
                 )}
               </div>
@@ -2066,19 +2054,20 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                   setActiveSubmenu(null);
                 }}
               >
-                <div className="w-full flex items-center justify-between px-3 py-1.5 text-xs hover:bg-[var(--border)] cursor-default transition-colors">
+                <div className="w-full flex items-center justify-between px-3 py-1.5 text-xs hover:bg-[var(--neutral-4)] cursor-default transition-colors">
                   <div className="flex items-center gap-2">
-                    <Check className="w-3 h-3 text-blue-400" /> Tools
+                    <Check className="w-3 h-3" /> Tools
                   </div>
                   <ChevronRight className="w-3 h-3 opacity-50" />
                 </div>
-                
+
                 {activeSubmenu === "tools" && (
-                  <div 
-                    className="absolute left-full top-0 ml-[-4px] bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-xl py-1 min-w-[140px] animate-in fade-in slide-in-from-left-2 duration-150 z-[60] submenu-panel"
+                  <div
+                    className="absolute left-full top-0 ml-[-4px] bg-[var(--surface-overlay)] border border-[var(--neutral-6)] rounded-lg shadow-xl py-1 min-w-[140px] animate-in fade-in slide-in-from-left-2 duration-150 z-[60] submenu-panel"
                     onMouseEnter={() => setActiveSubmenu("tools")}
                   >
-                    <button
+                    <MenuItem
+                      icon={<Download className="w-3 h-3" />}
                       onClick={() => {
                         const nodeId = schemaContextMenu.node.id;
                         const dbName = schemaContextMenu.node.name;
@@ -2088,11 +2077,11 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                         setBackupDialogOpen(true);
                         closeContextMenu();
                       }}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                     >
-                      <Download className="w-3 h-3 text-emerald-400" /> Backup
-                    </button>
-                    <button
+                      Backup
+                    </MenuItem>
+                    <MenuItem
+                      icon={<Upload className="w-3 h-3" />}
                       onClick={() => {
                         const nodeId = schemaContextMenu.node.id;
                         const dbName = schemaContextMenu.node.name;
@@ -2102,27 +2091,28 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                         setRestoreDialogOpen(true);
                         closeContextMenu();
                       }}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                     >
-                      <Upload className="w-3 h-3 text-blue-400" /> Restore
-                    </button>
+                      Restore
+                    </MenuItem>
                   </div>
                 )}
               </div>
 
-              <div className="h-px bg-[var(--border)] my-1" />
-              
-              <button
+              <MenuSeparator />
+
+              <MenuItem
+                icon={<Columns className="w-3 h-3 opacity-70" />}
                 onClick={() => {
                   navigator.clipboard.writeText(schemaContextMenu.node.name);
                   closeContextMenu();
                 }}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
               >
-                <Columns className="w-3 h-3 opacity-70" /> Copy Database Name
-              </button>
-              
-              <button
+                Copy Database Name
+              </MenuItem>
+
+              <MenuItem
+                tone="danger"
+                icon={<Trash2 className="w-3 h-3" />}
                 onClick={async () => {
                   const dbName = schemaContextMenu.node.name;
                   const confirmed = await confirmDialog.confirm({
@@ -2153,37 +2143,37 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                   }
                   closeContextMenu();
                 }}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-red-500 hover:text-white transition-colors text-red-400"
               >
-                <Trash2 className="w-3 h-3" /> Drop Database
-              </button>
+                Drop Database
+              </MenuItem>
             </>
           )}
 
           {schemaContextMenu.node.id.startsWith("schemas-root-") && (
-            <div className="px-3 py-1.5 text-[10px] font-bold uppercase text-[var(--text-secondary)] border-b border-[var(--border)] mb-1 tracking-wider">
+            <MenuLabel bordered>
               {schemaContextMenu.node.icon} — {schemaContextMenu.node.name}
-            </div>
+            </MenuLabel>
           )}
           
           {/* Leaf schema items: DDL, SQL statements */}
           {isLeafSchemaItem(schemaContextMenu.node.icon) && (
             <>
-              <button
+              <MenuItem
+                icon={<Code className="w-3 h-3" />}
                 onClick={async () => {
                   const ddl = await getDDL(schemaContextMenu.node.icon, schemaContextMenu.node.name);
-                  window.dispatchEvent(new CustomEvent("open-query-with-text", { 
-                    detail: { query: ddl, name: `DDL ${schemaContextMenu.node.name}` } 
+                  window.dispatchEvent(new CustomEvent("open-query-with-text", {
+                    detail: { query: ddl, name: `DDL ${schemaContextMenu.node.name}` }
                   }));
                   closeContextMenu();
                 }}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
               >
-                <Code className="w-3 h-3" /> Show DDL
-              </button>
+                Show DDL
+              </MenuItem>
 
               {(schemaContextMenu.node.icon === "table" || schemaContextMenu.node.icon === "view") && (
-                <button
+                <MenuItem
+                  icon={<Search className="w-3 h-3" />}
                   onClick={async () => {
                     const fullTableName = schemaContextMenu.node.id.replace(/^(table|view)-/, "");
                     const sql = await generateStatement("select", fullTableName);
@@ -2198,15 +2188,15 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                     }));
                     closeContextMenu();
                   }}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                 >
-                  <Search className="w-3 h-3" /> Select Top 100
-                </button>
+                  Select Top 100
+                </MenuItem>
               )}
 
               {schemaContextMenu.node.icon === "table" && (
                 <>
-                  <button
+                  <MenuItem
+                    icon={<Plus className="w-3 h-3" />}
                     onClick={async () => {
                       const fullTableName = schemaContextMenu.node.id.replace(/^table-/, "");
                       const confirmed = await confirmDialog.confirm({
@@ -2217,29 +2207,30 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                       });
                       if (!confirmed) return;
                       const sql = await generateStatement("insert", fullTableName);
-                      window.dispatchEvent(new CustomEvent("open-query-with-text", { 
-                        detail: { query: sql, name: `Insert ${fullTableName}` } 
+                      window.dispatchEvent(new CustomEvent("open-query-with-text", {
+                        detail: { query: sql, name: `Insert ${fullTableName}` }
                       }));
                       closeContextMenu();
                     }}
-                    className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                   >
-                    <Plus className="w-3 h-3" /> Insert Statement
-                  </button>
-                  <button
+                    Insert Statement
+                  </MenuItem>
+                  <MenuItem
+                    icon={<Edit2 className="w-3 h-3" />}
                     onClick={async () => {
                       const fullTableName = schemaContextMenu.node.id.replace(/^table-/, "");
                       const sql = await generateStatement("update", fullTableName);
-                      window.dispatchEvent(new CustomEvent("open-query-with-text", { 
-                        detail: { query: sql, name: `Update ${fullTableName}` } 
+                      window.dispatchEvent(new CustomEvent("open-query-with-text", {
+                        detail: { query: sql, name: `Update ${fullTableName}` }
                       }));
                       closeContextMenu();
                     }}
-                    className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                   >
-                    <Edit2 className="w-3 h-3" /> Update Statement
-                  </button>
-                  <button
+                    Update Statement
+                  </MenuItem>
+                  <MenuItem
+                    tone="danger"
+                    icon={<Trash2 className="w-3 h-3" />}
                     onClick={async () => {
                       const fullTableName = schemaContextMenu.node.id.replace(/^table-/, "");
                       const confirmed = await confirmDialog.confirm({
@@ -2250,30 +2241,31 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                       });
                       if (!confirmed) return;
                       const sql = await generateStatement("delete", fullTableName);
-                      window.dispatchEvent(new CustomEvent("open-query-with-text", { 
-                        detail: { query: sql, name: `Delete ${fullTableName}` } 
+                      window.dispatchEvent(new CustomEvent("open-query-with-text", {
+                        detail: { query: sql, name: `Delete ${fullTableName}` }
                       }));
                       closeContextMenu();
                     }}
-                    className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)] text-[var(--color-error)]"
                   >
-                    <Trash2 className="w-3 h-3" /> Delete Statement
-                  </button>
+                    Delete Statement
+                  </MenuItem>
                 </>
               )}
-              
-              <div className="h-px bg-[var(--border)] my-1" />
 
-              <button
+              <MenuSeparator />
+
+              <MenuItem
+                icon={<Columns className="w-3 h-3" />}
                 onClick={() => {
                   navigator.clipboard.writeText(schemaContextMenu.node.name);
                   closeContextMenu();
                 }}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
               >
-                <Columns className="w-3 h-3" /> Copy Name
-              </button>
-              <button
+                Copy Name
+              </MenuItem>
+              <MenuItem
+                tone="danger"
+                icon={<Trash2 className="w-3 h-3" />}
                 onClick={async () => {
                   const confirmed = await confirmDialog.confirm({
                     title: `Drop ${schemaContextMenu.node.icon}`,
@@ -2284,15 +2276,14 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                   if (!confirmed) return;
                   const itemType = schemaContextMenu.node.icon.toUpperCase();
                   const sql = `DROP ${itemType} IF EXISTS ${schemaContextMenu.node.name};`;
-                  window.dispatchEvent(new CustomEvent("open-query-with-text", { 
-                    detail: { query: `-- WARNING: This will permanently drop the ${itemType.toLowerCase()}\n${sql}`, name: `Drop ${schemaContextMenu.node.name}` } 
+                  window.dispatchEvent(new CustomEvent("open-query-with-text", {
+                    detail: { query: `-- WARNING: This will permanently drop the ${itemType.toLowerCase()}\n${sql}`, name: `Drop ${schemaContextMenu.node.name}` }
                   }));
                   closeContextMenu();
                 }}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)] text-red-400"
               >
-                <Trash2 className="w-3 h-3" /> Drop {schemaContextMenu.node.icon}
-              </button>
+                Drop {schemaContextMenu.node.icon}
+              </MenuItem>
             </>
           )}
 
@@ -2307,21 +2298,24 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
 
                 if (isDatabaseFolder) {
                   return (
-                    <button
+                    <MenuItem
+                      tone="success"
+                      icon={<Plus className="w-3 h-3" />}
                       onClick={() => {
                         setIsCreateDatabaseOpen(true);
                         closeContextMenu();
                       }}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)] text-green-400"
                     >
-                      <Plus className="w-3 h-3" /> Create New Database
-                    </button>
+                      Create New Database
+                    </MenuItem>
                   );
                 }
 
                 if (isTableFolder) {
                   return (
-                    <button
+                    <MenuItem
+                      tone="success"
+                      icon={<Plus className="w-3 h-3" />}
                       onClick={() => {
                         const schemaMatch = schemaContextMenu.node.id.match(/-([a-zA-Z0-9_]+)$/);
                         const schema = schemaMatch ? schemaMatch[1] : "public";
@@ -2329,27 +2323,27 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                         setIsCreateTableOpen(true);
                         closeContextMenu();
                       }}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)] text-green-400"
                     >
-                      <Plus className="w-3 h-3" /> Create New Table
-                    </button>
+                      Create New Table
+                    </MenuItem>
                   );
                 }
 
                 const template = getCreateTemplate(schemaContextMenu.node.name);
                 if (template) {
                   return (
-                    <button
+                    <MenuItem
+                      tone="success"
+                      icon={<Plus className="w-3 h-3" />}
                       onClick={() => {
-                        window.dispatchEvent(new CustomEvent("open-query-with-text", { 
-                          detail: { query: template, name: `New ${schemaContextMenu.node.name.replace(/s$/, "")}` } 
+                        window.dispatchEvent(new CustomEvent("open-query-with-text", {
+                          detail: { query: template, name: `New ${schemaContextMenu.node.name.replace(/s$/, "")}` }
                         }));
                         closeContextMenu();
                       }}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)] text-green-400"
                     >
-                      <Plus className="w-3 h-3" /> Create New {schemaContextMenu.node.name.replace(/s$/, "")}
-                    </button>
+                      Create New {schemaContextMenu.node.name.replace(/s$/, "")}
+                    </MenuItem>
                   );
                 }
                 return null;
@@ -2358,10 +2352,10 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
               {/* For schema nodes only */}
               {(schemaContextMenu.node.icon === "schema") && (
                 <>
-                  <div className="h-px bg-[var(--border)] my-1" />
-                  
+                  <MenuSeparator />
+
                   {/* Create Submenu for Schema */}
-                  <div 
+                  <div
                     className="relative group/submenu"
                     onMouseEnter={() => setActiveSubmenu("create")}
                     onMouseLeave={(e) => {
@@ -2370,94 +2364,94 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                       setActiveSubmenu(null);
                     }}
                   >
-                    <div className="w-full flex items-center justify-between px-3 py-1.5 text-xs hover:bg-[var(--border)] cursor-default transition-colors">
+                    <div className="w-full flex items-center justify-between px-3 py-1.5 text-xs hover:bg-[var(--neutral-4)] cursor-default transition-colors">
                       <div className="flex items-center gap-2">
-                        <Plus className="w-3 h-3 text-green-400" /> Create
+                        <Plus className="w-3 h-3" /> Create
                       </div>
                       <ChevronRight className="w-3 h-3 opacity-50" />
                     </div>
-                    
+
                     {activeSubmenu === "create" && (
-                      <div 
-                        className="absolute left-full top-0 ml-[-4px] bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-xl py-1 min-w-[180px] animate-in fade-in slide-in-from-left-2 duration-150 z-[60] submenu-panel"
+                      <div
+                        className="absolute left-full top-0 ml-[-4px] bg-[var(--surface-overlay)] border border-[var(--neutral-6)] rounded-lg shadow-xl py-1 min-w-[180px] animate-in fade-in slide-in-from-left-2 duration-150 z-[60] submenu-panel"
                         onMouseEnter={() => setActiveSubmenu("create")}
                       >
-                        <button
+                        <MenuItem
+                          icon={<Table className="w-3 h-3" />}
                           onClick={() => {
                             setCreateTableTarget({ schema: schemaContextMenu.node.name });
                             setIsCreateTableOpen(true);
                             closeContextMenu();
                           }}
-                          className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                         >
-                          <Table className="w-3 h-3 text-blue-400" /> Table
-                        </button>
-                        <button
+                          Table
+                        </MenuItem>
+                        <MenuItem
+                          icon={<Eye className="w-3 h-3" />}
                           onClick={() => {
-                            window.dispatchEvent(new CustomEvent("open-query-with-text", { 
-                              detail: { query: getCreateTemplate("Views") || "", name: "New View" } 
+                            window.dispatchEvent(new CustomEvent("open-query-with-text", {
+                              detail: { query: getCreateTemplate("Views") || "", name: "New View" }
                             }));
                             closeContextMenu();
                           }}
-                          className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                         >
-                          <Eye className="w-3 h-3 text-purple-400" /> View
-                        </button>
-                        <button
+                          View
+                        </MenuItem>
+                        <MenuItem
+                          icon={<Variable className="w-3 h-3" />}
                           onClick={() => {
-                            window.dispatchEvent(new CustomEvent("open-query-with-text", { 
-                              detail: { query: getCreateTemplate("Functions") || "", name: "New Function" } 
+                            window.dispatchEvent(new CustomEvent("open-query-with-text", {
+                              detail: { query: getCreateTemplate("Functions") || "", name: "New Function" }
                             }));
                             closeContextMenu();
                           }}
-                          className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                         >
-                          <Variable className="w-3 h-3 text-red-400" /> Function
-                        </button>
-                        <button
+                          Function
+                        </MenuItem>
+                        <MenuItem
+                          icon={<Zap className="w-3 h-3" />}
                           onClick={() => {
-                            window.dispatchEvent(new CustomEvent("open-query-with-text", { 
-                              detail: { query: getCreateTemplate("Triggers") || "", name: "New Trigger" } 
+                            window.dispatchEvent(new CustomEvent("open-query-with-text", {
+                              detail: { query: getCreateTemplate("Triggers") || "", name: "New Trigger" }
                             }));
                             closeContextMenu();
                           }}
-                          className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                         >
-                          <Zap className="w-3 h-3 text-orange-400" /> Trigger
-                        </button>
-                        <button
+                          Trigger
+                        </MenuItem>
+                        <MenuItem
+                          icon={<Hash className="w-3 h-3" />}
                           onClick={() => {
-                            window.dispatchEvent(new CustomEvent("open-query-with-text", { 
-                              detail: { query: getCreateTemplate("Indexes") || "", name: "New Index" } 
+                            window.dispatchEvent(new CustomEvent("open-query-with-text", {
+                              detail: { query: getCreateTemplate("Indexes") || "", name: "New Index" }
                             }));
                             closeContextMenu();
                           }}
-                          className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                         >
-                          <Hash className="w-3 h-3 text-green-400" /> Index
-                        </button>
-                        <button
+                          Index
+                        </MenuItem>
+                        <MenuItem
+                          icon={<Hash className="w-3 h-3" />}
                           onClick={() => {
                             window.dispatchEvent(new CustomEvent("open-query-with-text", {
                               detail: { query: getCreateTemplate("Sequences") || "", name: "New Sequence" }
                             }));
                             closeContextMenu();
                           }}
-                          className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                         >
-                          <Hash className="w-3 h-3 text-cyan-400" /> Sequence
-                        </button>
-                        <button
+                          Sequence
+                        </MenuItem>
+                        <MenuItem
+                          icon={<Variable className="w-3 h-3" />}
                           onClick={() => {
                             window.dispatchEvent(new CustomEvent("open-query-with-text", {
                               detail: { query: getCreateTemplate("Types") || "", name: "New Type" }
                             }));
                             closeContextMenu();
                           }}
-                          className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[var(--border)]"
                         >
-                          <Variable className="w-3 h-3 text-pink-400" /> Type
-                        </button>
+                          Type
+                        </MenuItem>
                       </div>
                     )}
                   </div>
@@ -2465,7 +2459,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
               )}
             </>
           )}
-        </div>
+        </Menu>
       )}
 
       {/* Add Connection Dialog is owned by AppLayout (#84) — the "+" buttons
