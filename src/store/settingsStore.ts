@@ -30,7 +30,7 @@ export interface DBSettings {
   enableQueryVariables: boolean;
   
   // Appearance
-  theme: "dark" | "light" | "system";
+  theme: "dark" | "light" | "blue" | "system";
   showTreeIndentGuides: boolean;
   compactMode: boolean;
   widescreenLayout: boolean;

@@ -51,44 +51,67 @@ export interface GridViewRef {
 // src/styles/globals.css (Radix Slate/Cyan). Keep them in sync if that scale
 // changes; the grid otherwise drifts away from the rest of the app's chrome
 // (which is what happened with the pre-design-system slate/#06b6d4 palette).
-type GridPalette = ReturnType<typeof getPalette>;
+type GridMode = "dark" | "light" | "blue";
+type GridPalette = (typeof GRID_PALETTES)[GridMode];
 
-const getPalette = (isDark: boolean) =>
-  isDark
-    ? {
-        cellBg: "#111113",        // --neutral-1
-        headerBg: "#18191b",      // --neutral-2
-        headerHoverBg: "#212225", // --neutral-3
-        headerFocusBg: "#272a2d", // --neutral-4
-        border: "#363a3f",        // --neutral-6
-        text: "#edeef0",          // --neutral-12
-        textMuted: "#b0b4ba",     // --neutral-11
-        textFaint: "#696e77",     // --neutral-9
-        accent: "#00a2c7",        // --accent-9
-        accentText: "#4ccce6",    // --accent-11
-        accentTint: "rgba(0, 162, 199, 0.2)",
-        numPos: "#63c174",        // --success-11
-        numNeg: "#ff6369",        // --danger-11
-        newTint: "rgba(70, 167, 88, 0.15)",   // --success-9
-        modTint: "rgba(255, 178, 36, 0.15)",  // --warning-9
-      }
-    : {
-        cellBg: "#fcfcfd",        // --neutral-1
-        headerBg: "#f9f9fb",      // --neutral-2
-        headerHoverBg: "#eff0f3", // --neutral-3
-        headerFocusBg: "#e7e8ec", // --neutral-4
-        border: "#d8d9e0",        // --neutral-6
-        text: "#1c2024",          // --neutral-12
-        textMuted: "#60646c",     // --neutral-11
-        textFaint: "#8b8d98",     // --neutral-9
-        accent: "#00a2c7",        // --accent-9
-        accentText: "#107d98",    // --accent-11
-        accentTint: "rgba(0, 162, 199, 0.12)",
-        numPos: "#2a7e3b",        // --success-11
-        numNeg: "#c62a2f",        // --danger-11
-        newTint: "rgba(70, 167, 88, 0.1)",    // --success-9
-        modTint: "rgba(255, 178, 36, 0.12)",  // --warning-9
-      };
+// The Glide grid renders to <canvas> and can't read CSS var()s, so each theme's
+// palette is literal hex mirrored from the globals.css tokens (per-line comments
+// map each back to its variable). Keep these in sync with globals.css.
+const GRID_PALETTES = {
+  dark: {
+    cellBg: "#111113",        // --neutral-1
+    headerBg: "#18191b",      // --neutral-2
+    headerHoverBg: "#212225", // --neutral-3
+    headerFocusBg: "#272a2d", // --neutral-4
+    border: "#363a3f",        // --neutral-6
+    text: "#edeef0",          // --neutral-12
+    textMuted: "#b0b4ba",     // --neutral-11
+    textFaint: "#696e77",     // --neutral-9
+    accent: "#00a2c7",        // --accent-9
+    accentText: "#4ccce6",    // --accent-11
+    accentTint: "rgba(0, 162, 199, 0.2)",
+    numPos: "#63c174",        // --success-11
+    numNeg: "#ff6369",        // --danger-11
+    newTint: "rgba(70, 167, 88, 0.15)",   // --success-9
+    modTint: "rgba(255, 178, 36, 0.15)",  // --warning-9
+  },
+  light: {
+    cellBg: "#fcfcfd",        // --neutral-1
+    headerBg: "#f9f9fb",      // --neutral-2
+    headerHoverBg: "#eff0f3", // --neutral-3
+    headerFocusBg: "#e7e8ec", // --neutral-4
+    border: "#d8d9e0",        // --neutral-6
+    text: "#1c2024",          // --neutral-12
+    textMuted: "#60646c",     // --neutral-11
+    textFaint: "#8b8d98",     // --neutral-9
+    accent: "#00a2c7",        // --accent-9
+    accentText: "#107d98",    // --accent-11
+    accentTint: "rgba(0, 162, 199, 0.12)",
+    numPos: "#2a7e3b",        // --success-11
+    numNeg: "#c62a2f",        // --danger-11
+    newTint: "rgba(70, 167, 88, 0.1)",    // --success-9
+    modTint: "rgba(255, 178, 36, 0.12)",  // --warning-9
+  },
+  blue: {
+    cellBg: "#0b1020",        // --neutral-1
+    headerBg: "#0f1526",      // --neutral-2
+    headerHoverBg: "#161d2e", // --neutral-3
+    headerFocusBg: "#1b2336", // --neutral-4
+    border: "#232c40",        // --neutral-6
+    text: "#e6e9f2",          // --neutral-12
+    textMuted: "#9aa3bd",     // --neutral-11
+    textFaint: "#5b6580",     // --neutral-9
+    accent: "#3b82f6",        // --accent-9
+    accentText: "#93b8fc",    // --accent-11
+    accentTint: "rgba(59, 130, 246, 0.2)",
+    numPos: "#63c174",        // --success-11
+    numNeg: "#ff6369",        // --danger-11
+    newTint: "rgba(70, 167, 88, 0.15)",   // --success-9
+    modTint: "rgba(255, 178, 36, 0.15)",  // --warning-9
+  },
+} as const;
+
+const getPalette = (mode: GridMode): GridPalette => GRID_PALETTES[mode];
 
 const getTheme = (p: GridPalette): Partial<Theme> => ({
   accentColor: p.accent,
@@ -151,8 +174,13 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
   }));
 
   const { theme } = useSettings();
-  const isDark = theme === "dark" || (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
-  const palette = useMemo(() => getPalette(isDark), [isDark]);
+  const gridMode: GridMode =
+    theme === "blue"
+      ? "blue"
+      : theme === "light" || (theme === "system" && !window.matchMedia("(prefers-color-scheme: dark)").matches)
+        ? "light"
+        : "dark";
+  const palette = useMemo(() => getPalette(gridMode), [gridMode]);
   const gridTheme = useMemo(() => getTheme(palette), [palette]);
 
   const gridColumns = useMemo<GridColumn[]>(() => 

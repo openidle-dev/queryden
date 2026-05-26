@@ -4,6 +4,15 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 
 ## [Unreleased]
 
+### Added
+- **[#194](https://github.com/openidle-dev/queryden/issues/194) — New "Blue" theme (dark navy surfaces + blue accent).** A third selectable theme alongside Dark/Light/System, with a navy slate neutral scale and a blue accent (`--accent-9` `#3b82f6`), giving a VS Code "Dark+" feel. Added as a `.theme-blue` token block in `src/styles/globals.css`; only the raw neutral/accent scales are overridden, so the surface-elevation and legacy semantic aliases resolve through `var()` against them. Wired through `ThemeContext` (theme type + `<html>` class application), `settingsStore` (theme union), and the Appearance theme dropdown. Because the Glide results grid and Monaco editors render to `<canvas>`/their own DOM and can't read CSS `var()`, each gets a dedicated blue palette: `GridView.tsx` gains a navy grid palette (literal hex mirrored from the tokens), and a shared `src/utils/monacoThemes.ts` defines a custom `queryden-blue` Monaco theme (navy chrome over `vs-dark` syntax colors) now used by the SQL editor, Compare diff, and Definition viewer.
+
+### Fixed
+- **[#193](https://github.com/openidle-dev/queryden/issues/193) — Light-theme dialog text was nearly invisible.** In the Light theme, Settings/Help dialog labels and titles rendered as faint light-grey on white. `index.html` hardcodes a dark boot style (`html, body { background:#111113; color:#edeef0 }`) for the pre-React splash; `AppLayout` overrides it for the main app, but `SettingsDialog`/`HelpDialog` render as **siblings** of `<AppLayout>` (`src/App.tsx`) — outside that override — so their un-classed text inherited the dark-theme `#edeef0` on light surfaces. Fixed by making `body` color/background theme-aware in `globals.css` (`.theme-dark/.theme-light/.theme-blue body`); the theme class is on `<html>`, so these win on specificity and the boot splash (which runs before the class lands) is unaffected.
+
+### Changed
+- **Theme dropdown migrated to the shared `Select` primitive.** The Appearance → Theme control was still a native `<select>` (OS-rendered popup that ignores the app theme, per [#151](https://github.com/openidle-dev/queryden/issues/151)); it now uses `src/components/ui/Select.tsx`. The remaining native selects are tracked in [#192](https://github.com/openidle-dev/queryden/issues/192).
+
 ## [1.0.22] - 2026-05-26
 
 ### Fixed

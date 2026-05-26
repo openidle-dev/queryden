@@ -235,6 +235,44 @@
 }
 
 /* ------------------------------------------------------------------
+   BLUE THEME — dark navy surfaces + blue accent (VS-Code "Dark+" feel)
+   Only the raw neutral/accent scales are overridden; the surface-elevation
+   and legacy semantic aliases defined on :root resolve through var() against
+   these scales, so a dark-style elevation (base = neutral-1) carries over.
+   ------------------------------------------------------------------ */
+.theme-blue {
+  color-scheme: dark;
+
+  /* Neutral / navy slate scale */
+  --neutral-1:  #0b1020;
+  --neutral-2:  #0f1526;
+  --neutral-3:  #161d2e;
+  --neutral-4:  #1b2336;
+  --neutral-5:  #20293e;
+  --neutral-6:  #232c40;
+  --neutral-7:  #2c3650;
+  --neutral-8:  #3a4768;
+  --neutral-9:  #5b6580;
+  --neutral-10: #6b7591;
+  --neutral-11: #9aa3bd;
+  --neutral-12: #e6e9f2;
+
+  /* Accent / blue scale */
+  --accent-1:  #0c1530;
+  --accent-2:  #0e1a3d;
+  --accent-3:  #102452;
+  --accent-4:  #122c66;
+  --accent-5:  #15357a;
+  --accent-6:  #1a4090;
+  --accent-7:  #2150ad;
+  --accent-8:  #2f63d0;
+  --accent-9:  #3b82f6;
+  --accent-10: #60a5fa;
+  --accent-11: #93b8fc;
+  --accent-12: #d7e6ff;
+}
+
+/* ------------------------------------------------------------------
    Base
    ------------------------------------------------------------------ */
 :root {
@@ -250,6 +288,19 @@ html, body, #root {
   margin: 0;
   padding: 0;
   overflow: hidden;
+}
+
+/* index.html hardcodes a dark `body { color/background }` for the pre-React
+   boot splash. That leaks into anything rendered as a sibling of <AppLayout>
+   (Settings/Help dialogs, #portal content) which sits outside AppLayout's
+   themed container — in light theme its labels inherited the dark-theme text
+   color and were nearly invisible. Re-derive body color/background from the
+   active theme tokens once the theme class lands on <html>. */
+.theme-dark body,
+.theme-light body,
+.theme-blue body {
+  color: var(--text-primary);
+  background: var(--surface-base);
 }
 
 /* Interactive affordance (#160). Native <button> defaults to the arrow cursor,
