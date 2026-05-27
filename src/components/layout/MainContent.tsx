@@ -49,6 +49,12 @@ export interface QueryTab {
    * "you have unsaved queries" prompt on app exit (issue #121).
    */
   originalQuery?: string;
+  /**
+   * When the tab was opened from a saved query, this tracks which saved
+   * query it belongs to. Used to refresh originalQuery across all tabs
+   * sharing the same saved query when one tab saves (issue #138).
+   */
+  savedQueryName?: string;
   target?: { connectionId: string, connectionName: string, database: string };
   /** When true, force query execution through the psql CLI binary instead of libpq */
   usePsql?: boolean;
@@ -354,12 +360,18 @@ export function MainContent() {
           );
           // Mark the active tab as in-sync with persisted state so the
           // unsaved-changes prompt on app exit (#121) won't fire for it.
+          // Also refresh originalQuery on any other tabs opened from the
+          // same saved query so they reflect the latest persisted text (#138).
           if (activeTabIdRef.current) {
-            setQueryTabs(prev => prev.map(t =>
-              t.id === activeTabIdRef.current
-                ? { ...t, name, originalQuery: queryToSave }
-                : t
-            ));
+            setQueryTabs(prev => prev.map(t => {
+              if (t.id === activeTabIdRef.current) {
+                return { ...t, name, savedQueryName: name, originalQuery: queryToSave };
+              }
+              if (t.savedQueryName && t.savedQueryName === name) {
+                return { ...t, originalQuery: queryToSave };
+              }
+              return t;
+            }));
           }
           setSuccess(`Query "${name}" saved successfully!`);
         }
@@ -381,6 +393,7 @@ export function MainContent() {
     explicitConnectionId?: string,
     explicitConnectionName?: string,
     explicitDatabase?: string,
+    savedQueryName?: string,
   ) => {
     tabCounterRef.current += 1;
 
@@ -401,6 +414,7 @@ export function MainContent() {
       // For blank tabs this is "" (empty stays clean until typed into);
       // for tabs opened from a saved query this is the saved body.
       originalQuery: query,
+      savedQueryName,
       usePsql,
       target: resolvedConnectionId && resolvedDatabase ? {
         connectionId: resolvedConnectionId,
@@ -1463,7 +1477,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
 
     const handleNewTabWithText = (e: Event) => {
       const detail = (e as CustomEvent).detail || {};
-      addNewTab(detail.query || "", detail.name || "");
+      addNewTab(detail.query || "", detail.name || "", false, undefined, undefined, undefined, detail.savedQueryName);
     };
 
     const handleOpenDefinition = (e: Event) => {
@@ -2392,6 +2406,8 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           label="Save Query (Ctrl+S)"
           onClick={async () => {
             if (!activeConnection) return;
+            const queryToSave = activeTab?.query || currentQueryRef.current;
+            if (!queryToSave || queryToSave.trim() === "") return;
             const name = await confirmDialog.dialog({
               title: "Save Query",
               message: "Enter a name to identify this query in your saved queries library.",
@@ -2404,12 +2420,34 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
             });
 
             if (name) {
-              addSavedQuery({
-                name,
-                query: activeTab?.query || "",
-                database: selectedDatabase || "",
-                connectionId: activeConnection.id
-              });
+              const existing = findByName(name);
+              if (existing) {
+                updateQueryText(existing.id, queryToSave);
+              } else {
+                addSavedQuery({
+                  name,
+                  query: queryToSave,
+                  database: selectedDatabase || "",
+                  connectionId: activeConnection.id
+                });
+              }
+              useLocalHistory.getState().addEntry(
+                `saved-queries/${name}`,
+                queryToSave,
+                `Saved: ${name} — ${activeConnection.name}`
+              );
+              if (activeTabIdRef.current) {
+                setQueryTabs(prev => prev.map(t => {
+                  if (t.id === activeTabIdRef.current) {
+                    return { ...t, name, savedQueryName: name, originalQuery: queryToSave };
+                  }
+                  if (t.savedQueryName && t.savedQueryName === name) {
+                    return { ...t, originalQuery: queryToSave };
+                  }
+                  return t;
+                }));
+              }
+              setSuccess(`Query "${name}" saved successfully!`);
             }
           }}
           icon={<Save />}
