@@ -12,9 +12,12 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 
 ### Fixed
 - **[#182](https://github.com/openidle-dev/queryden/issues/182) — PostgreSQL OID type now handled explicitly.** The `tauri-plugin-sql` patch's PostgreSQL decoder now has a dedicated `"OID"` match arm that decodes as `i32`, avoiding fallthrough through the wildcard chain. Fixes "unsupported datatype: OID" errors when querying system catalogs like `pg_stat_activity`.
+- **[#157](https://github.com/openidle-dev/queryden/issues/157) — SQLite provider form stuck on SSH tab after provider switch.** The "Back to Providers" button now resets the active tab to General, preventing a state where the SQLite form is unreachable because the tab row is hidden for SQLite connections.
+- **[#183](https://github.com/openidle-dev/queryden/issues/183) — Activity monitor database filter now works correctly.** The `datname` filter in the PostgreSQL activity monitor was building SQL with double-quoted identifiers instead of string literals, causing a "column does not exist" error. Fixed by using a bind parameter (`$1`) instead of `quoteIdentifier`.
 
 ### Added
 - **[#67](https://github.com/openidle-dev/queryden/issues/67) — Master key storage status surfaced in Help → About.** A new "Master Key" info card in the About dialog shows whether the encryption key is stored in the OS keyring, a local file fallback, or is unavailable. When the file fallback is in use, a warning explains how to install a keyring service for OS-level protection.
+- **[#139](https://github.com/openidle-dev/queryden/issues/139) — Ctrl+PageUp / Ctrl+PageDown now cycles between query editor tabs.** Tab cycling works globally like a DataGrip preset keybinding. Both bindings appear in Settings → Keymap and respect custom rebinding.
 
 ## [1.0.23] - 2026-05-26
 

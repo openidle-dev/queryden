@@ -159,4 +159,60 @@ describe("matchGlobalShortcut", () => {
       })
     ).toBeNull();
   });
+
+  it("maps Ctrl+PageUp to switch-to-previous-tab", () => {
+    const action = matchGlobalShortcut({
+      ctrlKey: true,
+      metaKey: false,
+      shiftKey: false,
+      altKey: false,
+      key: "PageUp",
+    });
+    expect(action).toEqual({ type: "dispatch-event", name: "switch-to-previous-tab" });
+  });
+
+  it("maps Ctrl+PageDown to switch-to-next-tab", () => {
+    const action = matchGlobalShortcut({
+      ctrlKey: true,
+      metaKey: false,
+      shiftKey: false,
+      altKey: false,
+      key: "PageDown",
+    });
+    expect(action).toEqual({ type: "dispatch-event", name: "switch-to-next-tab" });
+  });
+
+  it("maps Cmd+PageUp to switch-to-previous-tab on macOS", () => {
+    const action = matchGlobalShortcut({
+      ctrlKey: false,
+      metaKey: true,
+      shiftKey: false,
+      altKey: false,
+      key: "PageUp",
+    });
+    expect(action).toEqual({ type: "dispatch-event", name: "switch-to-previous-tab" });
+  });
+
+  it("maps Cmd+PageDown to switch-to-next-tab on macOS", () => {
+    const action = matchGlobalShortcut({
+      ctrlKey: false,
+      metaKey: true,
+      shiftKey: false,
+      altKey: false,
+      key: "PageDown",
+    });
+    expect(action).toEqual({ type: "dispatch-event", name: "switch-to-next-tab" });
+  });
+
+  it("does not match bare PageUp (no modifier)", () => {
+    expect(
+      matchGlobalShortcut({
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        altKey: false,
+        key: "PageUp",
+      })
+    ).toBeNull();
+  });
 });
