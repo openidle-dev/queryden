@@ -12,7 +12,7 @@ export function FilesExplorer() {
   const handleOpenQuery = (query: any) => {
     window.dispatchEvent(
       new CustomEvent("open-query-with-text", {
-        detail: { query: query.query, name: query.name },
+        detail: { query: query.query, name: query.name, savedQueryName: query.name },
       })
     );
   };
