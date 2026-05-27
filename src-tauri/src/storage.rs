@@ -329,7 +329,7 @@ fn derive_encryption_key_uncached(
         format!("{}:{}:{}", machine_id, master_key, salt_text)
     };
 
-    let params = Params::new(65536, 3, 4, None)
+    let params = Params::new(19456, 2, 1, None)
         .map_err(|e| format!("Invalid Argon2 params: {e}"))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
