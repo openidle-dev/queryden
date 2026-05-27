@@ -12,7 +12,7 @@ import { SchemaSelectionDialog } from "./SchemaSelectionDialog";
 import { CreateTableDialog } from "./CreateTableDialog";
 import { CreateDatabaseDialog } from "./CreateDatabaseDialog";
 import { logger } from "../../utils/logger";
-import { buildConnectionTree, type FolderTreeNode } from "../../utils/folderTree";
+import { buildConnectionTree, descendantFolderIds, type FolderTreeNode } from "../../utils/folderTree";
 import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
 import { Menu, MenuItem, MenuLabel, MenuSeparator } from "../ui/Menu";
@@ -104,6 +104,8 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
   const confirmDialog = useConfirmDialog();
   const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
   const treeContainerRef = useRef<HTMLDivElement>(null);
+  const [dragState, setDragState] = useState<{ kind: "connection" | "folder"; id: string } | null>(null);
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   
   // Listen for jump events from global search
   useEffect(() => {
@@ -1177,6 +1179,89 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
     return null;
   };
 
+  /** True when cursor is over a row that is a valid drop target. */
+  const isValidDropTarget = (node: TreeNode): boolean => {
+    if (!dragState) return false;
+    const nodeContextId = node.contextMenuId;
+    if (!nodeContextId) return false;
+    // Only folders are valid drop targets
+    if (!nodeContextId.startsWith("folder:")) return false;
+    // Can't drop onto yourself
+    if (dragState.kind === "connection" && nodeContextId === `folder:${dragState.id}`) return false;
+    // Folders can't be dropped onto themselves or their descendants (cycle prevention)
+    if (dragState.kind === "folder") {
+      if (nodeContextId === `folder:${dragState.id}`) return false;
+      if (descendantFolderIds(dragState.id, folders).has(node.id.replace("folder-", ""))) return false;
+    }
+    return true;
+  };
+
+  const handleDragStart = (e: React.DragEvent, node: TreeNode) => {
+    const ctxId = node.contextMenuId;
+    if (!ctxId) return;
+    const isFolder = ctxId.startsWith("folder:");
+    const kind = isFolder ? "folder" : "connection";
+    const id = isFolder ? ctxId.replace("folder:", "") : ctxId;
+    setDragState({ kind, id });
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", JSON.stringify({ kind, id }));
+  };
+
+  const handleDragEnd = () => {
+    setDragState(null);
+    setDropTargetId(null);
+  };
+
+  const handleDragOver = (e: React.DragEvent, node: TreeNode) => {
+    if (!dragState) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setDropTargetId(node.id);
+    if (!isValidDropTarget(node)) {
+      e.dataTransfer.dropEffect = "none";
+      return;
+    }
+    e.dataTransfer.dropEffect = "move";
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    // Only clear if actually leaving the node (not entering a child)
+    if (e.currentTarget === e.target || !e.currentTarget.contains(e.relatedTarget as Node)) {
+      setDropTargetId(null);
+    }
+  };
+
+  const handleDrop = async (e: React.DragEvent, node: TreeNode) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDropTargetId(null);
+    if (!dragState) return;
+    const ctxId = node.contextMenuId;
+    if (!ctxId || !ctxId.startsWith("folder:")) return;
+    const targetFolderId = ctxId.replace("folder:", "");
+    if (dragState.kind === "connection") {
+      await moveConnectionToFolder(dragState.id, targetFolderId);
+    } else if (dragState.kind === "folder") {
+      if (dragState.id === targetFolderId) return;
+      if (descendantFolderIds(dragState.id, folders).has(targetFolderId)) return;
+      await moveFolder(dragState.id, targetFolderId);
+    }
+    setDragState(null);
+  };
+
+  const handleRootDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setDropTargetId(null);
+    if (!dragState) return;
+    // Drop to root: parentId = null
+    if (dragState.kind === "connection") {
+      await moveConnectionToFolder(dragState.id, null);
+    } else if (dragState.kind === "folder") {
+      await moveFolder(dragState.id, null);
+    }
+    setDragState(null);
+  };
+
   const renderTree = (nodes: TreeNode[], depth: number = 0) => {
     return nodes.map((node) => {
       const isExpanded = expandedNodes.has(node.id);
@@ -1191,9 +1276,37 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
       const tableDetailCacheKey = tableDetailId !== node.id ? tableDetailsCacheKey(tableDetailId) : null;
       const isTableDetailsLoading = node.icon === "folder" && !!tableDetailCacheKey && loadingTableDetails.has(tableDetailCacheKey);
 
+      /** Only user-created folders (those with a "folder:" contextMenuId)
+       *  are valid drop targets. Schema-level "folder" nodes like Tables,
+       *  Views, Columns are not. */
+      const isUserFolderNode = (node.contextMenuId?.startsWith("folder:")) ?? false;
+      const isServerNode = node.icon === "server" && !!node.contextMenuId;
+      /** Drag sources: both user folders and server connections. */
+      const isDragSource = isUserFolderNode || isServerNode;
+      /** Drop targets: only user folders. */
+      const isDropTarget = isUserFolderNode;
+      const isValid = isDropTarget && isValidDropTarget(node);
+      const isInvalid = isDropTarget && !isValid && dropTargetId === node.id;
+
       return (
-        <div key={node.id}>
+        <div
+          key={node.id}
+          data-node-id={node.id}
+          onDragOver={isDropTarget ? (e) => { handleDragOver(e, node); } : undefined}
+          onDragLeave={isDropTarget ? handleDragLeave : undefined}
+          onDrop={isDropTarget ? (e) => { handleDrop(e, node); } : undefined}
+          className={isValid || isInvalid ? "relative" : undefined}
+        >
+          {isValid && (
+            <div className="absolute inset-0 rounded border-2 border-dashed border-[var(--accent-8)] pointer-events-none z-10" />
+          )}
+          {isInvalid && (
+            <div className="absolute inset-0 rounded border-2 border-solid border-[var(--danger-8)] bg-[var(--danger-3)]/30 pointer-events-none z-10" />
+          )}
           <button
+            draggable={isDragSource}
+            onDragStart={isDragSource ? (e) => handleDragStart(e, node) : undefined}
+            onDragEnd={isDragSource ? handleDragEnd : undefined}
             onClick={async () => {
               // Left click: expand/collapse folders, trigger action for database and server
               if ((node.icon === "database" || node.icon === "server") && node.action) {
@@ -1608,6 +1721,8 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
           ref={treeContainerRef}
           tabIndex={0}
           onKeyDown={handleTreeKeyDown}
+          onDragOver={(e) => { if (dragState) { e.preventDefault(); } }}
+          onDrop={handleRootDrop}
           className="w-full h-full overflow-y-auto pt-1 bg-[var(--surface-panel)] scrollbar-thin outline-none focus:ring-1 focus:ring-[var(--accent-8)]/30"
         >
           {schemaTree.length > 0 ? (
@@ -2660,7 +2775,6 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
 // a cycle, and ConnectionContext.moveFolder rejects it anyway.
 
 import type { Folder as FolderModel } from "../../contexts/ConnectionContext";
-import { descendantFolderIds } from "../../utils/folderTree";
 
 interface MoveToFolderDialogProps {
   target: { kind: "connection" | "folder"; id: string; name: string };

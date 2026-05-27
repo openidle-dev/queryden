@@ -184,12 +184,6 @@ export function HelpDialog({ isOpen, onClose }: HelpDialogProps) {
                   <InfoCard title="Master Key" value={keyringStatus} icon={<Shield className="w-4 h-4" />} />
                 </div>
 
-                {keyringStatus === "Local file (fallback)" && (
-                  <div className="mt-4 p-3 bg-[var(--warning-3)] border border-[var(--warning-7)] rounded-lg text-xs leading-relaxed text-[var(--warning-11)]">
-                    <strong>Master key stored on disk.</strong> The OS keyring is unavailable on this system. The encryption master key is stored in a local file protected by restrictive permissions. Consider installing your desktop environment's keyring service (e.g. <code className="text-[11px]">gnome-keyring</code>, <code className="text-[11px]">kwallet</code>) for OS-level protection.
-                  </div>
-                )}
-
                 {keyringStatus === "Unavailable" && (
                   <div className="mt-4 p-3 bg-[var(--danger-3)] border border-[var(--danger-7)] rounded-lg text-xs leading-relaxed text-[var(--danger-11)]">
                     <strong>Master key unavailable.</strong> The encryption key could not be found in the OS keyring or on disk. Encrypted data may be unrecoverable. Try restarting the application or checking your app data directory.
