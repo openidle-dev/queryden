@@ -28,8 +28,8 @@ export interface KeymapSettings {
 // DataGrip-flavored bindings that the app does not yet implement
 // (globalSearch "Shift Shift", openConsole, newConsole, localHistory,
 // clipboardHistory, rename Shift+F6, goToDefinition Ctrl+B, structureView
-// Ctrl+F12, nextTab/previousTab Ctrl+PageUp/Down) were intentionally removed
-// to stop surfacing shortcuts that do nothing when pressed. See issue #11.
+// Ctrl+F12) were intentionally removed to stop surfacing shortcuts that
+// do nothing when pressed. See issue #11.
 // When one of those features ships, add its binding back here and wire a
 // handler (globalShortcuts.ts for app-wide; per-component otherwise).
 const defaultKeymaps: KeymapPreset[] = [
@@ -53,6 +53,8 @@ const defaultKeymaps: KeymapPreset[] = [
       "expandSelection": "Ctrl+W",
       "shrinkSelection": "Ctrl+Shift+W",
       "quickFix": "Alt+Enter",
+      "previousTab": "Ctrl+PageUp",
+      "nextTab": "Ctrl+PageDown",
     }
   }
 ];

@@ -55,5 +55,15 @@ export function matchGlobalShortcut(
     return { type: "dispatch-event", name: "format-sql" };
   }
 
+  // Ctrl+PageUp or Cmd+PageUp — Previous Tab
+  if (isMod && !e.altKey && !e.shiftKey && keyLower === "pageup") {
+    return { type: "dispatch-event", name: "switch-to-previous-tab" };
+  }
+
+  // Ctrl+PageDown or Cmd+PageDown — Next Tab
+  if (isMod && !e.altKey && !e.shiftKey && keyLower === "pagedown") {
+    return { type: "dispatch-event", name: "switch-to-next-tab" };
+  }
+
   return null;
 }

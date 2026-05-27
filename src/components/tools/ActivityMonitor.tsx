@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from "react";
 import { X, RefreshCw, Activity, Trash2, Search, ShieldAlert, Cpu, Zap, Clock, Filter } from "lucide-react";
 import { useConnections } from "../../contexts/useConnections";
 import { useConfirmDialog } from "../ui/ConfirmDialog";
-import { quoteIdentifier } from "../../utils/sqlSecurity";
 import { Dialog } from "../ui/Dialog";
 import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
@@ -84,9 +83,9 @@ export const ActivityMonitor: React.FC<ActivityMonitorProps> = ({ isOpen, onClos
     setError(null);
 
     try {
-      const dbFilter = targetDb ? `AND datname = ${quoteIdentifier(targetDb, 'postgres')}` : "";
+      const dbFilter = targetDb ? `AND datname = $1` : "";
       const query = `SELECT pid, COALESCE(datname::text, '') as datname, COALESCE(usename::text, '') as usename, COALESCE(application_name::text, '') as application_name, COALESCE(client_addr::text, 'local') as client_addr, COALESCE(client_port::text, '') as client_port, COALESCE(backend_start::text, '') as backend_start, COALESCE(xact_start::text, '') as xact_start, COALESCE(query_start::text, '') as query_start, COALESCE(state_change::text, '') as state_change, COALESCE(wait_event_type::text, '') as wait_event_type, COALESCE(wait_event::text, '') as wait_event, COALESCE(state::text, 'unknown') as state, COALESCE(backend_type::text, '') as backend_type, COALESCE(query::text, '') as query FROM pg_stat_activity WHERE pid <> pg_backend_pid() ${dbFilter} ORDER BY backend_start DESC`;
-      const result = await (currentDb as any).select(query) as ConnectionStats[];
+      const result = await (currentDb as any).select(query, targetDb ? [targetDb] : []) as ConnectionStats[];
       setStats(result);
       setError(null);
     } catch (err: any) {

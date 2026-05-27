@@ -1482,6 +1482,29 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       }
     };
 
+    // Ctrl+PageUp / Ctrl+PageDown tab cycling (#139)
+    const handleSwitchToPreviousTab = () => {
+      const tabs = queryTabsRef.current;
+      if (tabs.length <= 1) return;
+      const currentIndex = tabs.findIndex((t) => t.id === activeTabIdRef.current);
+      const prevIndex = currentIndex <= 0 ? tabs.length - 1 : currentIndex - 1;
+      const prevTab = tabs[prevIndex];
+      setActiveTabId(prevTab.id);
+      currentQueryRef.current = prevTab.query;
+      setTimeout(() => window.dispatchEvent(new CustomEvent("focus-editor")), 50);
+    };
+
+    const handleSwitchToNextTab = () => {
+      const tabs = queryTabsRef.current;
+      if (tabs.length <= 1) return;
+      const currentIndex = tabs.findIndex((t) => t.id === activeTabIdRef.current);
+      const nextIndex = currentIndex >= tabs.length - 1 ? 0 : currentIndex + 1;
+      const nextTab = tabs[nextIndex];
+      setActiveTabId(nextTab.id);
+      currentQueryRef.current = nextTab.query;
+      setTimeout(() => window.dispatchEvent(new CustomEvent("focus-editor")), 50);
+    };
+
     // Transaction control handler
     const handleTxControl = async (e: Event) => {
       const detail = (e as CustomEvent).detail;
@@ -1584,6 +1607,8 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     window.addEventListener("open-definition", handleOpenDefinition);
     window.addEventListener("show-local-history", handleShowLocalHistory);
     window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("switch-to-previous-tab", handleSwitchToPreviousTab);
+    window.addEventListener("switch-to-next-tab", handleSwitchToNextTab);
     window.addEventListener("tx-control", handleTxControl);
 
     return () => {
@@ -1594,6 +1619,8 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       window.removeEventListener("open-definition", handleOpenDefinition);
       window.removeEventListener("show-local-history", handleShowLocalHistory);
       window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("switch-to-previous-tab", handleSwitchToPreviousTab);
+      window.removeEventListener("switch-to-next-tab", handleSwitchToNextTab);
       window.removeEventListener("tx-control", handleTxControl);
     };
   }, [addNewTab, executeQuery]);

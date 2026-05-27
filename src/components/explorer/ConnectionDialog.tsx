@@ -911,7 +911,7 @@ export function ConnectionDialog({ connection, onClose, defaultFolderId }: { con
           <Dialog.Footer className="justify-between">
             <div className="flex gap-2">
               {!connection && (
-                <Button variant="secondary" size="md" onClick={() => setStep("driver")}>
+                <Button variant="secondary" size="md" onClick={() => { setActiveTab("general"); setStep("driver"); }}>
                   &lt; Back to Providers
                 </Button>
               )}
