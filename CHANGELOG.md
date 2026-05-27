@@ -4,6 +4,12 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 
 ## [Unreleased]
 
+### Security
+- **[#65](https://github.com/openidle-dev/queryden/issues/65) — Vault brute-force lockout now persists across restarts.** The failed-attempts counter and lockout-until timestamp are written to `<app_data_dir>/.vault_lockout` on every state change, so killing and relaunching the app no longer resets the lockout. Thresholds are 5 attempts / 60 s (unchanged from the in-memory-only behavior).
+- **[#66](https://github.com/openidle-dev/queryden/issues/66) — `.master_key` and all sensitive app-data files now use restrictive permissions on Unix.** After every write to `.master_key`, `connections.json`, `vault.json`, `folders.json`, `query-history.json`, `saved-queries.json`, `local-history.json`, and `settings.json`, the file mode is set to `0o600` (owner read/write only), preventing other local users from reading the master encryption key or stored data. Windows/macOS per-user app data ACLs already restrict access, so this is a no-op on those platforms.
+- **[#14](https://github.com/openidle-dev/queryden/issues/14) — Vault now uses a per-install random salt for Argon2 key derivation.** On first save, a random 16-byte salt is generated and stored alongside the vault file (`VaultData.salt`). All subsequent vault key derivations use this salt instead of the hardcoded value, providing cross-install uniqueness. Legacy vaults (without a salt) transparently fall back to the hardcoded salt.
+- **[#15](https://github.com/openidle-dev/queryden/issues/15) — Argon2id parameters are now explicitly locked.** Replaced `Argon2::default()` with an explicit `Params::new(65536, 3, 4, None)` — 64 MiB memory cost, 3 iterations, 4 parallel threads, using Argon2id v1.3. This prevents silent parameter drift across crate version bumps and matches the advertised parameters.
+
 ## [1.0.23] - 2026-05-26
 
 ### Added

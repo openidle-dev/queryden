@@ -13,7 +13,7 @@ use std::process::Command;
 use sha2::{Sha256, Digest};
 use argon2::{
     password_hash::{PasswordHasher, SaltString},
-    Argon2,
+    Algorithm, Argon2, Params, Version,
 };
 use keyring::Entry;
 use std::collections::HashMap;
@@ -24,6 +24,52 @@ use tracing::warn;
 
 static FAILED_ATTEMPTS: AtomicU32 = AtomicU32::new(0);
 static LOCKOUT_UNTIL: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Serialize, Deserialize)]
+struct LockoutState {
+    failed_attempts: u32,
+    lockout_until: u64,
+}
+
+fn set_restricted_permissions(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) = fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
+            warn!("Failed to set 0o600 permissions on {:?}: {}", path, e);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
+fn load_lockout_state(app_dir: &Path) {
+    let path = app_dir.join(".vault_lockout");
+    if let Ok(content) = fs::read_to_string(&path) {
+        if let Ok(state) = serde_json::from_str::<LockoutState>(&content) {
+            FAILED_ATTEMPTS.store(state.failed_attempts, Ordering::SeqCst);
+            LOCKOUT_UNTIL.store(state.lockout_until, Ordering::SeqCst);
+        }
+    }
+}
+
+fn save_lockout_state(app_dir: &Path) {
+    let state = LockoutState {
+        failed_attempts: FAILED_ATTEMPTS.load(Ordering::SeqCst),
+        lockout_until: LOCKOUT_UNTIL.load(Ordering::SeqCst),
+    };
+    let path = app_dir.join(".vault_lockout");
+    if let Ok(json) = serde_json::to_string(&state) {
+        let _ = fs::write(&path, &json);
+        set_restricted_permissions(&path);
+    }
+}
+
+static VAULT_SALT: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+
+fn get_vault_salt() -> &'static Mutex<Option<String>> {
+    VAULT_SALT.get_or_init(|| Mutex::new(None))
+}
 
 // Sentinel returned when platform-specific machine-ID detection fails entirely.
 // Kept as a literal because legacy decrypt paths (pre-1.0) used this value as
@@ -193,6 +239,7 @@ fn get_master_app_key(app_dir: &Path) -> Result<String, String> {
         warn!("Failed to persist master key to {mk_path:?}: {e}");
     } else {
         persisted = true;
+        set_restricted_permissions(&mk_path);
     }
 
     if !persisted {
@@ -263,16 +310,31 @@ fn derive_encryption_key_uncached(
 
     let master_key = get_master_app_key(app_dir)?;
 
-    let salt_text = "queryden-production-salt-2024-v2";
+    let vault_salt_str = if vault_password.is_some() {
+        get_vault_salt().lock().ok().and_then(|s| s.clone())
+    } else {
+        None
+    };
+
+    let (salt_text, argon_salt_b64) = if let Some(ref per_vault_salt) = vault_salt_str {
+        let hex_bytes = hex::decode(per_vault_salt).unwrap_or_default();
+        (per_vault_salt.clone(), BASE64.encode(&hex_bytes))
+    } else {
+        ("queryden-production-salt-2024-v2".to_string(), "cXVlcnlkZW5fc2FsdF8wMQ".to_string())
+    };
+
     let seed = if let Some(pwd) = vault_password {
         format!("{}:{}:{}:{}", pwd, machine_id, master_key, salt_text)
     } else {
         format!("{}:{}:{}", machine_id, master_key, salt_text)
     };
 
-    let argon2 = Argon2::default();
-    let salt = SaltString::from_b64("cXVlcnlkZW5fc2FsdF8wMQ")
-        .expect("static salt string is valid base64");
+    let params = Params::new(65536, 3, 4, None)
+        .map_err(|e| format!("Invalid Argon2 params: {e}"))?;
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+
+    let salt = SaltString::from_b64(&argon_salt_b64)
+        .map_err(|e| format!("Invalid salt encoding: {e}"))?;
 
     let hash = argon2
         .hash_password(seed.as_bytes(), &salt)
@@ -550,6 +612,7 @@ pub fn save_folders(app: tauri::AppHandle, folders: Vec<Folder>) -> Result<(), S
     let encrypted = encrypt(&json, None, &dir)?;
     let path = dir.join("folders.json");
     fs::write(&path, encrypted).map_err(|e| e.to_string())?;
+    set_restricted_permissions(&path);
     Ok(())
 }
 
@@ -614,6 +677,7 @@ pub fn save_connections(app: tauri::AppHandle, connections: Vec<StoredConnection
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
     let path = dir.join("connections.json");
     fs::write(&path, json).map_err(|e| e.to_string())?;
+    set_restricted_permissions(&path);
     Ok(())
 }
 
@@ -700,6 +764,7 @@ pub fn export_connections(
     };
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
     fs::write(&path, json).map_err(|e| e.to_string())?;
+    set_restricted_permissions(path.as_ref());
     Ok(())
 }
 
@@ -881,6 +946,7 @@ fn write_connection_data(dir: &std::path::Path, connections: Vec<StoredConnectio
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
     let path = dir.join("connections.json");
     fs::write(&path, json).map_err(|e| e.to_string())?;
+    set_restricted_permissions(&path);
     Ok(())
 }
 
@@ -894,6 +960,7 @@ fn save_folders_inner(dir: &std::path::Path, folders: Vec<Folder>) -> Result<(),
     let encrypted = encrypt(&json, None, dir)?;
     let path = dir.join("folders.json");
     fs::write(&path, encrypted).map_err(|e| e.to_string())?;
+    set_restricted_permissions(&path);
     Ok(())
 }
 
@@ -913,6 +980,7 @@ pub fn save_settings(app: tauri::AppHandle, settings: serde_json::Value) -> Resu
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
     let path = dir.join("settings.json");
     fs::write(&path, json).map_err(|e| e.to_string())?;
+    set_restricted_permissions(&path);
     Ok(())
 }
 
@@ -959,6 +1027,7 @@ pub fn save_query_history(app: tauri::AppHandle, history: Vec<QueryHistoryItem>)
     let encrypted = encrypt(&json, None, &dir)?;
     let path = dir.join("query-history.json");
     fs::write(&path, encrypted).map_err(|e| e.to_string())?;
+    set_restricted_permissions(&path);
     Ok(())
 }
 
@@ -1042,11 +1111,28 @@ pub struct VaultData {
     pub credentials: Vec<VaultCredential>,
     pub version: u32,
     pub machine_fingerprint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub salt: Option<String>,
 }
 
 #[tauri::command]
 pub fn save_vault_credentials(app: tauri::AppHandle, credentials: Vec<VaultCredential>, vault_password: Option<String>) -> Result<(), String> {
     let dir = ensure_app_dir(&app)?;
+
+    // Generate a per-vault random salt on first save.  The salt is stored
+    // alongside the vault file so it can be loaded on subsequent opens and
+    // used during key derivation (see derive_encryption_key_uncached).
+    {
+        if let Ok(mut salt_guard) = get_vault_salt().lock() {
+            if salt_guard.is_none() {
+                let salt_bytes: [u8; 16] = rand::random();
+                *salt_guard = Some(hex::encode(salt_bytes));
+            }
+        }
+    }
+
+    let vault_salt = get_vault_salt().lock().ok().and_then(|s| s.clone());
+
     let encrypted: Vec<VaultCredential> = credentials
         .into_iter()
         .map(|c| {
@@ -1064,10 +1150,12 @@ pub fn save_vault_credentials(app: tauri::AppHandle, credentials: Vec<VaultCrede
         credentials: encrypted,
         version: 1,
         machine_fingerprint: get_machine_fingerprint(),
+        salt: vault_salt,
     };
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
     let path = dir.join("vault.json");
     fs::write(&path, json).map_err(|e| e.to_string())?;
+    set_restricted_permissions(&path);
     Ok(())
 }
 
@@ -1078,11 +1166,24 @@ pub fn load_vault_credentials(app: tauri::AppHandle, vault_password: Option<Stri
     if !path.exists() {
         return Ok(vec![]);
     }
+
+    // Load persisted lockout state so it survives app restarts (#65).
+    load_lockout_state(&dir);
+
     let json = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let data: VaultData = serde_json::from_str(&json).map_err(|e| e.to_string())?;
 
     if data.machine_fingerprint != get_machine_fingerprint() {
         return Err("Machine Lock Error: This vault file belongs to another computer and cannot be opened.".to_string());
+    }
+
+    // Load the per-vault salt for key derivation (#14).
+    if let Some(ref salt) = data.salt {
+        if let Ok(mut s) = get_vault_salt().lock() {
+            *s = Some(salt.clone());
+        }
+    } else if let Ok(mut s) = get_vault_salt().lock() {
+        *s = None;
     }
 
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
@@ -1116,12 +1217,15 @@ pub fn load_vault_credentials(app: tauri::AppHandle, vault_password: Option<Stri
         if attempts >= 5 {
             LOCKOUT_UNTIL.store(now + 60, Ordering::SeqCst);
             println!("VAULT SECURITY ALERT: Brute force detected. Lockout for 60 seconds.");
+            save_lockout_state(&dir);
             return Err("Too many failed attempts. Vault locked for 1 minute.".to_string());
         }
+        save_lockout_state(&dir);
         return Err("Invalid vault password. Decryption failed.".to_string());
     } else {
         FAILED_ATTEMPTS.store(0, Ordering::SeqCst);
         LOCKOUT_UNTIL.store(0, Ordering::SeqCst);
+        save_lockout_state(&dir);
     }
 
     Ok(decrypted)
@@ -1156,6 +1260,7 @@ pub fn save_saved_queries(app: tauri::AppHandle, queries: Vec<SavedQueryItem>) -
     let encrypted = encrypt(&json, None, &dir)?;
     let path = dir.join("saved-queries.json");
     fs::write(&path, encrypted).map_err(|e| e.to_string())?;
+    set_restricted_permissions(&path);
     Ok(())
 }
 
@@ -1208,6 +1313,7 @@ pub fn save_local_history(app: tauri::AppHandle, entries: Vec<LocalHistoryEntry>
     let encrypted = encrypt(&json, None, &dir)?;
     let path = dir.join("local-history.json");
     fs::write(&path, encrypted).map_err(|e| e.to_string())?;
+    set_restricted_permissions(&path);
     Ok(())
 }
 
