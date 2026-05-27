@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { X, Info, BookOpen, Terminal, Cpu, HardDrive, Github, Bug, Send, CheckCircle, Paperclip, FileText } from "lucide-react";
+import { X, Info, BookOpen, Terminal, Cpu, HardDrive, Github, Bug, Send, CheckCircle, Paperclip, FileText, Shield } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useConnections } from "../../contexts/useConnections";
@@ -30,6 +30,7 @@ export function HelpDialog({ isOpen, onClose }: HelpDialogProps) {
   const [activeTab, setActiveTab] = useState<HelpTab>("about");
   const { activeConnection } = useConnections();
   const [sysInfo, setSysInfo] = useState<SystemInfo | null>(null);
+  const [keyringStatus, setKeyringStatus] = useState<string>("Detecting...");
   const { name: appName, version: appVersion } = useAppInfo();
   const { buildDate, fetchBuildDate } = useUpdateStore();
   const updateChannel = useSettings((s) => s.updateChannel ?? "stable");
@@ -38,6 +39,7 @@ export function HelpDialog({ isOpen, onClose }: HelpDialogProps) {
     if (isOpen) {
       fetchSystemInfo();
       fetchBuildDate();
+      fetchKeyringStatus();
     }
   }, [isOpen]);
 
@@ -47,6 +49,26 @@ export function HelpDialog({ isOpen, onClose }: HelpDialogProps) {
       setSysInfo(info);
     } catch (err) {
       logger.error("Failed to fetch system info:", err);
+    }
+  };
+
+  const fetchKeyringStatus = async () => {
+    try {
+      const result = await invokeCmd("get_master_key_storage_status");
+      switch (result.status) {
+        case "keyring":
+          setKeyringStatus("OS Keyring");
+          break;
+        case "file_fallback":
+          setKeyringStatus("Local file (fallback)");
+          break;
+        case "unavailable":
+          setKeyringStatus("Unavailable");
+          break;
+      }
+    } catch (err) {
+      logger.error("Failed to fetch keyring status:", err);
+      setKeyringStatus("Unknown");
     }
   };
 
@@ -159,7 +181,20 @@ export function HelpDialog({ isOpen, onClose }: HelpDialogProps) {
                   <InfoCard title="Channel" value={updateChannel === "beta" ? "Beta" : "Stable"} icon={<Terminal className="w-4 h-4" />} />
                   <InfoCard title="Platform" value={sysInfo?.os_name?.toString() || "Detecting..."} icon={<HardDrive className="w-4 h-4" />} />
                   <InfoCard title="CPU" value={sysInfo?.cpu_model?.toString() || "Detecting..."} icon={<Cpu className="w-4 h-4" />} />
+                  <InfoCard title="Master Key" value={keyringStatus} icon={<Shield className="w-4 h-4" />} />
                 </div>
+
+                {keyringStatus === "Local file (fallback)" && (
+                  <div className="mt-4 p-3 bg-[var(--warning-3)] border border-[var(--warning-7)] rounded-lg text-xs leading-relaxed text-[var(--warning-11)]">
+                    <strong>Master key stored on disk.</strong> The OS keyring is unavailable on this system. The encryption master key is stored in a local file protected by restrictive permissions. Consider installing your desktop environment's keyring service (e.g. <code className="text-[11px]">gnome-keyring</code>, <code className="text-[11px]">kwallet</code>) for OS-level protection.
+                  </div>
+                )}
+
+                {keyringStatus === "Unavailable" && (
+                  <div className="mt-4 p-3 bg-[var(--danger-3)] border border-[var(--danger-7)] rounded-lg text-xs leading-relaxed text-[var(--danger-11)]">
+                    <strong>Master key unavailable.</strong> The encryption key could not be found in the OS keyring or on disk. Encrypted data may be unrecoverable. Try restarting the application or checking your app data directory.
+                  </div>
+                )}
               </div>
             )}
 

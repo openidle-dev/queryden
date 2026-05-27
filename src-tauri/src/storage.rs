@@ -1346,3 +1346,32 @@ pub fn clear_local_history(app: tauri::AppHandle) -> Result<(), String> {
     }
     Ok(())
 }
+
+#[derive(Serialize)]
+pub struct MasterKeyStorageStatus {
+    pub status: String,
+}
+
+#[tauri::command]
+pub fn get_master_key_storage_status(app: tauri::AppHandle) -> Result<MasterKeyStorageStatus, String> {
+    let dir = ensure_app_dir(&app)?;
+    let mk_path = dir.join(".master_key");
+
+    if let Ok(entry) = Entry::new("queryden", "master_app_key") {
+        if entry.get_password().is_ok() {
+            return Ok(MasterKeyStorageStatus {
+                status: "keyring".to_string(),
+            });
+        }
+    }
+
+    if mk_path.exists() {
+        return Ok(MasterKeyStorageStatus {
+            status: "file_fallback".to_string(),
+        });
+    }
+
+    Ok(MasterKeyStorageStatus {
+        status: "unavailable".to_string(),
+    })
+}

@@ -10,6 +10,12 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 - **[#14](https://github.com/openidle-dev/queryden/issues/14) — Vault now uses a per-install random salt for Argon2 key derivation.** On first save, a random 16-byte salt is generated and stored alongside the vault file (`VaultData.salt`). All subsequent vault key derivations use this salt instead of the hardcoded value, providing cross-install uniqueness. Legacy vaults (without a salt) transparently fall back to the hardcoded salt.
 - **[#15](https://github.com/openidle-dev/queryden/issues/15) — Argon2id parameters are now explicitly locked.** Replaced `Argon2::default()` with an explicit `Params::new(65536, 3, 4, None)` — 64 MiB memory cost, 3 iterations, 4 parallel threads, using Argon2id v1.3. This prevents silent parameter drift across crate version bumps and matches the advertised parameters.
 
+### Fixed
+- **[#182](https://github.com/openidle-dev/queryden/issues/182) — PostgreSQL OID type now handled explicitly.** The `tauri-plugin-sql` patch's PostgreSQL decoder now has a dedicated `"OID"` match arm that decodes as `i32`, avoiding fallthrough through the wildcard chain. Fixes "unsupported datatype: OID" errors when querying system catalogs like `pg_stat_activity`.
+
+### Added
+- **[#67](https://github.com/openidle-dev/queryden/issues/67) — Master key storage status surfaced in Help → About.** A new "Master Key" info card in the About dialog shows whether the encryption key is stored in the OS keyring, a local file fallback, or is unavailable. When the file fallback is in use, a warning explains how to install a keyring service for OS-level protection.
+
 ## [1.0.23] - 2026-05-26
 
 ### Added
