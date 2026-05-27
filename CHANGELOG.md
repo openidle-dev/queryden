@@ -20,6 +20,12 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 - **[#67](https://github.com/openidle-dev/queryden/issues/67) — Master key storage status surfaced in Help → About.** A new "Master Key" info card in the About dialog shows whether the encryption key is stored in the OS keyring, a local file fallback, or is unavailable. When the file fallback is in use, a warning explains how to install a keyring service for OS-level protection.
 - **[#139](https://github.com/openidle-dev/queryden/issues/139) — Ctrl+PageUp / Ctrl+PageDown now cycles between query editor tabs.** Tab cycling works globally like a DataGrip preset keybinding. Both bindings appear in Settings → Keymap and respect custom rebinding.
 
+### Added
+- **[#122](https://github.com/openidle-dev/queryden/issues/122) — Auto-save: open query text is periodically written to `.sql` files on disk.** When enabled in Settings → Auto Save, each tab's current text is debounced and saved to `<appDataDir>/auto-save/` with the naming convention `{connectionFolder}_{database}_{tabId}.sql`. Files are recoverable from the app data directory and can be backed up like any other `.sql` file. Save interval is configurable (5–300 seconds).
+
+### Fixed
+- **[#176](https://github.com/openidle-dev/queryden/issues/176) — Database Explorer now supports drag-and-drop to move connections and folders.** Native HTML5 drag-and-drop lets you drag a connection onto a folder (or the tree root) to move it, and drag a folder onto another folder (or the root) to re-parent it. Cycle detection prevents moving a folder into itself or one of its descendants. Visual highlighting shows valid drop targets.
+
 ## [1.0.23] - 2026-05-26
 
 ### Added

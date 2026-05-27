@@ -12,7 +12,7 @@ import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
 import { Select } from "../ui/Select";
 
-type SettingsCategory = "appearance" | "sqlCompletion" | "queryExecution" | "explorer" | "keymap" | "templates" | "importExport" | "ai" | "copyTransfer" | "permissions" | "vault" | "updates";
+type SettingsCategory = "appearance" | "sqlCompletion" | "queryExecution" | "explorer" | "keymap" | "templates" | "importExport" | "ai" | "copyTransfer" | "permissions" | "vault" | "updates" | "autoSave";
 
 interface SettingsDialogProps {
   isOpen: boolean;
@@ -31,6 +31,7 @@ const categories: { id: SettingsCategory; label: string; icon: any; keywords: st
   { id: "importExport", label: "Import/Export", icon: Import, keywords: ["import", "export", "csv", "json", "sql", "tsv", "xml", "html", "delimiter", "headers", "null", "quote"] },
   { id: "vault", label: "Credential Vault", icon: Shield, keywords: ["vault", "security", "credentials", "password", "username", "encryption", "master", "profiles"] },
   { id: "updates", label: "Updates", icon: Download, keywords: ["update", "updates", "beta", "channel", "stable", "release", "version", "auto-update", "prerelease"] },
+  { id: "autoSave", label: "Auto Save", icon: HardDrive, keywords: ["auto-save", "autosave", "save", "interval", "recovery", "backup", "persist", "crash"] },
 ];
 
 export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
@@ -137,6 +138,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
             {activeCategory === "permissions" && <PermissionsSettings />}
             {activeCategory === "vault" && <VaultCredentialsSettings />}
             {activeCategory === "updates" && <UpdatesSettings />}
+            {activeCategory === "autoSave" && <AutoSaveSettings />}
           </div>
 
           {/* Footer */}
@@ -715,6 +717,42 @@ function ImportExportSettings() {
             { label: "Single quotes (')", value: "'" },
           ]}
         />
+      </div>
+    </div>
+  );
+}
+
+function AutoSaveSettings() {
+  const settings = useSettings();
+  return (
+    <div className="space-y-5">
+      <div>
+        <h4 className="text-xs font-bold uppercase tracking-wider text-[var(--neutral-11)] mb-3">Auto Save</h4>
+        <div className="space-y-4">
+          <ToggleOption
+            label="Enable auto-save"
+            description="Automatically persist query text at a regular interval so work is never lost, even if the app crashes."
+            checked={settings.autoSaveEnabled}
+            onChange={(checked) => settings.setSetting("autoSaveEnabled", checked)}
+          />
+
+          {settings.autoSaveEnabled && (
+            <div>
+              <label className="block text-xs font-medium mb-1.5">Save interval (seconds)</label>
+              <input
+                type="number"
+                value={settings.autoSaveInterval}
+                onChange={(e) => settings.setSetting("autoSaveInterval", parseInt(e.target.value) || 30)}
+                className="w-24 px-2 py-1.5 text-sm rounded bg-[var(--surface-base)] border border-[var(--neutral-6)] outline-none focus:border-[var(--accent-8)] text-[var(--neutral-12)]"
+                min={5}
+                max={300}
+              />
+              <p className="text-[10px] text-[var(--neutral-11)] mt-1 opacity-60">
+                Minimum 5 seconds, maximum 300 seconds (5 minutes).
+              </p>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

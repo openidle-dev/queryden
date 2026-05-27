@@ -107,7 +107,7 @@ export interface MultiResult {
 }
 
 export function MainContent() {
-  const { connections, activeConnection, selectedDatabase, currentDb, vaultCredentials, databases: globalDatabases, connectToDatabase } = useConnections();
+  const { connections, folders, activeConnection, selectedDatabase, currentDb, vaultCredentials, databases: globalDatabases, connectToDatabase } = useConnections();
   const { addQuery } = useQueryHistory();
   const settings = useSettings();
   // Gates the query toolbar, tab strip, and results panel. Until a database
@@ -152,8 +152,12 @@ export function MainContent() {
   // Refs for activeConnection/selectedDatabase to avoid stale closures in addNewTab
   const activeConnRef = useRef(activeConnection);
   const selectedDbRef = useRef(selectedDatabase);
+  const connectionsRef = useRef(connections);
+  const foldersRef = useRef(folders);
   useEffect(() => { activeConnRef.current = activeConnection; }, [activeConnection]);
   useEffect(() => { selectedDbRef.current = selectedDatabase; }, [selectedDatabase]);
+  useEffect(() => { connectionsRef.current = connections; }, [connections]);
+  useEffect(() => { foldersRef.current = folders; }, [folders]);
   const [activeTableName, setActiveTableName] = useState<string | null>(null);
   /**
    * Column name -> SQL type for the current table-backed result set, plus the
@@ -256,6 +260,55 @@ export function MainContent() {
     activeTabRef.current = activeTab;
     activeTabIdRef.current = activeTabId ?? undefined;
   });
+
+  // Auto-save: debounced .sql file writer (#122).
+  // On every query change, the debounce resets. When the user stops typing
+  // for `autoSaveInterval` seconds, all tabs' current text is written to
+  // `<appDataDir>/auto-save/{folderName}_{dbName}_{shortId}.sql`.
+  // The folderName comes from the connection's parent folder (if any) or the
+  // connection name; dbName from the selected database; shortId from the tab id.
+  const autoSaveLastRef = useRef<Map<string, string>>(new Map());
+  const autoSaveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!settings.autoSaveEnabled) return;
+    if (autoSaveDebounceRef.current) clearTimeout(autoSaveDebounceRef.current);
+    const ms = Math.max(5000, settings.autoSaveInterval * 1000);
+    autoSaveDebounceRef.current = setTimeout(async () => {
+      const tabs = queryTabsRef.current;
+      if (tabs.length === 0) return;
+      try {
+        const { appDataDir, join } = await import("@tauri-apps/api/path");
+        const { mkdir, writeTextFile } = await import("@tauri-apps/plugin-fs");
+        const base = await appDataDir();
+        const dir = await join(base, "auto-save");
+        await mkdir(dir, { recursive: true });
+        const lastSaved = autoSaveLastRef.current;
+        for (const tab of tabs) {
+          if (!tab.query || tab.query.trim() === "") continue;
+          if (lastSaved.get(tab.id) === tab.query) continue;
+          lastSaved.set(tab.id, tab.query);
+          const conn = connectionsRef.current.find(
+            c => c.id === (tab.target?.connectionId || activeConnRef.current?.id),
+          );
+          const folder = conn?.folderId
+            ? foldersRef.current.find(f => f.id === conn.folderId)
+            : null;
+          const folderPart = (folder?.name || conn?.name || "unknown")
+            .replace(/[^a-zA-Z0-9_-]/g, "_");
+          const dbPart = (tab.target?.database || selectedDbRef.current || "none")
+            .replace(/[^a-zA-Z0-9_-]/g, "_");
+          const shortId = tab.id.slice(0, 8);
+          const filePath = await join(dir, `${folderPart}_${dbPart}_${shortId}.sql`);
+          await writeTextFile(filePath, tab.query);
+        }
+      } catch (e) {
+        logger.error("Auto-save failed:", e);
+      }
+    }, ms);
+    return () => {
+      if (autoSaveDebounceRef.current) clearTimeout(autoSaveDebounceRef.current);
+    };
+  }, [settings.autoSaveEnabled, settings.autoSaveInterval, queryTabs]);
 
   // Issue #51: invalidate the cached column-types when the active table
   // changes away from the one those types were collected for. An ad-hoc

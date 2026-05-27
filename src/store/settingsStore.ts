@@ -62,6 +62,10 @@ export interface DBSettings {
   // Updates
   updateChannel: "stable" | "beta";
 
+  // Auto Save
+  autoSaveEnabled: boolean;
+  autoSaveInterval: number;  // seconds
+
   // Export Formats
   enabledExportFormats: string[];
   
@@ -132,6 +136,10 @@ const defaultSettings: Omit<DBSettings, "setSetting" | "resetSettings"> = {
 
   // Export Formats
   enabledExportFormats: ["csv", "json", "xml", "html", "sql"],
+
+  // Auto Save
+  autoSaveEnabled: false,
+  autoSaveInterval: 30,
 };
 
 function isTauri(): boolean {
