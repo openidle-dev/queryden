@@ -70,6 +70,7 @@ pub fn run() {
             storage::load_vault_credentials,
             storage::save_folders,
             storage::load_folders,
+            storage::get_master_key_storage_status,
             sysinfo::get_system_info,
             get_build_info,
             cli::cli_check_tools,

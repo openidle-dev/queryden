@@ -188,6 +188,13 @@ pub(crate) fn to_json(v: PgValueRef) -> Result<JsonValue, Error> {
                 JsonValue::Null
             }
         }
+        "OID" => {
+            if let Ok(v) = ValueRef::to_owned(&v).try_decode::<i32>() {
+                JsonValue::Number(v.into())
+            } else {
+                JsonValue::Null
+            }
+        }
         "VOID" => JsonValue::Null,
         // Handle custom types (enums, domains, etc.) by trying to decode as string
         _ => {

@@ -182,6 +182,11 @@ export interface SystemInfoDto {
   app_version: string;
 }
 
+/** Mirrors `storage.rs::MasterKeyStorageStatus`. */
+export interface MasterKeyStorageStatusDto {
+  status: "keyring" | "file_fallback" | "unavailable";
+}
+
 // ─── Command map ─────────────────────────────────────────────────────────────
 
 /**
@@ -245,6 +250,7 @@ export interface IpcCommands {
     result: VaultCredentialDto[];
   };
   get_app_data_path: { args: void; result: string };
+  get_master_key_storage_status: { args: void; result: MasterKeyStorageStatusDto };
 
   // storage — folders (connection grouping, #104)
   save_folders: { args: { folders: FolderDto[] }; result: void };
