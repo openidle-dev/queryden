@@ -742,7 +742,11 @@ function AutoSaveSettings() {
               <input
                 type="number"
                 value={settings.autoSaveInterval}
-                onChange={(e) => settings.setSetting("autoSaveInterval", parseInt(e.target.value) || 30)}
+                onChange={(e) => {
+                  const raw = parseInt(e.target.value, 10);
+                  const clamped = Math.min(300, Math.max(5, Number.isNaN(raw) ? 30 : raw));
+                  settings.setSetting("autoSaveInterval", clamped);
+                }}
                 className="w-24 px-2 py-1.5 text-sm rounded bg-[var(--surface-base)] border border-[var(--neutral-6)] outline-none focus:border-[var(--accent-8)] text-[var(--neutral-12)]"
                 min={5}
                 max={300}

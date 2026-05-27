@@ -286,20 +286,24 @@ export function MainContent() {
         for (const tab of tabs) {
           if (!tab.query || tab.query.trim() === "") continue;
           if (lastSaved.get(tab.id) === tab.query) continue;
-          lastSaved.set(tab.id, tab.query);
-          const conn = connectionsRef.current.find(
-            c => c.id === (tab.target?.connectionId || activeConnRef.current?.id),
-          );
-          const folder = conn?.folderId
-            ? foldersRef.current.find(f => f.id === conn.folderId)
-            : null;
-          const folderPart = (folder?.name || conn?.name || "unknown")
-            .replace(/[^a-zA-Z0-9_-]/g, "_");
-          const dbPart = (tab.target?.database || selectedDbRef.current || "none")
-            .replace(/[^a-zA-Z0-9_-]/g, "_");
-          const shortId = tab.id.slice(0, 8);
-          const filePath = await join(dir, `${folderPart}_${dbPart}_${shortId}.sql`);
-          await writeTextFile(filePath, tab.query);
+          try {
+            const conn = connectionsRef.current.find(
+              c => c.id === (tab.target?.connectionId || activeConnRef.current?.id),
+            );
+            const folder = conn?.folderId
+              ? foldersRef.current.find(f => f.id === conn.folderId)
+              : null;
+            const folderPart = (folder?.name || conn?.name || "unknown")
+              .replace(/[^a-zA-Z0-9_-]/g, "_");
+            const dbPart = (tab.target?.database || selectedDbRef.current || "none")
+              .replace(/[^a-zA-Z0-9_-]/g, "_");
+            const shortId = tab.id.slice(0, 8);
+            const filePath = await join(dir, `${folderPart}_${dbPart}_${shortId}.sql`);
+            await writeTextFile(filePath, tab.query);
+            lastSaved.set(tab.id, tab.query);
+          } catch (e) {
+            logger.error(`Auto-save failed for tab ${tab.id}:`, e);
+          }
         }
       } catch (e) {
         logger.error("Auto-save failed:", e);

@@ -1214,10 +1214,14 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
 
   const handleDragOver = (e: React.DragEvent, node: TreeNode) => {
     if (!dragState) return;
-    if (!isValidDropTarget(node)) return;
     e.preventDefault();
     e.stopPropagation();
     setDropTargetId(node.id);
+    if (!isValidDropTarget(node)) {
+      e.dataTransfer.dropEffect = "none";
+      return;
+    }
+    e.dataTransfer.dropEffect = "move";
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
@@ -1272,24 +1276,37 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
       const tableDetailCacheKey = tableDetailId !== node.id ? tableDetailsCacheKey(tableDetailId) : null;
       const isTableDetailsLoading = node.icon === "folder" && !!tableDetailCacheKey && loadingTableDetails.has(tableDetailCacheKey);
 
-      const canDrag = node.icon === "server" || node.icon === "folder";
+      /** Only user-created folders (those with a "folder:" contextMenuId)
+       *  are valid drop targets. Schema-level "folder" nodes like Tables,
+       *  Views, Columns are not. */
+      const isUserFolderNode = (node.contextMenuId?.startsWith("folder:")) ?? false;
+      const isServerNode = node.icon === "server" && !!node.contextMenuId;
+      /** Drag sources: both user folders and server connections. */
+      const isDragSource = isUserFolderNode || isServerNode;
+      /** Drop targets: only user folders. */
+      const isDropTarget = isUserFolderNode;
+      const isValid = isDropTarget && isValidDropTarget(node);
+      const isInvalid = isDropTarget && !isValid && dropTargetId === node.id;
 
       return (
         <div
           key={node.id}
           data-node-id={node.id}
-          onDragOver={canDrag ? (e) => { handleDragOver(e, node); } : undefined}
-          onDragLeave={canDrag ? handleDragLeave : undefined}
-          onDrop={canDrag ? (e) => { handleDrop(e, node); } : undefined}
-          className={dropTargetId === node.id && canDrag ? "relative" : undefined}
+          onDragOver={isDropTarget ? (e) => { handleDragOver(e, node); } : undefined}
+          onDragLeave={isDropTarget ? handleDragLeave : undefined}
+          onDrop={isDropTarget ? (e) => { handleDrop(e, node); } : undefined}
+          className={isValid || isInvalid ? "relative" : undefined}
         >
-          {dropTargetId === node.id && canDrag && (
-            <div className="absolute inset-x-1 top-0 h-0.5 bg-[var(--accent-9)] rounded-full z-10" />
+          {isValid && (
+            <div className="absolute inset-0 rounded border-2 border-dashed border-[var(--accent-8)] pointer-events-none z-10" />
+          )}
+          {isInvalid && (
+            <div className="absolute inset-0 rounded border-2 border-solid border-[var(--danger-8)] bg-[var(--danger-3)]/30 pointer-events-none z-10" />
           )}
           <button
-            draggable={canDrag}
-            onDragStart={canDrag ? (e) => handleDragStart(e, node) : undefined}
-            onDragEnd={canDrag ? handleDragEnd : undefined}
+            draggable={isDragSource}
+            onDragStart={isDragSource ? (e) => handleDragStart(e, node) : undefined}
+            onDragEnd={isDragSource ? handleDragEnd : undefined}
             onClick={async () => {
               // Left click: expand/collapse folders, trigger action for database and server
               if ((node.icon === "database" || node.icon === "server") && node.action) {
