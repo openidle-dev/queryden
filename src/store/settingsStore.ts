@@ -138,7 +138,7 @@ const defaultSettings: Omit<DBSettings, "setSetting" | "resetSettings"> = {
   enabledExportFormats: ["csv", "json", "xml", "html", "sql"],
 
   // Auto Save
-  autoSaveEnabled: false,
+  autoSaveEnabled: true,
   autoSaveInterval: 30,
 };
 

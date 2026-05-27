@@ -1,0 +1,49 @@
+---
+title: Auto save
+description: QueryDen can automatically persist open queries to .sql files on disk as you type, providing crash recovery and a browsable backup.
+section: editor
+order: 40
+updated: 2026-05-27
+---
+
+import Callout from '../../../components/Callout.astro';
+
+The **Auto Save** feature writes each editor tab's text to a `.sql` file on disk, debounced so the file is updated shortly after you stop typing. This complements the in-app [Local history](/docs/editor/local-history) snapshots by giving you a folder of `.sql` files you can browse, diff, or include in a filesystem backup.
+
+## Enabling auto save
+
+Open **Settings → Auto Save** (`Ctrl+Alt+S`) and toggle **Enable auto-save** on. It is on by default.
+
+The **Save interval** controls how many seconds of inactivity trigger a write. The default is 30 seconds; the minimum is 5, the maximum is 300 (5 minutes).
+
+<Callout type="info" title="No file picker needed">
+Auto-save files go to a dedicated `auto-save/` subdirectory inside QueryDen's app data folder. They are not saved inside your project or a location you choose — the app data directory is guaranteed writable and stays out of your way.
+</Callout>
+
+## Where files are written
+
+The app data directory location depends on your operating system:
+
+| OS | Path |
+|----|------|
+| Linux | `~/.local/share/com.queryden.app/auto-save/` |
+| macOS | `~/Library/Application Support/com.queryden.app/auto-save/` |
+| Windows | `%APPDATA%/com.queryden.app/auto-save/` |
+
+## File naming
+
+Each tab's auto-save file follows the convention:
+
+```
+{connectionName}_{databaseName}_{tabId}.sql
+```
+
+- **connectionName** — the display name of the connection the tab is scoped to (sanitized, underscores replace special characters).
+- **databaseName** — the selected database for the tab, or `none` if no database is selected.
+- **tabId** — the first 8 hex characters of the tab's internal UUID, enough to distinguish multiple tabs scoped to the same connection + database.
+
+## When to use it
+
+- The app crashed and you lost an unsaved query. Open the `auto-save/` folder to find the latest `.sql` file for each tab you had open.
+- You want to periodically back up your in-progress queries as part of a broader filesystem backup strategy.
+- You prefer working with `.sql` files on disk over an in-app save mechanism.

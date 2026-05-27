@@ -3,7 +3,7 @@ title: Connection folders
 description: Group servers into nested folders in the Database Explorer.
 section: editor
 order: 50
-updated: 2026-05-20
+updated: 2026-05-27
 ---
 
 import Callout from '../../../components/Callout.astro';
@@ -24,12 +24,17 @@ The **+ New folder** action lives in the popover regardless of which mode you're
 
 View-mode choice is not persisted across launches in v1; every app start defaults to Folders. To create a subfolder of an existing folder, right-click it and pick **New subfolder**.
 
-## Moving connections
+## Moving connections and folders by dragging
 
-Right-click a connection and pick **Move to folder…** The picker shows your folder tree (indented to reflect nesting) plus a **Root** option for moving a connection out of any folder.
+You can **drag and drop** connections and folders to reorganize the tree:
 
-<Callout type="info" title="No drag-and-drop yet">
-All folder operations are driven by the right-click menu and the **+** button. We deliberately shipped without drag-and-drop in v1 to keep the surface small. Send us feedback if it's something you want — [issue #104](https://github.com/openidle-dev/queryden/issues/104) is where the discussion lives.
+- **Connections** — drag a connection row onto a folder to move it inside that folder, or onto the empty area at the bottom of the tree to move it back to root.
+- **Folders** — drag a folder onto another folder (or root) to reparent it.
+
+Valid drop targets are highlighted with a dashed border when you hover over them. Dropping a folder onto itself or one of its descendants is blocked automatically (cycle detection).
+
+<Callout type="tip" title="Equivalent right-click actions">
+You can also use the right-click menu's **Move to folder…** option for any connection or folder — the picker shows your full folder tree and is also keyboard-accessible.
 </Callout>
 
 ## Reorganizing folders
