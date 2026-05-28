@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { ChevronRight, ChevronDown, Database, Table, Folder, FolderOpen, Plus, Search, Server, Columns, Hash, Eye, Variable, Trash2, Edit2, Play, Zap, Code, Download, Upload, Loader2, Terminal, Check, AlertCircle, Square } from "lucide-react";
+import { ChevronRight, ChevronDown, Database, Table, Folder, FolderOpen, Plus, Search, Server, Columns, Hash, Eye, Variable, Trash2, Edit2, Play, Zap, Code, Download, Upload, Loader2, Terminal, Check, AlertCircle, Square, HardDrive, User, Users } from "lucide-react";
 import { ImportExportDialog } from "./ImportExportDialog";
 import { PROVIDERS } from "../../config/providers";
 import { DatabaseConnection } from "../../contexts/ConnectionContext";
@@ -11,7 +11,9 @@ import { save, open } from "@tauri-apps/plugin-dialog";
 import { SchemaSelectionDialog } from "./SchemaSelectionDialog";
 import { CreateTableDialog } from "./CreateTableDialog";
 import { CreateDatabaseDialog } from "./CreateDatabaseDialog";
+import { CreateLoginRoleDialog } from "./CreateLoginRoleDialog";
 import { logger } from "../../utils/logger";
+import { quoteIdentifier } from "../../utils/sqlSecurity";
 import { buildConnectionTree, descendantFolderIds, type FolderTreeNode } from "../../utils/folderTree";
 import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
@@ -21,7 +23,7 @@ import { Dialog } from "../ui/Dialog";
 interface TreeNode {
   id: string;
   name: string;
-  icon: "server" | "database" | "schema" | "table" | "view" | "column" | "index" | "function" | "trigger" | "folder" | "loading";
+  icon: "server" | "database" | "schema" | "table" | "view" | "column" | "index" | "function" | "trigger" | "type" | "procedure" | "operator" | "foreign_table" | "language" | "extension" | "tablespace" | "login_role" | "group_role" | "folder" | "loading";
   children?: TreeNode[];
   expanded?: boolean;
   action?: () => void;
@@ -45,7 +47,15 @@ interface DatabaseExplorerProps {
 }
 
 export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: DatabaseExplorerProps = {}) {
-  const { connections, activeConnection, selectedDatabase, databases, removeConnection, updateConnection, connectToDatabase, schemaItems, loadSchema, getDDL, generateStatement, isLoadingSchema, currentDb, schemaProgress, dropDatabase, createDatabase, createTable, vaultCredentials, initialLoadDone, getSelectedSchemas, folders, addFolder, renameFolder, removeFolder, moveConnectionToFolder, moveFolder } = useConnections();
+  const { connections, activeConnection, selectedDatabase, databases, removeConnection, updateConnection, connectToDatabase, schemaItems, loadSchema, getDDL, generateStatement, isLoadingSchema, currentDb, schemaProgress, dropDatabase, createDatabase, createRole, createTable, vaultCredentials, initialLoadDone, getSelectedSchemas, folders, addFolder, renameFolder, removeFolder, moveConnectionToFolder, moveFolder, roles, refreshRoles, tablespaces } = useConnections();
+  // Ref keeps the latest activeConnection so server-node action() closures
+  // always see the current value, not the one captured at tree-build time.
+  const activeConnectionRef = useRef(activeConnection);
+  activeConnectionRef.current = activeConnection;
+  const currentDbRef = useRef(currentDb);
+  currentDbRef.current = currentDb;
+  const connectingRef = useRef<Set<string>>(new Set());
+  const loadingDatabasesRef = useRef<Set<string>>(new Set());
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [editingConnection, setEditingConnection] = useState<DatabaseConnection | null>(null);
@@ -57,16 +67,14 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
   const [moveTarget, setMoveTarget] = useState<{ kind: "connection" | "folder"; id: string; name: string } | null>(null);
   const [connectingConnectionIds, setConnectingConnectionIds] = useState<Set<string>>(new Set());
   const isConnecting = connectingConnectionIds.size > 0;
-  const beginConnect = (id: string) => setConnectingConnectionIds(prev => {
-    const next = new Set(prev);
-    next.add(id);
-    return next;
-  });
-  const endConnect = (id: string) => setConnectingConnectionIds(prev => {
-    const next = new Set(prev);
-    next.delete(id);
-    return next;
-  });
+  const beginConnect = (id: string) => {
+    connectingRef.current.add(id);
+    setConnectingConnectionIds(new Set(connectingRef.current));
+  };
+  const endConnect = (id: string) => {
+    connectingRef.current.delete(id);
+    setConnectingConnectionIds(new Set(connectingRef.current));
+  };
   const [loadingDatabases, setLoadingDatabases] = useState<Set<string>>(new Set());
   const [schemaContextMenu, setSchemaContextMenu] = useState<{ x: number; y: number; node: TreeNode } | null>(null);
   const [activeSubmenu, setActiveSubmenu] = useState<string | null>(null);
@@ -78,6 +86,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
   const [createTableTarget, setCreateTableTarget] = useState<{ schema?: string } | null>(null);
   const [isCreateTableOpen, setIsCreateTableOpen] = useState(false);
   const [isCreateDatabaseOpen, setIsCreateDatabaseOpen] = useState(false);
+  const [isCreateRoleOpen, setIsCreateRoleOpen] = useState(false);
   const [backupType, setBackupType] = useState<"sql-schema"|"sql-full"|"json"|"directory">("sql-schema");
   const [backupLoading, setBackupLoading] = useState(false);
   const [restoreLoading, setRestoreLoading] = useState(false);
@@ -210,7 +219,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
 
   useEffect(() => {
     const buildConnNode = (conn: DatabaseConnection): TreeNode => {
-      const isConnected = activeConnection?.id === conn.id;
+      const isConnected = activeConnectionRef.current?.id === conn.id;
 
       let connChildren: TreeNode[] = [];
       if (isConnected && databases.length > 0) {
@@ -228,10 +237,10 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
               ];
             } else if (schemaItems) {
               // Build schema content - even if empty arrays, show the structure
-              const items = schemaItems || { tables: [], views: [], functions: [], triggers: [], indexes: [], sequences: [] };
-              const schemasMap: Record<string, { tables: string[], views: string[], functions: string[], triggers: string[], indexes: string[], sequences: string[] }> = {};
+              const items = schemaItems || { tables: [], views: [], functions: [], triggers: [], indexes: [], sequences: [], types: [], procedures: [], operators: [], foreignTables: [] };
+              const schemasMap: Record<string, { tables: string[], views: string[], functions: string[], triggers: string[], indexes: string[], sequences: string[], types: string[], procedures: string[], operators: string[], foreignTables: string[] }> = {};
               
-              const treeCategories = ["tables", "views", "functions", "triggers", "indexes", "sequences"] as const;
+              const treeCategories = ["tables", "views", "functions", "triggers", "indexes", "sequences", "types", "procedures", "operators", "foreignTables"] as const;
               
               treeCategories.forEach((type) => {
                 const list = items[type] as string[];
@@ -245,7 +254,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                     schemaName = parts[0];
                     objName = parts[1];
                   }
-                  if (!schemasMap[schemaName]) schemasMap[schemaName] = { tables: [], views: [], functions: [], triggers: [], indexes: [], sequences: [] };
+                  if (!schemasMap[schemaName]) schemasMap[schemaName] = { tables: [], views: [], functions: [], triggers: [], indexes: [], sequences: [], types: [], procedures: [], operators: [], foreignTables: [] };
                   if (schemasMap[schemaName][type]) {
                     schemasMap[schemaName][type].push(objName);
                   }
@@ -348,24 +357,64 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                 if (settings.showSequences && sItems.sequences && sItems.sequences.length > 0) {
                   sNode.children!.push({ id: `seqs-${conn.id}-${db}-${schemaName}`, name: "Sequences", icon: "folder", children: sItems.sequences.map(t => ({ id: `seq-${schemaName}.${t}`, name: t, icon: "index" })) });
                 }
+                if (settings.showTypes && sItems.types && sItems.types.length > 0) {
+                  sNode.children!.push({ id: `types-${conn.id}-${db}-${schemaName}`, name: "Types", icon: "folder", children: sItems.types.map(t => ({ id: `type-${schemaName}.${t}`, name: t, icon: "type" })) });
+                }
+                if (settings.showProcedures && sItems.procedures && sItems.procedures.length > 0) {
+                  sNode.children!.push({ id: `procs-${conn.id}-${db}-${schemaName}`, name: "Procedures", icon: "folder", children: sItems.procedures.map(p => ({ id: `proc-${schemaName}.${p}`, name: p, icon: "procedure" })) });
+                }
+                if (settings.showOperators && sItems.operators && sItems.operators.length > 0) {
+                  sNode.children!.push({ id: `ops-${conn.id}-${db}-${schemaName}`, name: "Operators", icon: "folder", children: sItems.operators.map(o => ({ id: `op-${schemaName}.${o}`, name: o, icon: "operator" })) });
+                }
+                if (settings.showForeignTables && sItems.foreignTables && sItems.foreignTables.length > 0) {
+                  sNode.children!.push({ id: `fts-${conn.id}-${db}-${schemaName}`, name: "Foreign Tables", icon: "folder", children: sItems.foreignTables.map(ft => ({ id: `ft-${schemaName}.${ft}`, name: ft, icon: "foreign_table" })) });
+                }
                 return sNode;
               });
 
+              const hasEventTriggers = items.eventTriggers && items.eventTriggers.length > 0;
+              const hasExtensions = items.extensions && items.extensions.length > 0;
+              const hasLanguages = items.languages && items.languages.length > 0;
+
               dbChildren = [
                 { id: `schemas-root-${conn.id}-${db}`, name: "Schemas", icon: "folder", children: schemaNodes },
-                { id: `events-${conn.id}-${db}`, name: "Event Triggers", icon: "folder" },
-                { id: `exts-${conn.id}-${db}`, name: "Extensions", icon: "folder" },
-                { id: `store-${conn.id}-${db}`, name: "Storage", icon: "folder" }
               ];
+              if (hasEventTriggers) {
+                dbChildren.push({ id: `events-${conn.id}-${db}`, name: "Event Triggers", icon: "folder", children: items.eventTriggers!.map(t => ({ id: `evt-${conn.id}-${db}-${t}`, name: t, icon: "trigger" })) });
+              }
+              if (hasExtensions) {
+                dbChildren.push({ id: `exts-${conn.id}-${db}`, name: "Extensions", icon: "folder", children: items.extensions!.map(e => ({ id: `ext-${conn.id}-${db}-${e}`, name: e, icon: "extension" })) });
+              }
+              if (hasLanguages) {
+                dbChildren.push({ id: `langs-${conn.id}-${db}`, name: "Languages", icon: "folder", children: items.languages!.map(l => ({ id: `lang-${conn.id}-${db}-${l}`, name: l, icon: "language" })) });
+              }
+              if (["postgres", "supabase", "cockroach"].includes(conn.type) && tablespaces.length > 0) {
+                dbChildren.push({
+                  id: `store-${conn.id}-${db}`,
+                  name: "Storage",
+                  icon: "folder",
+                  children: tablespaces.map(ts => ({
+                    id: `tablespace-${conn.id}-${ts.name}`,
+                    name: `${ts.name}  (${ts.size || '?'}, ${ts.owner})`,
+                    icon: "tablespace"
+                  }))
+                });
+              } else {
+                dbChildren.push({ id: `store-${conn.id}-${db}`, name: "Storage", icon: "folder" });
+              }
             }
           } else {
             // Not the active database - show placeholder structure
+            const isPg = ["postgres", "supabase"].includes(conn.type);
             dbChildren = [
               { id: `schemas-root-${conn.id}-${db}`, name: "Schemas", icon: "folder", children: [] },
-              { id: `events-${conn.id}-${db}`, name: "Event Triggers", icon: "folder" },
-              { id: `exts-${conn.id}-${db}`, name: "Extensions", icon: "folder" },
-              { id: `store-${conn.id}-${db}`, name: "Storage", icon: "folder" }
             ];
+            if (isPg) {
+              dbChildren.push({ id: `events-${conn.id}-${db}`, name: "Event Triggers", icon: "folder" });
+              dbChildren.push({ id: `exts-${conn.id}-${db}`, name: "Extensions", icon: "folder" });
+              dbChildren.push({ id: `langs-${conn.id}-${db}`, name: "Languages", icon: "folder" });
+            }
+            dbChildren.push({ id: `store-${conn.id}-${db}`, name: "Storage", icon: "folder" });
           }
 
           return {
@@ -374,8 +423,11 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
             icon: "database",
             children: dbChildren,
             action: async () => {
+              const dbKey = `db-${conn.id}-${db}`;
+              if (loadingDatabasesRef.current.has(dbKey)) return;
+              loadingDatabasesRef.current.add(dbKey);
               // If not active, connect and load schema
-              setLoadingDatabases(prev => new Set(prev).add(`db-${conn.id}-${db}`));
+              setLoadingDatabases(prev => new Set(prev).add(dbKey));
               try {
                 if (!isDbActive) {
                   await connectToDatabase(conn.id, db);
@@ -383,9 +435,10 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                   await loadSchema(db);
                 }
               } finally {
+                loadingDatabasesRef.current.delete(dbKey);
                 setLoadingDatabases(prev => {
                   const next = new Set(prev);
-                  next.delete(`db-${conn.id}-${db}`);
+                  next.delete(dbKey);
                   return next;
                 });
               }
@@ -400,6 +453,27 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
           icon: "folder",
           children: dbNodes
         }];
+
+        // Add Login/Group Roles at server level for PostgreSQL connections (pgAdmin style)
+        if (["postgres", "supabase", "cockroach"].includes(conn.type)) {
+          const loginChildren: TreeNode[] = roles.login.map(r => ({ id: `login-role-${conn.id}-${r}`, name: r, icon: "login_role" }));
+          const groupChildren: TreeNode[] = roles.group.map(r => ({ id: `group-role-${conn.id}-${r}`, name: r, icon: "group_role" }));
+          const roleChildren: TreeNode[] = [];
+          if (loginChildren.length > 0) {
+            roleChildren.push({ id: `login-roles-${conn.id}`, name: "Login Roles", icon: "folder", children: loginChildren, contextMenuId: `login-roles-${conn.id}` });
+          }
+          if (groupChildren.length > 0) {
+            roleChildren.push({ id: `group-roles-${conn.id}`, name: "Group Roles", icon: "folder", children: groupChildren });
+          }
+          if (roleChildren.length > 0) {
+            connChildren.push({
+              id: `roles-root-${conn.id}`,
+              name: "Login/Group Roles",
+              icon: "folder",
+              children: roleChildren
+            });
+          }
+        }
       }
 
       return {
@@ -411,7 +485,9 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
         color: conn.color,
         children: connChildren,
         action: () => {
-          if (!isConnected) {
+          // Read activeConnectionRef at call time, not tree-build time, so
+          // switching between servers always sees the actual connected state.
+          if (activeConnectionRef.current?.id !== conn.id || !currentDbRef.current) {
             handleConnect(conn);
           }
         }
@@ -457,7 +533,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
     }
 
     setSchemaTree(tree);
-  }, [connections, activeConnection, selectedDatabase, settings, schemaItems, databases, isLoadingSchema, loadingDatabases, tableDetails, loadingTableDetails, viewMode, folders]);
+  }, [connections, activeConnection, selectedDatabase, settings, schemaItems, databases, isLoadingSchema, loadingDatabases, tableDetails, loadingTableDetails, viewMode, folders, roles]);
 
   const toggleExpand = async (nodeId: string) => {
     const wasExpanded = expandedNodes.has(nodeId);
@@ -514,7 +590,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
     try {
       const details: TableDetails = { columns: [], constraints: [], foreignKeys: [], indexes: [], triggers: [] };
       
-      if (["postgres", "supabase"].includes(activeConnection.type)) {
+      if (["postgres", "supabase", "cockroach"].includes(activeConnection.type)) {
         // Load columns
         const cols = await currentDb.select(`
           SELECT column_name, data_type, is_nullable, column_default, udt_name
@@ -586,6 +662,104 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
           type: c.constraint_type,
           definition: ''
         }));
+      } else if (["mysql", "mariadb"].includes(activeConnection.type)) {
+        const cols = await currentDb.select(`
+          SELECT column_name, data_type, is_nullable, column_default
+          FROM information_schema.columns
+          WHERE table_schema = DATABASE() AND table_name = ?
+          ORDER BY ordinal_position
+        `, [tableName]);
+        details.columns = cols.map((c: any) => ({
+          name: c.column_name,
+          type: c.data_type,
+          nullable: c.is_nullable === 'YES',
+          default: c.column_default,
+        }));
+
+        const idxs = await currentDb.select(`SHOW INDEX FROM ${quoteIdentifier(tableName, activeConnection.type)}`);
+        const idxMap: Record<string, { columns: string[]; unique: boolean }> = {};
+        for (const idx of idxs) {
+          if (!idxMap[idx.Key_name]) {
+            idxMap[idx.Key_name] = { columns: [], unique: idx.Non_unique === 0 };
+          }
+          idxMap[idx.Key_name].columns.push(idx.Column_name);
+        }
+        details.indexes = Object.entries(idxMap).map(([name, info]) => ({
+          name,
+          columns: info.columns,
+          unique: info.unique,
+        }));
+
+        const trgs = await currentDb.select(`
+          SELECT trigger_name
+          FROM information_schema.triggers
+          WHERE event_object_schema = DATABASE() AND event_object_table = ?
+        `, [tableName]);
+        details.triggers = trgs.map((t: any) => t.trigger_name);
+
+        const fks = await currentDb.select(`
+          SELECT kcu.column_name, kcu.referenced_table_name, kcu.referenced_column_name
+          FROM information_schema.key_column_usage kcu
+          JOIN information_schema.table_constraints tc
+            ON tc.constraint_name = kcu.constraint_name AND tc.constraint_schema = kcu.constraint_schema
+          WHERE tc.constraint_type = 'FOREIGN KEY' AND kcu.table_schema = DATABASE() AND kcu.table_name = ?
+        `, [tableName]);
+        const fkMap: Record<string, { columns: string[]; refTable: string; refColumns: string[] }> = {};
+        for (const fk of fks) {
+          const conName = `${fk.column_name}_${fk.referenced_table_name}`;
+          if (!fkMap[conName]) {
+            fkMap[conName] = { columns: [], refTable: fk.referenced_table_name, refColumns: [] };
+          }
+          fkMap[conName].columns.push(fk.column_name);
+          fkMap[conName].refColumns.push(fk.referenced_column_name);
+        }
+        details.foreignKeys = Object.values(fkMap);
+
+        const cons = await currentDb.select(`
+          SELECT constraint_name, constraint_type
+          FROM information_schema.table_constraints
+          WHERE table_schema = DATABASE() AND table_name = ?
+        `, [tableName]);
+        details.constraints = cons.map((c: any) => ({
+          name: c.constraint_name,
+          type: c.constraint_type,
+          definition: '',
+        }));
+      } else if (activeConnection.type === "sqlite") {
+        const quotedTable = quoteIdentifier(tableName, activeConnection.type);
+
+        const cols = await currentDb.select(`PRAGMA table_info(${quotedTable})`);
+        details.columns = cols.map((c: any) => ({
+          name: c.name,
+          type: c.type || 'TEXT',
+          nullable: c.notnull === 0,
+          default: c.dflt_value,
+        }));
+
+        const idxs = await currentDb.select(`PRAGMA index_list(${quotedTable})`);
+        for (const idx of idxs) {
+          const idxInfo = await currentDb.select(`PRAGMA index_info(${quoteIdentifier(idx.name, activeConnection.type)})`);
+          details.indexes.push({
+            name: idx.name,
+            columns: idxInfo.map((i: any) => i.name),
+            unique: idx.unique === 1,
+          });
+        }
+
+        const trgs = await currentDb.select("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = $1", [tableName]);
+        details.triggers = trgs.map((t: any) => t.name);
+
+        const fks = await currentDb.select(`PRAGMA foreign_key_list(${quotedTable})`);
+        const fkMap: Record<string, { columns: string[]; refTable: string; refColumns: string[] }> = {};
+        for (const fk of fks) {
+          const conName = `${fk.from}_${fk.table}`;
+          if (!fkMap[conName]) {
+            fkMap[conName] = { columns: [], refTable: fk.table, refColumns: [] };
+          }
+          fkMap[conName].columns.push(fk.from);
+          fkMap[conName].refColumns.push(fk.to);
+        }
+        details.foreignKeys = Object.values(fkMap);
       }
       
       setTableDetails(prev => ({ ...prev, [key]: details }));
@@ -603,11 +777,22 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
   };
 
   const handleConnect = async (conn: DatabaseConnection) => {
+    if (connectingRef.current.has(conn.id)) return;
+    // Auto-expand the server node after successful connection
+    const expandServerNode = () => {
+      setExpandedNodes(prev => {
+        const next = new Set(prev);
+        next.add(`conn-${conn.id}`);
+        return next;
+      });
+    };
+
     // If we have a vaultCredentialId already, just connect
     if (conn.vaultCredentialId) {
       beginConnect(conn.id);
       try {
         await connectToDatabase(conn.id);
+        expandServerNode();
       } catch (error: any) {
         console.error("Connection failed:", error);
         confirmDialog.dialog({
@@ -655,6 +840,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
         beginConnect(conn.id);
         try {
           await connectToDatabase(conn.id, undefined, selectedVaultCred);
+          expandServerNode();
         } catch (error: any) {
           console.error("Connection failed:", error);
           confirmDialog.dialog({ title: "Connection Failed", message: String(error), confirmLabel: "OK", type: "danger" });
@@ -669,6 +855,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
     beginConnect(conn.id);
     try {
       await connectToDatabase(conn.id);
+      expandServerNode();
     } catch (error: any) {
       console.error("Connection failed:", error);
       confirmDialog.dialog({
@@ -703,6 +890,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
         setRestoreDialogOpen(false);
         setIsCreateTableOpen(false);
         setIsCreateDatabaseOpen(false);
+        setIsCreateRoleOpen(false);
         setShowEditDialog(false);
         setShowSchemaDialog(false);
       }
@@ -1152,7 +1340,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
     }
   };
 
-  const isLeafSchemaItem = (icon: string) => ["table", "view", "function", "trigger", "index"].includes(icon);
+  const isLeafSchemaItem = (icon: string) => ["table", "view", "function", "trigger", "index", "type", "procedure", "operator", "foreign_table", "language", "extension", "tablespace", "login_role", "group_role"].includes(icon);
   const isFolderNode = (icon: string) => ["folder", "database", "schema"].includes(icon);
 
   const getCreateTemplate = (folderName: string): string | null => {
@@ -1173,6 +1361,14 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
       return `CREATE SEQUENCE new_sequence START 1;`;
     } else if (name.includes("type")) {
       return `CREATE TYPE new_type AS ENUM ('value1', 'value2');`;
+    } else if (name.includes("procedure")) {
+      return `CREATE OR REPLACE PROCEDURE new_procedure()\nLANGUAGE plpgsql\nAS $$\nBEGIN\n  -- procedure body\nEND;\n$$;`;
+    } else if (name.includes("operator")) {
+      return `CREATE OPERATOR !! (\n  FUNCTION = function_name,\n  LEFTARG = integer,\n  RIGHTARG = integer\n);`;
+    } else if (name.includes("foreign table")) {
+      return `CREATE FOREIGN TABLE new_foreign_table (\n  id INTEGER,\n  name TEXT\n)\nSERVER foreign_server\nOPTIONS (schema_name 'public', table_name 'remote_table');`;
+    } else if (name.includes("tablespace") || name.includes("storage")) {
+      return `CREATE TABLESPACE new_tablespace\n  OWNER postgres\n  LOCATION '/path/to/data_directory';`;
     } else if (name.includes("database")) {
       return `-- Template for Create Database\nCREATE DATABASE new_database\n  WITH \n  OWNER = postgres\n  TEMPLATE = template1\n  ENCODING = 'UTF8'\n  LC_COLLATE = 'en_US.utf8'\n  LC_CTYPE = 'en_US.utf8'\n  TABLESPACE = pg_default\n  CONNECTION LIMIT = -1\n  IS_TEMPLATE = False;`;
     }
@@ -1304,20 +1500,19 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
             <div className="absolute inset-0 rounded border-2 border-solid border-[var(--danger-8)] bg-[var(--danger-3)]/30 pointer-events-none z-10" />
           )}
           <button
-            draggable={isDragSource}
-            onDragStart={isDragSource ? (e) => handleDragStart(e, node) : undefined}
-            onDragEnd={isDragSource ? handleDragEnd : undefined}
             onClick={async () => {
               // Left click: expand/collapse folders, trigger action for database and server
               if ((node.icon === "database" || node.icon === "server") && node.action) {
                 node.action();
               }
-              if (hasChildren || isFolder) {
+              // Always toggle expand for server nodes so the user sees
+              // immediate visual feedback even before children are loaded.
+              if (hasChildren || isFolder || node.icon === "server") {
                 toggleExpand(node.id);
               }
               if (node.icon === "table") {
                 const fullTableName = node.id.startsWith("table-") ? node.id.replace("table-", "") : node.name;
-                const query = `SELECT * FROM ${fullTableName} LIMIT 1000`;
+                const query = `SELECT * FROM ${fullTableName} LIMIT 50`;
                 // Issue #51: ensure the table's column types are loaded so the
                 // data grid can pick the date/time overlay editor by real SQL
                 // type instead of by column-name substring. `loadTableDetails`
@@ -1386,10 +1581,8 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                 } catch (e) {
                   console.error("Failed to get DDL:", e);
                 }
-              } else if (node.action) {
-                node.action();
               }
-              if (hasChildren || isFolder) toggleExpand(node.id);
+              if (hasChildren || isFolder || node.icon === "server") toggleExpand(node.id);
             }}
           >
             {hasChildren || isFolder ? (
@@ -1399,13 +1592,27 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
             ) : (
               <span className="w-3" />
             )}
-            {isDbLoading || isServerConnecting ? <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--accent-9)]" /> : getIcon(node.icon, isExpanded, node.providerType, node.color)}
+            {isDbLoading || isServerConnecting ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--accent-9)] shrink-0" />
+            ) : (
+              <span
+                draggable={isDragSource}
+                onDragStart={isDragSource ? (e) => {
+                  e.stopPropagation();
+                  handleDragStart(e, node);
+                } : undefined}
+                onDragEnd={isDragSource ? handleDragEnd : undefined}
+                className={isDragSource ? "cursor-grab active:cursor-grabbing hover:bg-[var(--neutral-4)] rounded p-0.5 shrink-0 flex items-center justify-center" : "shrink-0 flex items-center justify-center"}
+              >
+                {getIcon(node.icon, isExpanded, node.providerType, node.color)}
+              </span>
+            )}
             <span className={`truncate ${node.icon === 'server' ? 'text-[var(--neutral-12)] font-bold' : node.icon === 'database' ? 'text-[var(--neutral-11)] font-semibold' : 'text-[var(--neutral-12)] opacity-90'}`}>
               {node.name}
               {node.icon === 'server' && activeConnection?.id === node.contextMenuId && <span className="ml-2 inline-block w-1.5 h-1.5 bg-[var(--success-9)] rounded-full" title="Connected" />}
             </span>
             {(isSchemaLoading || isSchemasLoading || isTableDetailsLoading) && (
-              <Loader2 className="w-3 h-3 animate-spin ml-auto text-[var(--neutral-11)]" />
+              <Loader2 className="w-3 h-3 animate-spin ml-auto text-[var(--neutral-11)] shrink-0" />
             )}
             {hasChildren && !(isSchemaLoading || isSchemasLoading || isTableDetailsLoading) && (
               <span className="text-[10px] text-[var(--neutral-11)] ml-auto">{node.children?.length}</span>
@@ -1448,7 +1655,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
   };
 
   const handleTreeKeyDown = (e: React.KeyboardEvent) => {
-    if (activeSubmenu || contextMenu || schemaContextMenu || isAddConnectionDialogOpen || showEditDialog || backupDialogOpen || restoreDialogOpen || isCreateTableOpen || isCreateDatabaseOpen || showSchemaDialog) return;
+    if (activeSubmenu || contextMenu || schemaContextMenu || isAddConnectionDialogOpen || showEditDialog || backupDialogOpen || restoreDialogOpen || isCreateTableOpen || isCreateDatabaseOpen || isCreateRoleOpen || showSchemaDialog) return;
 
     const visibleNodes = getVisibleNodes(schemaTree);
     if (visibleNodes.length === 0) return;
@@ -1570,7 +1777,16 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
       case "view": return <Eye className="w-3.5 h-3.5 text-purple-400" />;
       case "column": return <Columns className="w-3.5 h-3.5 text-gray-400" />;
       case "index": return <Hash className="w-3.5 h-3.5 text-green-400" />;
+      case "type": return <Code className="w-3.5 h-3.5 text-cyan-400" />;
       case "function": return <Variable className="w-3.5 h-3.5 text-red-400" />;
+      case "procedure": return <Terminal className="w-3.5 h-3.5 text-red-400" />;
+      case "operator": return <Plus className="w-3.5 h-3.5 text-orange-400" />;
+      case "foreign_table": return <Database className="w-3.5 h-3.5 text-indigo-400" />;
+      case "language": return <Terminal className="w-3.5 h-3.5 text-pink-400" />;
+      case "extension": return <Server className="w-3.5 h-3.5 text-teal-400" />;
+      case "tablespace": return <HardDrive className="w-3.5 h-3.5 text-amber-400" />;
+      case "login_role": return <User className="w-3.5 h-3.5 text-green-400" />;
+      case "group_role": return <Users className="w-3.5 h-3.5 text-blue-400" />;
       case "trigger": return <Zap className="w-3.5 h-3.5 text-yellow-500" />;
       case "folder": return isExpanded ? <FolderOpen className="w-3.5 h-3.5 text-yellow-500" /> : <Folder className="w-3.5 h-3.5 text-yellow-500" />;
       case "loading": return <Loader2 className="w-3.5 h-3.5 text-blue-400 animate-spin" />;
@@ -1873,7 +2089,22 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
           })()}
         </Menu>
       )}
-      {contextMenu && !contextMenu.connectionId.startsWith("folder:") && (
+      {contextMenu && contextMenu.connectionId.startsWith("login-roles-") && (
+        <Menu x={contextMenu.x} y={contextMenu.y} className="w-auto min-w-[180px]">
+          <MenuLabel>Login Roles</MenuLabel>
+          <MenuItem
+            tone="success"
+            icon={<Plus className="w-3 h-3" />}
+            onClick={() => {
+              setIsCreateRoleOpen(true);
+              closeContextMenu();
+            }}
+          >
+            Create Login Role...
+          </MenuItem>
+        </Menu>
+      )}
+      {contextMenu && !contextMenu.connectionId.startsWith("folder:") && !contextMenu.connectionId.startsWith("login-roles-") && (
         <Menu x={contextMenu.x} y={contextMenu.y} className="w-auto min-w-[160px]">
           <MenuItem
             icon={<Play className="w-3 h-3" />}
@@ -2309,6 +2540,32 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                 </MenuItem>
               )}
 
+              {(schemaContextMenu.node.icon === "login_role" || schemaContextMenu.node.icon === "group_role") && (
+                <MenuItem
+                  tone="danger"
+                  icon={<Trash2 className="w-3 h-3" />}
+                  onClick={async () => {
+                    const roleName = schemaContextMenu.node.name;
+                    const confirmed = await confirmDialog.confirm({
+                      title: `Drop Role`,
+                      message: `Are you sure you want to permanently drop the role "${roleName}"? This cannot be undone.`,
+                      confirmLabel: "Drop Role",
+                      type: "danger"
+                    });
+                    if (!confirmed) return;
+                    try {
+                      await currentDb.execute(`DROP ROLE IF EXISTS "${roleName}"`);
+                      await refreshRoles();
+                    } catch (e: any) {
+                      console.error("Drop role failed:", e);
+                    }
+                    closeContextMenu();
+                  }}
+                >
+                  Drop Role
+                </MenuItem>
+              )}
+
               {schemaContextMenu.node.icon === "table" && (
                 <>
                   <MenuItem
@@ -2379,20 +2636,21 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
               >
                 Copy Name
               </MenuItem>
-              <MenuItem
-                tone="danger"
-                icon={<Trash2 className="w-3 h-3" />}
-                onClick={async () => {
-                  const confirmed = await confirmDialog.confirm({
-                    title: `Drop ${schemaContextMenu.node.icon}`,
-                    message: `Are you sure you want to generate a DROP statement for "${schemaContextMenu.node.name}"? This is a destructive operation.`,
-                    confirmLabel: "Generate Drop SQL",
-                    type: "danger"
-                  });
-                  if (!confirmed) return;
-                  const itemType = schemaContextMenu.node.icon.toUpperCase();
-                  const sql = `DROP ${itemType} IF EXISTS ${schemaContextMenu.node.name};`;
-                  window.dispatchEvent(new CustomEvent("open-query-with-text", {
+              {schemaContextMenu.node.icon !== "login_role" && schemaContextMenu.node.icon !== "group_role" && (
+                <MenuItem
+                  tone="danger"
+                  icon={<Trash2 className="w-3 h-3" />}
+                  onClick={async () => {
+                    const confirmed = await confirmDialog.confirm({
+                      title: `Drop ${schemaContextMenu.node.icon}`,
+                      message: `Are you sure you want to generate a DROP statement for "${schemaContextMenu.node.name}"? This is a destructive operation.`,
+                      confirmLabel: "Generate Drop SQL",
+                      type: "danger"
+                    });
+                    if (!confirmed) return;
+                    const itemType = schemaContextMenu.node.icon.toUpperCase();
+                    const sql = `DROP ${itemType} IF EXISTS ${schemaContextMenu.node.name};`;
+                    window.dispatchEvent(new CustomEvent("open-query-with-text", {
                     detail: { query: `-- WARNING: This will permanently drop the ${itemType.toLowerCase()}\n${sql}`, name: `Drop ${schemaContextMenu.node.name}` }
                   }));
                   closeContextMenu();
@@ -2400,6 +2658,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
               >
                 Drop {schemaContextMenu.node.icon}
               </MenuItem>
+            )}
             </>
           )}
 
@@ -2760,6 +3019,14 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
           await createDatabase(payload);
         }}
         dbType={activeConnection?.type || "postgres"}
+      />
+
+      <CreateLoginRoleDialog
+        isOpen={isCreateRoleOpen}
+        onClose={() => setIsCreateRoleOpen(false)}
+        onCreate={async (payload) => {
+          await createRole(payload);
+        }}
       />
 
       {showImportExport && <ImportExportDialog onClose={() => setShowImportExport(false)} />}

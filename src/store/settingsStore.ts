@@ -13,6 +13,8 @@ export interface DBSettings {
   showConstraints: boolean;
   showSequences: boolean;
   showTypes: boolean;
+  showProcedures: boolean;
+  showOperators: boolean;
   showAllNamespaces: boolean;
   showEmptyGroups: boolean;
   
@@ -86,6 +88,8 @@ const defaultSettings: Omit<DBSettings, "setSetting" | "resetSettings"> = {
   showConstraints: true,
   showSequences: true,
   showTypes: true,
+  showProcedures: true,
+  showOperators: true,
   showAllNamespaces: false,
   showEmptyGroups: false,
   

@@ -61,13 +61,20 @@ export interface SchemaItems {
   triggers: string[];
   indexes: string[];
   sequences?: string[];
+  types?: string[];
+  procedures?: string[];
+  operators?: string[];
+  foreignTables?: string[];
+  eventTriggers?: string[];
+  extensions?: string[];
+  languages?: string[];
   columns?: { table_name: string; column_name: string }[];
   foreignKeys?: { source_table: string; source_column: string; target_table: string; target_column: string }[];
   _ts?: number;
 }
 
 interface SchemaLoadingProgress {
-  phase: "idle" | "initializing" | "connecting" | "tables" | "views" | "functions" | "triggers" | "indexes" | "columns" | "foreign_keys" | "complete";
+  phase: "idle" | "initializing" | "connecting" | "tables" | "views" | "functions" | "procedures" | "triggers" | "indexes" | "types" | "operators" | "foreign_tables" | "columns" | "foreign_keys" | "complete";
   current: number;
   total: number;
 }
@@ -97,12 +104,29 @@ export interface CreateDatabasePayload {
   isTemplate?: boolean;
 }
 
+export interface CreateRolePayload {
+  name: string;
+  password?: string;
+  connectionLimit?: number;
+  validUntil?: string;
+  canLogin: boolean;
+  superuser: boolean;
+  createDatabases: boolean;
+  createRoles: boolean;
+  replication: boolean;
+  bypassRLS: boolean;
+  inherit: boolean;
+}
+
 interface ConnectionContextType {
   connections: DatabaseConnection[];
   activeConnection: DatabaseConnection | null;
   selectedDatabase: string | null;
   databases: string[];
   schemaItems: SchemaItems | null;
+  roles: { login: string[], group: string[] };
+  setRoles: (roles: { login: string[], group: string[] }) => void;
+  tablespaces: { name: string; owner: string; location: string | null; size: string | null }[];
   isLoadingSchema: boolean;
   currentDb: any;
   schemaProgress: SchemaLoadingProgress;
@@ -122,6 +146,8 @@ interface ConnectionContextType {
   copyTableData: (tableName: string, targetDB: string) => Promise<string>;
   dropDatabase: (dbName: string) => Promise<void>;
   createDatabase: (payload: CreateDatabasePayload) => Promise<void>;
+  createRole: (payload: CreateRolePayload) => Promise<void>;
+  refreshRoles: () => Promise<void>;
   createTable: (payload: CreateTablePayload) => Promise<void>;
   executeDataCopy: (sourceTable: string, targetTable: string, targetDB: string, options?: {
     method?: "insert" | "copy" | "pgdump";
@@ -275,6 +301,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const [folders, setFolders] = useState<Folder[]>([]);
   /** Selected schemas per database: { "connectionId:databaseName": string[] } */
   const [selectedSchemasByDatabase, setSelectedSchemasByDatabase] = useState<Record<string, string[]>>({});
+  const [roles, setRoles] = useState<{ login: string[], group: string[] }>({ login: [], group: [] });
+  const [tablespaces, setTablespaces] = useState<{ name: string; owner: string; location: string | null; size: string | null }[]>([]);
 
   // Load from file storage on mount
   useEffect(() => {
@@ -638,6 +666,33 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           setDatabases([conn.database]);
         }
       }
+
+      // Load cluster-wide roles for PostgreSQL connections
+      if (["postgres", "supabase", "cockroach"].includes(conn.type)) {
+        try {
+          const roleRows = await db.select<any[]>("SELECT rolname, rolcanlogin FROM pg_roles WHERE rolname !~ '^pg_' ORDER BY rolname");
+          const login: string[] = [];
+          const group: string[] = [];
+          for (const r of roleRows) {
+            if (r.rolcanlogin) login.push(r.rolname);
+            else group.push(r.rolname);
+          }
+          setRoles({ login, group });
+        } catch (e) {
+          console.error("Failed to load roles:", e);
+          setRoles({ login: [], group: [] });
+        }
+        // Load tablespaces
+        try {
+          const tsRows = await db.select<any[]>(
+            "SELECT spcname, spcowner::regrole AS owner, pg_tablespace_location(oid) AS location, COALESCE(pg_size_pretty(NULLIF(pg_tablespace_size(oid), 0)), '0 bytes') AS size FROM pg_tablespace ORDER BY spcname"
+          );
+          setTablespaces(tsRows.map((r: any) => ({ name: r.spcname, owner: r.owner, location: r.location, size: r.size })));
+        } catch (e) {
+          console.error("Failed to load tablespaces:", e);
+          setTablespaces([]);
+        }
+      }
     } catch (error: any) {
       console.error("Connection failed:", error);
       throw error;
@@ -664,6 +719,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     setSelectedDatabase(null);
     setDatabases([]);
     setSchemaItems(null);
+    setRoles({ login: [], group: [] });
+    setTablespaces([]);
     // Notify the Monaco editor (if loaded) to drop its module-level schema cache.
     window.dispatchEvent(new CustomEvent("connection-disconnected"));
   };
@@ -675,7 +732,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     }
 
     setIsLoadingSchema(true);
-    setSchemaProgress({ phase: "initializing", current: 0, total: 8 });
+    setSchemaProgress({ phase: "initializing", current: 0, total: 12 });
     
     // Use overrideSchemas if provided (from SchemaSelectionDialog), otherwise read from state
     const selectedSchemas = overrideSchemas !== undefined 
@@ -696,14 +753,21 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         triggers: [],
         indexes: [],
         sequences: [],
+        types: [],
+        procedures: [],
+        operators: [],
+        foreignTables: [],
+        eventTriggers: [],
+        extensions: [],
+        languages: [],
       };
 
       if (["postgres", "supabase", "cockroach"].includes(activeConnection.type)) {
-        setSchemaProgress({ phase: "tables", current: 1, total: 8 });
+        setSchemaProgress({ phase: "tables", current: 1, total: 12 });
         try {
           const tables = await currentDb.select(`
             SELECT table_schema as table_schema, table_name as table_name 
-            FROM information_schema.tables 
+            FROM information_schema.tables
             WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
               AND table_type = 'BASE TABLE'
               ${schemaFilter}
@@ -716,11 +780,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           console.error("Failed to fetch tables:", e);
         }
 
-        setSchemaProgress({ phase: "views", current: 2, total: 8 });
+        setSchemaProgress({ phase: "views", current: 2, total: 12 });
         try {
           const views = await currentDb.select(`
             SELECT table_schema as table_schema, table_name as table_name 
-            FROM information_schema.views 
+            FROM information_schema.views
             WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
               ${schemaFilter}
             ORDER BY table_schema, table_name
@@ -732,11 +796,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           console.error("Failed to fetch views:", e);
         }
 
-        setSchemaProgress({ phase: "functions", current: 3, total: 8 });
+        setSchemaProgress({ phase: "functions", current: 3, total: 12 });
         try {
           const functions = await currentDb.select(`
             SELECT routine_schema as routine_schema, routine_name as routine_name 
-            FROM information_schema.routines 
+            FROM information_schema.routines
             WHERE routine_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
               ${schemaFilter}
             ORDER BY routine_schema, routine_name
@@ -748,11 +812,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           console.error("Failed to fetch functions:", e);
         }
 
-        setSchemaProgress({ phase: "triggers", current: 4, total: 8 });
+        setSchemaProgress({ phase: "triggers", current: 4, total: 12 });
         try {
           const triggers = await currentDb.select(`
             SELECT trigger_schema as trigger_schema, trigger_name as trigger_name 
-            FROM information_schema.triggers 
+            FROM information_schema.triggers
             WHERE trigger_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
               ${schemaFilter}
             ORDER BY trigger_schema, trigger_name
@@ -764,11 +828,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           schema.triggers = [];
         }
 
-        setSchemaProgress({ phase: "indexes", current: 5, total: 8 });
+        setSchemaProgress({ phase: "indexes", current: 5, total: 12 });
         try {
           const indexes = await currentDb.select(`
             SELECT schemaname as schemaname, indexname as indexname 
-            FROM pg_indexes 
+            FROM pg_indexes
             WHERE schemaname NOT IN ('information_schema', 'pg_catalog', 'topology')
               ${schemaFilter.replace('table_schema', 'schemaname')}
             ORDER BY schemaname, indexname
@@ -781,7 +845,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         }
 
         // Fetch Sequences
-        setSchemaProgress({ phase: "indexes", current: 6, total: 8 });
+        setSchemaProgress({ phase: "indexes", current: 6, total: 12 });
         try {
           const sequences = await currentDb.select(`
             SELECT sequence_schema as sequence_schema, sequence_name as sequence_name 
@@ -797,8 +861,83 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           schema.sequences = [];
         }
 
+        // Fetch user-defined types (domains, enums, composites, ranges)
+        setSchemaProgress({ phase: "types", current: 7, total: 12 });
+        try {
+          const types = await currentDb.select(`
+            SELECT n.nspname AS type_schema, t.typname AS type_name
+            FROM pg_type t
+            JOIN pg_namespace n ON t.typnamespace = n.oid
+            WHERE n.nspname NOT IN ('information_schema', 'pg_catalog', 'topology')
+              AND t.typtype IN ('d', 'e', 'c', 'r', 'm')
+              AND t.typrelid = 0
+            ORDER BY n.nspname, t.typname
+          `);
+          schema.types = types.length > 0 ? types.map((t: any) =>
+            t.type_schema === 'public' ? t.type_name : `${t.type_schema}.${t.type_name}`
+          ) : [];
+        } catch (e) {
+          console.error("Failed to fetch types:", e);
+          schema.types = [];
+        }
+
+        // Fetch procedures (stored procedures, distinct from functions)
+        setSchemaProgress({ phase: "procedures", current: 8, total: 12 });
+        try {
+          const procedures = await currentDb.select(`
+            SELECT routine_schema as routine_schema, routine_name as routine_name
+            FROM information_schema.routines
+            WHERE routine_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
+              AND routine_type = 'PROCEDURE'
+              ${schemaFilter}
+            ORDER BY routine_schema, routine_name
+          `);
+          schema.procedures = procedures.length > 0 ? procedures.map((p: any) =>
+            p.routine_schema === 'public' ? p.routine_name : `${p.routine_schema}.${p.routine_name}`
+          ) : [];
+        } catch (e) {
+          console.error("Failed to fetch procedures:", e);
+          schema.procedures = [];
+        }
+
+        // Fetch operators
+        setSchemaProgress({ phase: "operators", current: 9, total: 12 });
+        try {
+          const operators = await currentDb.select(`
+            SELECT n.nspname AS operator_schema, o.oprname AS operator_name
+            FROM pg_operator o
+            JOIN pg_namespace n ON o.oprnamespace = n.oid
+            WHERE n.nspname NOT IN ('information_schema', 'pg_catalog', 'topology')
+            ORDER BY n.nspname, o.oprname
+          `);
+          schema.operators = operators.length > 0 ? operators.map((o: any) =>
+            o.operator_schema === 'public' ? o.operator_name : `${o.operator_schema}.${o.operator_name}`
+          ) : [];
+        } catch (e) {
+          console.error("Failed to fetch operators:", e);
+          schema.operators = [];
+        }
+
+        // Fetch foreign tables
+        setSchemaProgress({ phase: "foreign_tables", current: 10, total: 12 });
+        try {
+          const foreignTables = await currentDb.select(`
+            SELECT foreign_table_schema, foreign_table_name
+            FROM information_schema.foreign_tables
+            WHERE foreign_table_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
+              ${schemaFilter}
+            ORDER BY foreign_table_schema, foreign_table_name
+          `);
+          schema.foreignTables = foreignTables.length > 0 ? foreignTables.map((ft: any) =>
+            ft.foreign_table_schema === 'public' ? ft.foreign_table_name : `${ft.foreign_table_schema}.${ft.foreign_table_name}`
+          ) : [];
+        } catch (e) {
+          console.error("Failed to fetch foreign tables:", e);
+          schema.foreignTables = [];
+        }
+
         // Fetch columns for IntelliSense
-        setSchemaProgress({ phase: "columns", current: 7, total: 8 }); 
+        setSchemaProgress({ phase: "columns", current: 11, total: 12 }); 
         try {
           const cols = await currentDb.select(`
               SELECT 
@@ -826,7 +965,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         }
 
         // Fetch Foreign Keys for smart completion
-        setSchemaProgress({ phase: "foreign_keys", current: 7, total: 7 });
+        setSchemaProgress({ phase: "foreign_keys", current: 12, total: 12 });
         try {
           const fks = await currentDb.select(`
               SELECT
@@ -846,12 +985,56 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           console.error("Failed to fetch Foreign Keys:", err);
         }
 
+        // Fetch extensions
+        try {
+          const extensions = await currentDb.select(`
+            SELECT extname FROM pg_extension ORDER BY extname
+          `);
+          schema.extensions = extensions.map((e: any) => e.extname);
+        } catch (e) {
+          schema.extensions = [];
+        }
+
+        // Fetch event triggers
+        try {
+          const eventTriggers = await currentDb.select(`
+            SELECT evtname FROM pg_event_trigger ORDER BY evtname
+          `);
+          schema.eventTriggers = eventTriggers.map((t: any) => t.evtname);
+        } catch (e) {
+          schema.eventTriggers = [];
+        }
+
+        // Fetch procedural languages
+        try {
+          const languages = await currentDb.select(`
+            SELECT lanname FROM pg_language WHERE lanispl = true ORDER BY lanname
+          `);
+          schema.languages = languages.map((l: any) => l.lanname);
+        } catch (e) {
+          schema.languages = [];
+        }
+
       } else if (["mysql", "mariadb"].includes(activeConnection.type)) {
         const tables = await currentDb.select(`SHOW TABLES`);
         schema.tables = tables.map((t: any) => Object.values(t)[0] as string);
 
         const views = await currentDb.select(`SHOW FULL TABLES WHERE Table_type = 'VIEW'`);
         schema.views = views.map((t: any) => Object.values(t)[0] as string);
+
+        // Fetch MySQL stored procedures
+        try {
+          const procedures = await currentDb.select(`
+            SELECT ROUTINE_NAME AS routine_name
+            FROM information_schema.ROUTINES
+            WHERE ROUTINE_SCHEMA = DATABASE() AND ROUTINE_TYPE = 'PROCEDURE'
+            ORDER BY ROUTINE_NAME
+          `);
+          schema.procedures = procedures.map((p: any) => p.routine_name);
+        } catch (err) {
+          console.error("Failed to fetch MySQL procedures:", err);
+          schema.procedures = [];
+        }
 
         // Fetch Foreign Keys for MySQL completion
         try {
@@ -879,7 +1062,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         ...schema, 
         _ts: Date.now() 
       }));
-      setSchemaProgress({ phase: "complete", current: 7, total: 7 });
+      setSchemaProgress({ phase: "complete", current: 12, total: 12 });
     } catch (error) {
       console.error("Failed to load schema:", error);
       setSchemaItems(null);
@@ -888,7 +1071,31 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     }
   };
 
-const getDDL = async (type: string, name: string): Promise<string> => {
+  const buildRoleDDL = (role: any, isLogin: boolean): string => {
+    let ddl = `CREATE ROLE ${role.rolname} WITH`;
+    const opts: string[] = [];
+    opts.push(isLogin ? 'LOGIN' : 'NOLOGIN');
+    opts.push(role.rolsuper ? 'SUPERUSER' : 'NOSUPERUSER');
+    opts.push(role.rolcreatedb ? 'CREATEDB' : 'NOCREATEDB');
+    opts.push(role.rolcreaterole ? 'CREATEROLE' : 'NOCREATEROLE');
+    opts.push(role.rolinherit ? 'INHERIT' : 'NOINHERIT');
+    opts.push(role.rolreplication ? 'REPLICATION' : 'NOREPLICATION');
+    opts.push(role.rolbypassrls ? 'BYPASSRLS' : 'NOBYPASSRLS');
+    if (role.rolpassword) {
+      opts.push(`ENCRYPTED PASSWORD '${role.rolpassword}'`);
+    }
+    const connLimit = role.rolconnlimit ?? -1;
+    opts.push(`CONNECTION LIMIT ${connLimit}`);
+    if (role.rolvaliduntil) {
+      opts.push(`VALID UNTIL '${role.rolvaliduntil}'`);
+    } else {
+      opts.push("VALID UNTIL 'infinity'");
+    }
+    ddl += '\n  ' + opts.join('\n  ') + ';';
+    return ddl;
+  };
+
+  const getDDL = async (type: string, name: string): Promise<string> => {
     if (!activeConnection || !currentDb) return "";
     
     // Parse name - could be "table" or "schema.table"
@@ -1062,6 +1269,57 @@ const getDDL = async (type: string, name: string): Promise<string> => {
           } catch (e) {
             return `-- Could not get function definition: ${e}`;
           }
+        } else if (type === "procedure") {
+          try {
+            const parts = name.includes('.') ? name.split('.') : ['public', name];
+            const schema = parts.length >= 2 ? parts[0] : 'public';
+            const procName = parts.length >= 2 ? parts.slice(1).join('.') : name;
+            const result = await currentDb.select(`
+              SELECT pg_get_functiondef(p.oid)
+              FROM pg_proc p
+              JOIN pg_namespace n ON p.pronamespace = n.oid
+              WHERE p.proname = $1 AND n.nspname = $2 AND p.prokind = 'p'
+            `, [procName, schema]);
+            if (result && result.length > 0) return result[0].pg_get_functiondef;
+            return `-- Procedure ${name} not found`;
+          } catch (e) {
+            return `-- Could not get procedure definition: ${e}`;
+          }
+        } else if (type === "operator") {
+          try {
+            const parts = name.includes('.') ? name.split('.') : ['public', name];
+            const schema = parts.length >= 2 ? parts[0] : 'public';
+            const opName = parts.length >= 2 ? parts.slice(1).join('.') : name;
+            const opInfo = await currentDb.select(`
+              SELECT o.oprname,
+                     CASE WHEN o.oprkind = 'b' THEN 'infix' WHEN o.oprkind = 'l' THEN 'prefix' END AS kind,
+                     left_type.typname AS left_type,
+                     right_type.typname AS right_type,
+                     result_type.typname AS result_type,
+                     o.oprcode::regproc AS func_name
+              FROM pg_operator o
+              LEFT JOIN pg_type left_type ON o.oprleft = left_type.oid
+              LEFT JOIN pg_type right_type ON o.oprright = right_type.oid
+              JOIN pg_type result_type ON o.oprresult = result_type.oid
+              JOIN pg_namespace n ON o.oprnamespace = n.oid
+              WHERE o.oprname = $1 AND n.nspname = $2
+            `, [opName, schema]);
+            if (!opInfo || opInfo.length === 0) {
+              return `-- Operator ${name} not found`;
+            }
+            const op = opInfo[0];
+            let ddl = `CREATE OPERATOR ${op.oprname} (\n  FUNCTION = ${op.func_name}`;
+            if (op.kind === 'prefix' || op.kind === 'infix') {
+              if (op.right_type) ddl += `,\n  RIGHTARG = ${op.right_type}`;
+            }
+            if (op.kind === 'infix') {
+              if (op.left_type) ddl += `,\n  LEFTARG = ${op.left_type}`;
+            }
+            ddl += `\n);`;
+            return ddl;
+          } catch (e) {
+            return `-- Could not get operator definition: ${e}`;
+          }
         } else if (type === "index") {
           try {
             const result = await currentDb.select("SELECT pg_get_indexdef($1::regclass)", [name]);
@@ -1104,6 +1362,225 @@ const getDDL = async (type: string, name: string): Promise<string> => {
             return `-- Sequence ${name} not found`;
           } catch (e) {
             return `-- Could not get sequence definition: ${e}`;
+          }
+        } else if (type === "type") {
+          try {
+            const typeInfo = await currentDb.select(`
+              SELECT t.typtype, n.nspname AS schema_name, t.typname AS type_name
+              FROM pg_type t
+              JOIN pg_namespace n ON t.typnamespace = n.oid
+              WHERE (n.nspname || '.' || t.typname = $1)
+                 OR (t.typname = $1 AND n.nspname = 'public')
+            `, [name]);
+            if (!typeInfo || typeInfo.length === 0) {
+              return `-- Type ${name} not found`;
+            }
+            const ti = typeInfo[0];
+            if (ti.typtype === 'e') {
+              const enumVals = await currentDb.select(`
+                SELECT e.enumlabel
+                FROM pg_enum e
+                JOIN pg_type t ON e.enumtypid = t.oid
+                JOIN pg_namespace n ON t.typnamespace = n.oid
+                WHERE (n.nspname || '.' || t.typname = $1)
+                   OR (t.typname = $1 AND n.nspname = 'public')
+                ORDER BY e.enumsortorder
+              `, [name]);
+              const labels = enumVals.map((e: any) => `'${e.enumlabel.replace(/'/g, "''")}'`).join(', ');
+              return `CREATE TYPE ${name} AS ENUM (${labels});`;
+            } else if (ti.typtype === 'd') {
+              const domainInfo = await currentDb.select(`
+                SELECT t.typbasetype::regtype AS base_type,
+                       t.typdefault,
+                       (SELECT cc.consrc FROM pg_constraint cc
+                        WHERE cc.contypid = t.oid AND cc.contype = 'c' LIMIT 1) AS check_expr
+                FROM pg_type t
+                WHERE t.oid = (SELECT t2.oid FROM pg_type t2
+                               JOIN pg_namespace n2 ON t2.typnamespace = n2.oid
+                               WHERE (n2.nspname || '.' || t2.typname = $1)
+                                  OR (t2.typname = $1 AND n2.nspname = 'public'))
+              `, [name]);
+              if (domainInfo && domainInfo.length > 0) {
+                let ddl = `CREATE DOMAIN ${name} AS ${domainInfo[0].base_type}`;
+                if (domainInfo[0].typdefault) {
+                  ddl += ` DEFAULT ${domainInfo[0].typdefault}`;
+                }
+                if (domainInfo[0].check_expr) {
+                  ddl += ` CONSTRAINT ${ti.type_name}_check CHECK (${domainInfo[0].check_expr})`;
+                }
+                ddl += ';';
+                return ddl;
+              }
+              return `-- Domain ${name} found but definition could not be reconstructed`;
+            } else {
+              return `-- Type ${name} (kind: ${ti.typtype}) — DDL viewer only supports ENUM and DOMAIN types`;
+            }
+          } catch (e) {
+            return `-- Could not get type definition: ${e}`;
+          }
+        } else if (type === "foreign_table") {
+          try {
+            const ftInfo = await currentDb.select(`
+              SELECT ft.foreign_table_name, ft.foreign_server_name,
+                     (SELECT fdw.fdwname FROM pg_foreign_server fs
+                      JOIN pg_foreign_data_wrapper fdw ON fs.srvfdw = fdw.oid
+                      WHERE fs.srvname = ft.foreign_server_name) AS fdw_name
+              FROM information_schema.foreign_tables ft
+              WHERE ft.foreign_table_name = $1
+            `, [tablePart]);
+            if (!ftInfo || ftInfo.length === 0) {
+              return `-- Foreign table ${name} not found`;
+            }
+            const cols = await currentDb.select(`
+              SELECT column_name, data_type, is_nullable, column_default
+              FROM information_schema.columns
+              WHERE table_name = $1 AND table_schema = $2
+              ORDER BY ordinal_position
+            `, [tablePart, schemaPart]);
+            const colDefs = cols.map((c: any) => {
+              let def = `  ${c.column_name} ${c.data_type}`;
+              if (c.is_nullable === 'NO') def += ' NOT NULL';
+              if (c.column_default) def += ` DEFAULT ${c.column_default}`;
+              return def;
+            });
+            const opts = await currentDb.select(`
+              SELECT option_name, option_value
+              FROM information_schema.foreign_table_options
+              WHERE foreign_table_name = $1 AND foreign_table_schema = $2
+            `, [tablePart, schemaPart]);
+            const optStr = opts.map((o: any) => `${o.option_name} '${o.option_value.replace(/'/g, "''")}'`).join(',\n  ');
+            let ddl = `CREATE FOREIGN TABLE ${name} (\n${colDefs.join(',\n')}\n)\n`;
+            ddl += `SERVER ${ftInfo[0].foreign_server_name}`;
+            if (optStr) ddl += `\nOPTIONS (\n  ${optStr}\n)`;
+            ddl += ';';
+            return ddl;
+          } catch (e) {
+            return `-- Could not get foreign table definition: ${e}`;
+          }
+        } else if (type === "language") {
+          try {
+            const langInfo = await currentDb.select(`
+              SELECT lanname, lanpltrusted,
+                     lanplcallfoid::regproc AS handler,
+                     laninline::regproc AS inline_handler,
+                     lanvalidator::regproc AS validator
+              FROM pg_language
+              WHERE lanname = $1 AND lanispl = true
+            `, [name]);
+            if (!langInfo || langInfo.length === 0) {
+              return `-- Language ${name} not found`;
+            }
+            const li = langInfo[0];
+            let ddl = `CREATE ${li.lanpltrusted ? 'TRUSTED ' : ''}PROCEDURAL LANGUAGE ${li.lanname}`;
+            if (li.handler && li.handler !== '-') {
+              ddl += `\n  HANDLER ${li.handler}`;
+            }
+            if (li.inline_handler && li.inline_handler !== '-') {
+              ddl += `\n  INLINE ${li.inline_handler}`;
+            }
+            if (li.validator && li.validator !== '-') {
+              ddl += `\n  VALIDATOR ${li.validator}`;
+            }
+            ddl += ';';
+            return ddl;
+          } catch (e) {
+            return `-- Could not get language definition: ${e}`;
+          }
+        } else if (type === "extension") {
+          try {
+            const extInfo = await currentDb.select(`
+              SELECT e.extname, e.extversion, n.nspname AS schema_name
+              FROM pg_extension e
+              JOIN pg_namespace n ON e.extnamespace = n.oid
+              WHERE e.extname = $1
+            `, [name]);
+            if (!extInfo || extInfo.length === 0) {
+              return `-- Extension ${name} not found`;
+            }
+            const ei = extInfo[0];
+            let ddl = `CREATE EXTENSION IF NOT EXISTS ${ei.extname}`;
+            if (ei.schema_name) {
+              ddl += `\n  SCHEMA ${ei.schema_name}`;
+            }
+            if (ei.extversion) {
+              ddl += `\n  VERSION '${ei.extversion.replace(/'/g, "''")}'`;
+            }
+            ddl += ';';
+            return ddl;
+          } catch (e) {
+            return `-- Could not get extension definition: ${e}`;
+          }
+        } else if (type === "tablespace") {
+          try {
+            const tsInfo = await currentDb.select(`
+              SELECT spcname, spcowner::regrole AS owner, pg_tablespace_location(oid) AS location, spcoptions
+              FROM pg_tablespace WHERE spcname = $1
+            `, [name]);
+            if (!tsInfo || tsInfo.length === 0) {
+              return `-- Tablespace ${name} not found`;
+            }
+            const ts = tsInfo[0];
+            let ddl = `CREATE TABLESPACE ${ts.spcname}\n  OWNER ${ts.owner}`;
+            if (ts.location) ddl += `\n  LOCATION '${ts.location.replace(/'/g, "''")}'`;
+            if (ts.spcoptions) {
+              ddl += `\n  WITH (${(ts.spcoptions as string[]).join(', ')})`;
+            }
+            ddl += ';';
+            return ddl;
+          } catch (e) {
+            return `-- Could not get tablespace definition: ${e}`;
+          }
+        } else if (type === "login_role") {
+          try {
+            let roleInfo;
+            try {
+              roleInfo = await currentDb.select(`
+                SELECT r.rolname, r.rolsuper, r.rolinherit, r.rolcreaterole, r.rolcreatedb, r.rolcanlogin,
+                       r.rolreplication, r.rolbypassrls, r.rolconnlimit,
+                       r.rolvaliduntil AT TIME ZONE 'UTC' AS rolvaliduntil,
+                       (SELECT rolpassword FROM pg_authid WHERE rolname = r.rolname) AS rolpassword
+                FROM pg_roles r WHERE r.rolname = $1
+              `, [name]);
+            } catch {
+              roleInfo = await currentDb.select(`
+                SELECT rolname, rolsuper, rolinherit, rolcreaterole, rolcreatedb, rolcanlogin,
+                       rolreplication, rolbypassrls, rolconnlimit,
+                       rolvaliduntil AT TIME ZONE 'UTC' AS rolvaliduntil
+                FROM pg_roles WHERE rolname = $1
+              `, [name]);
+            }
+            if (!roleInfo || roleInfo.length === 0) {
+              return `-- Role ${name} not found`;
+            }
+            return buildRoleDDL(roleInfo[0], true);
+          } catch (e) {
+            return `-- Could not get role definition: ${e}`;
+          }
+        } else if (type === "group_role") {
+          try {
+            let roleInfo;
+            try {
+              roleInfo = await currentDb.select(`
+                SELECT r.rolname, r.rolsuper, r.rolinherit, r.rolcreaterole, r.rolcreatedb, r.rolcanlogin,
+                       r.rolreplication, r.rolbypassrls, r.rolconnlimit,
+                       r.rolvaliduntil AT TIME ZONE 'UTC' AS rolvaliduntil,
+                       (SELECT rolpassword FROM pg_authid WHERE rolname = r.rolname) AS rolpassword
+                FROM pg_roles r WHERE r.rolname = $1
+              `, [name]);
+            } catch {
+              roleInfo = await currentDb.select(`
+                SELECT rolname, rolsuper, rolinherit, rolcreaterole, rolcreatedb, rolcanlogin,
+                       rolreplication, rolbypassrls, rolconnlimit,
+                       rolvaliduntil AT TIME ZONE 'UTC' AS rolvaliduntil
+                FROM pg_roles WHERE rolname = $1
+              `, [name]);
+            }
+            if (!roleInfo || roleInfo.length === 0) {
+              return `-- Role ${name} not found`;
+            }
+            return buildRoleDDL(roleInfo[0], false);
+          } catch (e) {
+            return `-- Could not get role definition: ${e}`;
           }
         }
       } else if (["mysql", "mariadb"].includes(activeConnection.type)) {
@@ -1331,6 +1808,77 @@ SELECT ${colList} FROM ${schemaPart}.${tablePart};
     }
   };
 
+  const refreshRoles = async () => {
+    if (!currentDb) return;
+    try {
+      const roleRows = await currentDb.select(
+        "SELECT rolname, rolcanlogin FROM pg_roles WHERE rolname !~ '^pg_' ORDER BY rolname"
+      );
+      const login: string[] = [];
+      const group: string[] = [];
+      for (const r of roleRows) {
+        if (r.rolcanlogin) login.push(r.rolname);
+        else group.push(r.rolname);
+      }
+      setRoles({ login, group });
+    } catch (e) {
+      console.error("Failed to refresh roles:", e);
+    }
+  };
+
+  const createRole = async (payload: CreateRolePayload) => {
+    if (!activeConnection || !currentDb) {
+      throw new Error("Not connected to a database");
+    }
+    if (!schemaStore.allowSqlExecute) {
+      throw new Error(`Execution Denied: Enable "Allow SQL Execution" in settings to create roles.`);
+    }
+    if (!["postgres", "supabase", "cockroach"].includes(activeConnection.type)) {
+      throw new Error(`Create Role is not supported for ${activeConnection.type}`);
+    }
+
+    try {
+      const name = payload.name.trim();
+      if (!name) throw new Error("Role name is required");
+
+      let sql = `CREATE ROLE "${name}" WITH`;
+
+      // Login / NOLOGIN — always emitted since it's the key distinction
+      sql += payload.canLogin ? " LOGIN" : " NOLOGIN";
+
+      // Password (Postgres encrypts by default since PG 10)
+      if (payload.password) {
+        // Escape single quotes in password
+        const escaped = payload.password.replace(/'/g, "''");
+        sql += ` PASSWORD '${escaped}'`;
+      } else {
+        sql += " PASSWORD NULL";
+      }
+
+      // Privilege clauses — only emit when set to non-default value
+      if (payload.superuser) sql += " SUPERUSER";
+      if (payload.createDatabases) sql += " CREATEDB";
+      if (payload.createRoles) sql += " CREATEROLE";
+      if (payload.replication) sql += " REPLICATION";
+      if (payload.bypassRLS) sql += " BYPASSRLS";
+      if (!payload.inherit) sql += " NOINHERIT";
+
+      if (payload.connectionLimit !== undefined && payload.connectionLimit >= 0) {
+        sql += ` CONNECTION LIMIT ${payload.connectionLimit}`;
+      }
+
+      if (payload.validUntil) {
+        sql += ` VALID UNTIL '${payload.validUntil}'`;
+      }
+
+      await currentDb.execute(sql);
+      await refreshRoles();
+    } catch (e: any) {
+      console.error("Create role failed:", e);
+      throw e;
+    }
+  };
+
   const createTable = async (payload: CreateTablePayload) => {
     if (!activeConnection || !currentDb) return;
     if (!schemaStore.allowSqlExecute) {
@@ -1536,6 +2084,9 @@ SELECT ${colList} FROM ${schemaPart}.${tablePart};
         selectedDatabase,
         databases,
         schemaItems,
+        roles,
+        setRoles,
+        tablespaces,
         isLoadingSchema,
         currentDb,
         schemaProgress,
@@ -1555,6 +2106,8 @@ SELECT ${colList} FROM ${schemaPart}.${tablePart};
         copyTableData,
         dropDatabase,
         createDatabase,
+        createRole,
+        refreshRoles,
         createTable,
         executeDataCopy,
         reloadConnections,
