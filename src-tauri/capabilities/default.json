@@ -16,6 +16,30 @@
     "process:allow-restart",
     "fs:default",
     {
+      "identifier": "fs:allow-mkdir",
+      "allow": [
+        { "path": "$APPDATA/**" },
+        { "path": "$APPCONFIG/**" },
+        { "path": "$APPLOCALDATA/**" },
+        { "path": "$DOWNLOAD/**" },
+        { "path": "$DOCUMENT/**" },
+        { "path": "$DESKTOP/**" },
+        { "path": "$HOME/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-exists",
+      "allow": [
+        { "path": "$APPDATA/**" },
+        { "path": "$APPCONFIG/**" },
+        { "path": "$APPLOCALDATA/**" },
+        { "path": "$DOWNLOAD/**" },
+        { "path": "$DOCUMENT/**" },
+        { "path": "$DESKTOP/**" },
+        { "path": "$HOME/**" }
+      ]
+    },
+    {
       "identifier": "fs:allow-write-text-file",
       "allow": [
         { "path": "$APPDATA/**" },
@@ -23,7 +47,8 @@
         { "path": "$APPLOCALDATA/**" },
         { "path": "$DOWNLOAD/**" },
         { "path": "$DOCUMENT/**" },
-        { "path": "$DESKTOP/**" }
+        { "path": "$DESKTOP/**" },
+        { "path": "$HOME/**" }
       ]
     },
     {
@@ -34,7 +59,8 @@
         { "path": "$APPLOCALDATA/**" },
         { "path": "$DOWNLOAD/**" },
         { "path": "$DOCUMENT/**" },
-        { "path": "$DESKTOP/**" }
+        { "path": "$DESKTOP/**" },
+        { "path": "$HOME/**" }
       ]
     }
   ]

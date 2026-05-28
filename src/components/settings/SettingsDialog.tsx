@@ -756,6 +756,41 @@ function AutoSaveSettings() {
               </p>
             </div>
           )}
+
+          {settings.autoSaveEnabled && (
+            <div>
+              <label className="block text-xs font-medium mb-1.5">Save directory</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={settings.autoSavePath}
+                  onChange={(e) => settings.setSetting("autoSavePath", e.target.value)}
+                  placeholder="Default (app data directory)"
+                  className="flex-1 px-2 py-1.5 text-sm rounded bg-[var(--surface-base)] border border-[var(--neutral-6)] outline-none focus:border-[var(--accent-8)] text-[var(--neutral-12)] placeholder:text-[var(--neutral-9)]"
+                />
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      const { open } = await import("@tauri-apps/plugin-dialog");
+                      const selected = await open({ directory: true, multiple: false, title: "Choose Auto-Save Directory" });
+                      if (selected && typeof selected === "string") {
+                        settings.setSetting("autoSavePath", selected);
+                      }
+                    } catch {
+                      // Outside Tauri — skip silently
+                    }
+                  }}
+                  className="px-3 py-1.5 text-xs rounded bg-[var(--accent-9)] text-white hover:bg-[var(--accent-10)] transition-colors"
+                >
+                  Browse
+                </button>
+              </div>
+              <p className="text-[10px] text-[var(--neutral-11)] mt-1 opacity-60">
+                Leave empty to use the default app data directory.
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </div>

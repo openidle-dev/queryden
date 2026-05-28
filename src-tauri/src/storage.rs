@@ -1347,6 +1347,54 @@ pub fn clear_local_history(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// ─── Session persistence (open query tabs) ───────────────────────────────────
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTabDto {
+    pub id: String,
+    pub name: String,
+    pub query: String,
+    pub original_query: Option<String>,
+    pub saved_query_name: Option<String>,
+    pub target_connection_id: Option<String>,
+    pub target_connection_name: Option<String>,
+    pub target_database: Option<String>,
+    pub use_psql: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionsData {
+    pub tabs: Vec<SessionTabDto>,
+    pub active_tab_id: Option<String>,
+    pub version: u32,
+}
+
+#[tauri::command]
+pub fn save_sessions(app: tauri::AppHandle, tabs: Vec<SessionTabDto>, active_tab_id: Option<String>) -> Result<(), String> {
+    let dir = ensure_app_dir(&app)?;
+    let data = SessionsData { tabs, active_tab_id, version: 1 };
+    let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
+    let path = dir.join("sessions.json");
+    fs::write(&path, json).map_err(|e| e.to_string())?;
+    set_restricted_permissions(&path);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn load_sessions(app: tauri::AppHandle) -> Result<SessionsData, String> {
+    let dir = get_app_data_dir(&app);
+    let path = dir.join("sessions.json");
+    if !path.exists() {
+        return Ok(SessionsData { tabs: vec![], active_tab_id: None, version: 1 });
+    }
+    let json = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    serde_json::from_str(&json).map_err(|e| e.to_string())
+}
+
+// ─── Master key storage status ────────────────────────────────────────────────
+
 #[derive(Serialize)]
 pub struct MasterKeyStorageStatus {
     pub status: String,

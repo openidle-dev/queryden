@@ -193,8 +193,9 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
   useEffect(() => {
     // suppressTabSwitch prevents auto-switching when save/delete refreshes results
     if (!suppressTabSwitch) {
-      if (error || successMessage) setActiveTab("messages");
+      if (error) setActiveTab("messages");
       else if (results.length > 0 || (multiResults && multiResults.length > 0)) setActiveTab("result");
+      else if (successMessage) setActiveTab("messages");
     }
 
     // Reset local sorting when actual data content changes (likely new query)
@@ -636,7 +637,7 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
                 if (onAddRow) {
                   const rowIdx = selectedIndex >= 0 ? selectedIndex : gridSelection.rows.toArray()[0];
                   if (rowIdx !== undefined) {
-                    const { id, _isNew, ...newRow } = sortedResults[rowIdx];
+                    const { id, _isNew, _isModified, ...newRow } = sortedResults[rowIdx];
                     await onAddRow(newRow, true);
                   }
                 }
