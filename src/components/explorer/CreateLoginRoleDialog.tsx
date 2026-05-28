@@ -63,7 +63,10 @@ export function CreateLoginRoleDialog({ isOpen, onClose, onCreate }: CreateLogin
   };
 
   return (
-    <Dialog open={isOpen} onClose={handleClose} size="md" initialFocusRef={nameInputRef}>
+    <Dialog open={isOpen} onClose={handleClose} size="md" initialFocusRef={nameInputRef}
+      dismissOnBackdrop={!isSubmitting}
+      dismissOnEsc={!isSubmitting}
+    >
       <Dialog.Title onClose={handleClose}>
         <span className="inline-flex items-center gap-2">
           <User className="w-4 h-4 text-[var(--success-9)]" />
@@ -193,7 +196,7 @@ export function CreateLoginRoleDialog({ isOpen, onClose, onCreate }: CreateLogin
         </Dialog.Body>
 
         <Dialog.Footer>
-          <Button type="button" variant="ghost" size="sm" onClick={handleClose}>
+          <Button type="button" variant="ghost" size="sm" onClick={handleClose} disabled={isSubmitting}>
             Cancel
           </Button>
           <Button

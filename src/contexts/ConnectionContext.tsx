@@ -147,6 +147,7 @@ interface ConnectionContextType {
   dropDatabase: (dbName: string) => Promise<void>;
   createDatabase: (payload: CreateDatabasePayload) => Promise<void>;
   createRole: (payload: CreateRolePayload) => Promise<void>;
+  dropRole: (roleName: string) => Promise<void>;
   refreshRoles: () => Promise<void>;
   createTable: (payload: CreateTablePayload) => Promise<void>;
   executeDataCopy: (sourceTable: string, targetTable: string, targetDB: string, options?: {
@@ -1840,8 +1841,9 @@ SELECT ${colList} FROM ${schemaPart}.${tablePart};
     try {
       const name = payload.name.trim();
       if (!name) throw new Error("Role name is required");
+      const quotedName = quoteIdentifier(name, activeConnection.type);
 
-      let sql = `CREATE ROLE "${name}" WITH`;
+      let sql = `CREATE ROLE ${quotedName} WITH`;
 
       // Login / NOLOGIN — always emitted since it's the key distinction
       sql += payload.canLogin ? " LOGIN" : " NOLOGIN";
@@ -1868,7 +1870,8 @@ SELECT ${colList} FROM ${schemaPart}.${tablePart};
       }
 
       if (payload.validUntil) {
-        sql += ` VALID UNTIL '${payload.validUntil}'`;
+        const escaped = payload.validUntil.replace(/'/g, "''");
+        sql += ` VALID UNTIL '${escaped}'`;
       }
 
       await currentDb.execute(sql);
@@ -1877,6 +1880,21 @@ SELECT ${colList} FROM ${schemaPart}.${tablePart};
       console.error("Create role failed:", e);
       throw e;
     }
+  };
+
+  const dropRole = async (roleName: string) => {
+    if (!activeConnection || !currentDb) {
+      throw new Error("Not connected to a database");
+    }
+    if (!schemaStore.allowSqlExecute) {
+      throw new Error(`Execution Denied: Enable "Allow SQL Execution" in settings to drop roles.`);
+    }
+    if (!["postgres", "supabase", "cockroach"].includes(activeConnection.type)) {
+      throw new Error(`Drop Role is not supported for ${activeConnection.type}`);
+    }
+    const quotedName = quoteIdentifier(roleName, activeConnection.type);
+    await currentDb.execute(`DROP ROLE IF EXISTS ${quotedName}`);
+    await refreshRoles();
   };
 
   const createTable = async (payload: CreateTablePayload) => {
@@ -2107,6 +2125,7 @@ SELECT ${colList} FROM ${schemaPart}.${tablePart};
         dropDatabase,
         createDatabase,
         createRole,
+        dropRole,
         refreshRoles,
         createTable,
         executeDataCopy,

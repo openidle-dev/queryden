@@ -47,7 +47,7 @@ interface DatabaseExplorerProps {
 }
 
 export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: DatabaseExplorerProps = {}) {
-  const { connections, activeConnection, selectedDatabase, databases, removeConnection, updateConnection, connectToDatabase, schemaItems, loadSchema, getDDL, generateStatement, isLoadingSchema, currentDb, schemaProgress, dropDatabase, createDatabase, createRole, createTable, vaultCredentials, initialLoadDone, getSelectedSchemas, folders, addFolder, renameFolder, removeFolder, moveConnectionToFolder, moveFolder, roles, refreshRoles, tablespaces } = useConnections();
+  const { connections, activeConnection, selectedDatabase, databases, removeConnection, updateConnection, connectToDatabase, schemaItems, loadSchema, getDDL, generateStatement, isLoadingSchema, currentDb, schemaProgress, dropDatabase, createDatabase, createRole, createTable, vaultCredentials, initialLoadDone, getSelectedSchemas, folders, addFolder, renameFolder, removeFolder, moveConnectionToFolder, moveFolder, roles, dropRole, tablespaces } = useConnections();
   // Ref keeps the latest activeConnection so server-node action() closures
   // always see the current value, not the one captured at tree-build time.
   const activeConnectionRef = useRef(activeConnection);
@@ -533,7 +533,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
     }
 
     setSchemaTree(tree);
-  }, [connections, activeConnection, selectedDatabase, settings, schemaItems, databases, isLoadingSchema, loadingDatabases, tableDetails, loadingTableDetails, viewMode, folders, roles]);
+  }, [connections, activeConnection, selectedDatabase, settings, schemaItems, databases, isLoadingSchema, loadingDatabases, tableDetails, loadingTableDetails, viewMode, folders, roles, tablespaces]);
 
   const toggleExpand = async (nodeId: string) => {
     const wasExpanded = expandedNodes.has(nodeId);
@@ -2554,8 +2554,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                     });
                     if (!confirmed) return;
                     try {
-                      await currentDb.execute(`DROP ROLE IF EXISTS "${roleName}"`);
-                      await refreshRoles();
+                      await dropRole(roleName);
                     } catch (e: any) {
                       console.error("Drop role failed:", e);
                     }
