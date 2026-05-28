@@ -65,6 +65,7 @@ export interface DBSettings {
   // Auto Save
   autoSaveEnabled: boolean;
   autoSaveInterval: number;  // seconds
+  autoSavePath: string;       // empty = default (appDataDir/auto-save)
 
   // Export Formats
   enabledExportFormats: string[];
@@ -140,6 +141,7 @@ const defaultSettings: Omit<DBSettings, "setSetting" | "resetSettings"> = {
   // Auto Save
   autoSaveEnabled: true,
   autoSaveInterval: 30,
+  autoSavePath: "",
 };
 
 function isTauri(): boolean {
