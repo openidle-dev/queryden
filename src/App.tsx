@@ -46,6 +46,17 @@ function AppContent() {
     setShowDesignSystem(false);
   };
 
+  // Suppress the webview's default right-click context menu (Reload/Inspect).
+  // Custom context menus (Monaco editor, etc.) stop propagation so they
+  // bypass this guard and work normally.
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      e.preventDefault();
+    };
+    document.addEventListener("contextmenu", handler);
+    return () => document.removeEventListener("contextmenu", handler);
+  }, []);
+
   // Global keyboard shortcut handler
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {

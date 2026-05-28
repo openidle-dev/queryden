@@ -187,6 +187,28 @@ export interface MasterKeyStorageStatusDto {
   status: "keyring" | "file_fallback" | "unavailable";
 }
 
+/**
+ * Mirror of `storage.rs::SessionTabDto` (serde `rename_all = "camelCase"`).
+ * Fields use camelCase to match the Rust-side serialization.
+ */
+export interface SessionTabDto {
+  id: string;
+  name: string;
+  query: string;
+  originalQuery?: string;
+  savedQueryName?: string;
+  targetConnectionId?: string;
+  targetConnectionName?: string;
+  targetDatabase?: string;
+  usePsql?: boolean;
+}
+
+export interface SessionsDataDto {
+  tabs: SessionTabDto[];
+  activeTabId: string | null;
+  version: number;
+}
+
 // ─── Command map ─────────────────────────────────────────────────────────────
 
 /**
@@ -255,6 +277,13 @@ export interface IpcCommands {
   // storage — folders (connection grouping, #104)
   save_folders: { args: { folders: FolderDto[] }; result: void };
   load_folders: { args: void; result: FolderDto[] };
+
+  // storage — sessions (open query tab persistence)
+  save_sessions: {
+    args: { tabs: SessionTabDto[]; activeTabId: string | null };
+    result: void;
+  };
+  load_sessions: { args: void; result: SessionsDataDto };
 
   // ssh
   create_ssh_tunnel: {

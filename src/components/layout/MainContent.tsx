@@ -107,7 +107,7 @@ export interface MultiResult {
 }
 
 export function MainContent() {
-  const { connections, folders, activeConnection, selectedDatabase, currentDb, vaultCredentials, databases: globalDatabases, connectToDatabase } = useConnections();
+  const { connections, folders, activeConnection, selectedDatabase, currentDb, vaultCredentials, databases: globalDatabases, connectToDatabase, initialLoadDone } = useConnections();
   const { addQuery } = useQueryHistory();
   const settings = useSettings();
   // Gates the query toolbar, tab strip, and results panel. Until a database
@@ -264,7 +264,8 @@ export function MainContent() {
   // Auto-save: debounced .sql file writer (#122).
   // On every query change, the debounce resets. When the user stops typing
   // for `autoSaveInterval` seconds, all tabs' current text is written to
-  // `<appDataDir>/auto-save/{folderName}_{dbName}_{shortId}.sql`.
+  // `<autoSavePath>/{folderName}_{dbName}_{shortId}.sql`.
+  // If autoSavePath is empty, falls back to `<appDataDir>/auto-save/`.
   // The folderName comes from the connection's parent folder (if any) or the
   // connection name; dbName from the selected database; shortId from the tab id.
   const autoSaveLastRef = useRef<Map<string, string>>(new Map());
@@ -277,10 +278,16 @@ export function MainContent() {
       const tabs = queryTabsRef.current;
       if (tabs.length === 0) return;
       try {
-        const { appDataDir, join } = await import("@tauri-apps/api/path");
+        const { join } = await import("@tauri-apps/api/path");
         const { mkdir, writeTextFile } = await import("@tauri-apps/plugin-fs");
-        const base = await appDataDir();
-        const dir = await join(base, "auto-save");
+        let dir: string;
+        if (settings.autoSavePath) {
+          dir = settings.autoSavePath;
+        } else {
+          const { appDataDir } = await import("@tauri-apps/api/path");
+          const base = await appDataDir();
+          dir = await join(base, "auto-save");
+        }
         await mkdir(dir, { recursive: true });
         const lastSaved = autoSaveLastRef.current;
         for (const tab of tabs) {
@@ -312,7 +319,77 @@ export function MainContent() {
     return () => {
       if (autoSaveDebounceRef.current) clearTimeout(autoSaveDebounceRef.current);
     };
-  }, [settings.autoSaveEnabled, settings.autoSaveInterval, queryTabs]);
+  }, [settings.autoSaveEnabled, settings.autoSaveInterval, settings.autoSavePath, queryTabs]);
+
+  // ── Session persistence: restore open tabs on startup ────────────────────
+  const sessionRestoredRef = useRef(false);
+  useEffect(() => {
+    if (!initialLoadDone) return;
+    if (sessionRestoredRef.current) return;
+    sessionRestoredRef.current = true;
+    (async () => {
+      try {
+        const { invokeCmd } = await import("../../lib/ipc");
+        const data = await invokeCmd("load_sessions");
+        if (data.tabs.length === 0) return;
+        const restored: QueryTab[] = data.tabs.map((t: any) => ({
+          id: t.id,
+          name: t.name,
+          query: t.query ?? "",
+          originalQuery: t.originalQuery,
+          savedQueryName: t.savedQueryName,
+          target: t.targetConnectionId
+            ? { connectionId: t.targetConnectionId, connectionName: t.targetConnectionName || "", database: t.targetDatabase || "" }
+            : undefined,
+          usePsql: t.usePsql ?? false,
+        }));
+        setQueryTabs(restored);
+        if (data.activeTabId && restored.some((t) => t.id === data.activeTabId)) {
+          setActiveTabId(data.activeTabId);
+          const tab = restored.find((t) => t.id === data.activeTabId);
+          if (tab?.target?.connectionId && tab.target?.database) {
+            try {
+              await connectToDatabase(tab.target.connectionId, tab.target.database);
+            } catch (e) {
+              logger.debug("Auto-restore connection failed:", e);
+            }
+          }
+        }
+        tabCounterRef.current = restored.length + 1;
+        logger.debug(`Restored ${restored.length} tabs from session`);
+      } catch (e) {
+        logger.debug("No saved session to restore:", e);
+      }
+    })();
+  }, [initialLoadDone]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Session persistence: save tabs whenever they change ──────────────────
+  const sessionSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (sessionSaveTimerRef.current) clearTimeout(sessionSaveTimerRef.current);
+    sessionSaveTimerRef.current = setTimeout(async () => {
+      try {
+        const { invokeCmd } = await import("../../lib/ipc");
+        const tabs = queryTabs.map((t) => ({
+          id: t.id,
+          name: t.name,
+          query: t.query ?? "",
+          originalQuery: t.originalQuery,
+          savedQueryName: t.savedQueryName,
+          targetConnectionId: t.target?.connectionId,
+          targetConnectionName: t.target?.connectionName,
+          targetDatabase: t.target?.database,
+          usePsql: t.usePsql ?? false,
+        }));
+        await invokeCmd("save_sessions", { tabs, activeTabId });
+      } catch (e) {
+        logger.debug("Failed to save session:", e);
+      }
+    }, 500);
+    return () => {
+      if (sessionSaveTimerRef.current) clearTimeout(sessionSaveTimerRef.current);
+    };
+  }, [queryTabs, activeTabId]);
 
   // Issue #51: invalidate the cached column-types when the active table
   // changes away from the one those types were collected for. An ad-hoc
@@ -1713,6 +1790,23 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         const { getDirtyTabs } = await import("../../utils/editorDirty");
         if (cancelled) return;
         unlisten = await getCurrentWindow().onCloseRequested(async (event) => {
+          // Save the current session before close so tabs are restored on next open.
+          try {
+            const { invokeCmd } = await import("../../lib/ipc");
+            const tabs = queryTabsRef.current.map((t) => ({
+              id: t.id,
+              name: t.name,
+              query: t.query ?? "",
+              originalQuery: t.originalQuery,
+              savedQueryName: t.savedQueryName,
+              targetConnectionId: t.target?.connectionId,
+              targetConnectionName: t.target?.connectionName,
+              targetDatabase: t.target?.database,
+              usePsql: t.usePsql ?? false,
+            }));
+            await invokeCmd("save_sessions", { tabs, activeTabId: activeTabIdRef.current ?? null });
+          } catch { /* non-critical */ }
+
           const dirty = getDirtyTabs(queryTabsRef.current);
           if (dirty.length === 0) return; // let the window close
 
@@ -1756,6 +1850,28 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       if (unlisten) unlisten();
     };
   }, [confirmDialog]);
+
+  // ── Unsaved queries: intercept webview reload (right-click → Reload, F5, Ctrl+R) ──
+  // The Tauri `onCloseRequested` only handles OS-level close (X button, Alt+F4).
+  // Beforeunload catches browser-style reloads that skip the onCloseRequested path.
+  // Since beforeunload is synchronous, we pre-import getDirtyTabs into a ref.
+  const getDirtyTabsRef = useRef<(tabs: any[]) => any[]>(() => []);
+  useEffect(() => {
+    import("../../utils/editorDirty").then((m) => {
+      getDirtyTabsRef.current = m.getDirtyTabs;
+    });
+  }, []);
+  useEffect(() => {
+    const handler = (event: BeforeUnloadEvent) => {
+      const dirty = getDirtyTabsRef.current(queryTabsRef.current);
+      if (dirty.length > 0) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, []);
 
   const formatSqlValue = (val: any): string => {
     if (val === null || val === undefined) return "NULL";
@@ -1841,17 +1957,18 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       return;
     }
     
-    const columns = Object.keys(row);
+    const { _isNew, _isModified, ...cleanRow } = row;
+    const columns = Object.keys(cleanRow);
     const pkCandidates = ["id", "uuid", "uid"];
     const pk = columns.find(c => pkCandidates.includes(c.toLowerCase()));
     
     const whereClauses: string[] = [];
     
-    if (pk && row[pk] !== undefined && row[pk] !== null) {
-      whereClauses.push(`${pk} = ${formatSqlValue(row[pk])}`);
+    if (pk && cleanRow[pk] !== undefined && cleanRow[pk] !== null) {
+      whereClauses.push(`${pk} = ${formatSqlValue(cleanRow[pk])}`);
     } else {
       for (const col of columns) {
-        const val = row[col];
+        const val = cleanRow[col];
         if (val === null) whereClauses.push(`${col} IS NULL`);
         else whereClauses.push(`${col} = ${formatSqlValue(val)}`);
       }
@@ -1864,10 +1981,10 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       await executeQuery(deleteQuery);
       setResults(prev => prev.filter(r => {
         const pkItem = columns.find(c => pkCandidates.includes(c.toLowerCase()));
-        if (pkItem && row[pkItem] !== undefined && row[pkItem] !== null) {
-          return String(r[pkItem]) !== String(row[pkItem]);
+        if (pkItem && cleanRow[pkItem] !== undefined && cleanRow[pkItem] !== null) {
+          return String(r[pkItem]) !== String(cleanRow[pkItem]);
         }
-        return !columns.every(col => String(r[col]) === String(row[col]));
+        return !columns.every(col => String(r[col]) === String(cleanRow[col]));
       }));
     } finally {
       setSuppressTabSwitch(false);
@@ -1887,40 +2004,51 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
 
     try {
       setIsExecuting(true);
+      // Suppress tab switch during the entire save flow so intermediate
+      // INSERT/UPDATE executeQuery calls don't switch to the Messages tab.
+      setSuppressTabSwitch(true);
 
-      // ─── Step 1: Load required columns (NOT NULL without DEFAULT + FK columns) ───
-      // Parse schema.table format
+      // ─── Step 1: Build a DB connection for the save operation ───
+      // This connection is used for both NOT NULL validation and for executing
+      // the actual INSERT/UPDATE queries. Using db.execute() directly (instead
+      // of executeQuery, which silently swallows errors) ensures that DB errors
+      // propagate to the outer catch and are reported to the user.
       const tableParts = activeTableName.split(".");
       const schemaName = tableParts.length > 1 ? tableParts[0] : "public";
       const tableName = tableParts.length > 1 ? tableParts.slice(1).join(".") : activeTableName;
 
-      // Collect per-row errors so we can report them all at once
+      let db = currentDb;
+      if (!db) {
+        const Database = (await import("@tauri-apps/plugin-sql")).default;
+        let username = activeConnection.username || "";
+        let password = activeConnection.password || "";
+        if (activeConnection.vaultCredentialId) {
+          const vaultCred = vaultCredentials.find(vc => vc.id === activeConnection.vaultCredentialId);
+          if (vaultCred) { username = vaultCred.username || ""; password = vaultCred.password || ""; }
+        }
+        const encodedUser = encodeURIComponent(username);
+        const encodedPass = encodeURIComponent(password);
+        const port = activeConnection.port || (activeConnection.type === "mysql" || activeConnection.type === "mariadb" ? 3306 : 5432);
+        let connectionString = "";
+        if (activeConnection.type === "sqlite") {
+          connectionString = `sqlite:${activeConnection.filepath || "queryden.db"}`;
+        } else if (["postgres", "supabase", "cockroach"].includes(activeConnection.type)) {
+          connectionString = `postgres://${encodedUser}:${encodedPass}@${activeConnection.host}:${port}/${selectedDatabase || activeConnection.database}`;
+        } else {
+          connectionString = `mysql://${encodedUser}:${encodedPass}@${activeConnection.host}:${port}/${selectedDatabase || activeConnection.database}`;
+        }
+        db = await Database.load(connectionString);
+      }
+
+      // ─── Step 2: Validate NOT NULL + FK constraints (all providers) ───
       const rowsWithMissing: { rowIndex: number; missing: string[] }[] = [];
 
-      if (["postgres", "supabase", "cockroach", "mysql", "mariadb"].includes(activeConnection.type)) {
-        // Build a DB connection for the schema queries (same logic as executeQuery)
-        let db = currentDb;
-        if (!db) {
-          const Database = (await import("@tauri-apps/plugin-sql")).default;
-          let username = activeConnection.username || "";
-          let password = activeConnection.password || "";
-          if (activeConnection.vaultCredentialId) {
-            const vaultCred = vaultCredentials.find(vc => vc.id === activeConnection.vaultCredentialId);
-            if (vaultCred) { username = vaultCred.username || ""; password = vaultCred.password || ""; }
-          }
-          const port = activeConnection.port || (activeConnection.type === "mysql" || activeConnection.type === "mariadb" ? 3306 : 5432);
-          const connectionString =
-            ["postgres", "supabase", "cockroach"].includes(activeConnection.type)
-              ? `postgres://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${activeConnection.host}:${port}/${selectedDatabase || activeConnection.database}`
-              : `mysql://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${activeConnection.host}:${port}/${selectedDatabase || activeConnection.database}`;
-          db = await Database.load(connectionString);
-        }
+      for (let i = 0; i < newRows.length; i++) {
+        const { _isNew, ...data } = newRows[i];
+        const missing: string[] = [];
 
-        for (let i = 0; i < newRows.length; i++) {
-          const { _isNew, ...data } = newRows[i];
-          const missing: string[] = [];
-
-          // Query NOT NULL columns that don't have a DEFAULT (these must be provided)
+        // Check NOT NULL columns that don't have a DEFAULT (these must be provided)
+        if (["postgres", "supabase", "cockroach", "mysql", "mariadb"].includes(activeConnection.type)) {
           const notNullCols = await db.select(`
             SELECT column_name
             FROM information_schema.columns
@@ -1937,49 +2065,47 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               missing.push(colName);
             }
           }
-
-          // Also check FK columns (non-nullable FKs are a common gotcha)
-          if (["postgres", "supabase", "cockroach"].includes(activeConnection.type)) {
-            const fkCols = await db.select(`
-              SELECT kcu.column_name
-              FROM information_schema.table_constraints tc
-              JOIN information_schema.key_column_usage kcu
-                ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
-              WHERE tc.constraint_type = 'FOREIGN KEY'
-                AND tc.table_schema = $1 AND tc.table_name = $2
-            `, [schemaName, tableName]);
-
-            for (const fk of fkCols) {
-              const colName = fk.column_name;
+        } else if (activeConnection.type === "sqlite") {
+          const sqliteCols = await db.select(`PRAGMA table_info("${tableName}")`);
+          for (const col of sqliteCols) {
+            if (col.notnull === 1 && (col.dflt_value === null || col.dflt_value === undefined)) {
+              const colName = col.name;
               const val = data[colName];
-              if ((val === null || val === undefined || String(val).trim() === "") && !missing.includes(colName)) {
-                missing.push(`${colName} (foreign key)`);
+              if (val === null || val === undefined || String(val).trim() === "") {
+                missing.push(colName);
               }
             }
           }
+        }
 
-          if (missing.length > 0) {
-            rowsWithMissing.push({ rowIndex: i, missing });
-          }
+        // FK columns are NOT validated client-side — many real-world schemas
+        // have NOT NULL FK columns that the ORM auto-populates (e.g. create_uid,
+        // company_id). Let the database engine enforce FK constraints and surface
+        // any violation in the error dialog.
+
+        if (missing.length > 0) {
+          rowsWithMissing.push({ rowIndex: i, missing });
         }
       }
 
-      // ─── Step 2: Report all validation errors at once ───
+      // ─── Step 3: Report all validation errors in a dialog (don't switch to Messages tab) ───
       if (rowsWithMissing.length > 0) {
         const errorLines = rowsWithMissing.map(({ rowIndex, missing }) =>
           `Row ${rowIndex + 1}: Missing required column${missing.length > 1 ? "s" : ""} — ${missing.join(", ")}`
         );
-        setError(
-          `Cannot save: Required columns are missing.\n\n` +
-          errorLines.join("\n") +
-          `\n\nFill in the highlighted columns above and try saving again.`
-        );
+        await confirmDialog.dialog({
+          title: "Cannot Save: Required Columns Are Missing",
+          message:
+            `Fill in the highlighted columns above and try saving again.\n\n` +
+            errorLines.join("\n"),
+          type: "danger",
+        });
         return;
       }
 
-      // ─── Step 3: Proceed with INSERT ───
+      // ─── Step 4: Execute INSERTs directly (bypass executeQuery so errors propagate) ───
       for (const row of newRows) {
-        const { _isNew, ...data } = row;
+        const { _isNew, _isModified, ...data } = row;
         const columns = Object.keys(data).filter(c => data[c] !== null && data[c] !== undefined);
         
         let query = "";
@@ -1993,10 +2119,10 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           const vals = columns.map(c => formatSqlValue(data[c])).join(", ");
           query = `INSERT INTO ${activeTableName} (${cols}) VALUES (${vals})`;
         }
-        await executeQuery(query);
+        await db.execute(query);
       }
 
-      // ─── Step 4: Proceed with UPDATE for modified rows ───
+      // ─── Step 5: Execute UPDATEs directly (bypass executeQuery so errors propagate) ───
       for (const row of modifiedRows) {
         const { _isModified, ...data } = row;
         
@@ -2035,22 +2161,24 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         const sqlWhere = whereClauses.length > 0 ? whereClauses.join(" AND ") : "TRUE";
         const updateQuery = `UPDATE ${activeTableName} SET ${sqlSet} WHERE ${sqlWhere}`;
         
-        await executeQuery(updateQuery);
+        await db.execute(updateQuery);
       }
 
+      // ─── Step 6: Refresh to get server-side IDs etc. ───
       setSuccess(`Successfully saved ${newRows.length} new and ${modifiedRows.length} modified records.`);
-      // Suppress tab switch during refresh so user stays on results tab
-      setSuppressTabSwitch(true);
-      // Refresh to get server-side IDs etc.
       await executeQuery(lastSelectQueryRef.current);
     } catch (err: any) {
-      setError("Failed to save: " + (err?.message || String(err)));
+      await confirmDialog.dialog({
+        title: "Failed to Save",
+        message: err?.message || String(err),
+        type: "danger",
+      });
     } finally {
       setIsExecuting(false);
       isExecutingRef.current = false;
       setSuppressTabSwitch(false);
     }
-  }, [activeTableName, activeConnection, selectedDatabase, currentDb, vaultCredentials, executeQuery]);
+  }, [activeTableName, activeConnection, selectedDatabase, currentDb, vaultCredentials, executeQuery, confirmDialog]);
 
   const handleAddRow = useCallback(async (newRow: any, localOnly = true): Promise<void> => {
     if (localOnly) {
@@ -2724,15 +2852,20 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
             onResultsChange={setResults}
             onRefresh={lastSelectQueryRef.current ? () => executeQuery(lastSelectQueryRef.current) : undefined}
             onSave={handleSave}
-            onDiscard={() => {
+            onDiscard={async () => {
+              // Clear any previous messages so discarding doesn't leave stale
+              // success/error text visible on the Messages tab.
+              setError(null);
+              setSuccess(null);
               // Modified existing rows need server data to revert — nothing in
               // the codebase preserves pre-edit values, so the only way to undo
               // a cell edit is to re-fetch. New rows are pure-client state and
               // can be filtered out without a roundtrip, which is the common
               // case (user added rows, changed their mind).
+              setSuppressTabSwitch(true);
               const hasModifications = results.some(r => r._isModified && !r._isNew);
               if (hasModifications && lastSelectQueryRef.current) {
-                executeQuery(lastSelectQueryRef.current);
+                await executeQuery(lastSelectQueryRef.current);
               } else {
                 setResults(prev =>
                   prev
@@ -2740,6 +2873,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                     .map(({ _isNew, _isModified, ...rest }) => rest)
                 );
               }
+              setSuppressTabSwitch(false);
             }}
             optimizerData={optimizerData}
             isReadOnly={!!optimizerData}
