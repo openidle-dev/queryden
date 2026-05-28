@@ -478,6 +478,16 @@ function ExplorerSettings() {
             checked={settings.showTypes}
             onChange={(checked) => settings.setSetting("showTypes", checked)}
           />
+          <ToggleOption
+            label="Procedures"
+            checked={settings.showProcedures}
+            onChange={(checked) => settings.setSetting("showProcedures", checked)}
+          />
+          <ToggleOption
+            label="Operators"
+            checked={settings.showOperators}
+            onChange={(checked) => settings.setSetting("showOperators", checked)}
+          />
         </div>
       </div>
 

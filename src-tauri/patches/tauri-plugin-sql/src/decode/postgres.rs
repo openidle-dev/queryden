@@ -196,11 +196,63 @@ pub(crate) fn to_json(v: PgValueRef) -> Result<JsonValue, Error> {
             }
         }
         "VOID" => JsonValue::Null,
+        "regrole" => {
+            // regrole is an OID alias — PostgreSQL transmits it as the role name
+            // in text mode or as a 4-byte OID in binary mode. In practice the
+            // plugin receives the text form, so try as_str first.
+            if let Ok(s) = v.as_str() {
+                JsonValue::String(s.to_string())
+            } else if let Ok(v) = ValueRef::to_owned(&v).try_decode::<String>() {
+                JsonValue::String(v)
+            } else if let Ok(v) = ValueRef::to_owned(&v).try_decode::<i32>() {
+                JsonValue::Number(v.into())
+            } else {
+                JsonValue::Null
+            }
+        }
+        "INET" => {
+            // Decode INET from PostgreSQL binary format.
+            // Binary: 1 byte family (2=IPv4, 3=IPv6), 1 byte prefix bits,
+            // 1 byte is_cidr flag, 1 byte address length (nb), then nb address bytes.
+            if let Ok(bytes) = v.as_bytes() {
+                if bytes.len() >= 8 {
+                    let family = bytes[0];
+                    let nb = bytes[3] as usize;
+                    if bytes.len() >= 4 + nb {
+                        match family {
+                            2 => {
+                                let addr = std::net::Ipv4Addr::new(bytes[4], bytes[5], bytes[6], bytes[7]);
+                                JsonValue::String(addr.to_string())
+                            }
+                            3 if nb == 16 => {
+                                let mut octets = [0u8; 16];
+                                octets.copy_from_slice(&bytes[4..20]);
+                                let addr = std::net::Ipv6Addr::from(octets);
+                                JsonValue::String(addr.to_string())
+                            }
+                            _ => JsonValue::Null,
+                        }
+                    } else {
+                        JsonValue::Null
+                    }
+                } else {
+                    JsonValue::Null
+                }
+            } else {
+                JsonValue::Null
+            }
+        }
         // Handle custom types (enums, domains, etc.) by trying to decode as string
         _ => {
             let type_name = v.type_info().name().to_string();
-            // Try common unsupported types as strings first
-            if let Ok(v) = ValueRef::to_owned(&v).try_decode::<String>() {
+            // PostgreSQL transmits ENUMs (like `ansible.log_stream`, `ansible.job_status`)
+            // as their text labels even in binary mode. `v.as_str()` reads the raw text
+            // buffer directly without requiring a matching string-type OID, so it works
+            // for custom ENUMs where `try_decode::<String>()` would fail.
+            if let Ok(s) = v.as_str() {
+                log::warn!("unsupported type {type_name} decoded as string via as_str");
+                JsonValue::String(s.to_string())
+            } else if let Ok(v) = ValueRef::to_owned(&v).try_decode::<String>() {
                 log::warn!("unsupported type {type_name} decoded as string");
                 JsonValue::String(v)
             } else if let Ok(v) = ValueRef::to_owned(&v).try_decode::<Vec<String>>() {
@@ -218,10 +270,12 @@ pub(crate) fn to_json(v: PgValueRef) -> Result<JsonValue, Error> {
                 if let Some(n) = serde_json::Number::from_f64(v) {
                     JsonValue::Number(n)
                 } else {
-                    return Err(Error::UnsupportedDatatype(type_name));
+                    log::warn!("unsupported type {type_name} — f64 decode failed to convert to JSON number, returning null");
+                    JsonValue::Null
                 }
             } else {
-                return Err(Error::UnsupportedDatatype(type_name));
+                log::warn!("unsupported type {type_name} — no fallback decode succeeded, returning null");
+                JsonValue::Null
             }
         }
     };

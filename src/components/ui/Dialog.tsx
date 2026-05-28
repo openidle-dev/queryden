@@ -53,11 +53,19 @@ export function Dialog({
 }: DialogProps) {
   const panelRef = useRef<HTMLDivElement>(null);
 
+  // Focus management — only on open/close transitions
   useEffect(() => {
     if (!open) return;
     const previouslyFocused = document.activeElement as HTMLElement | null;
     (initialFocusRef?.current ?? panelRef.current)?.focus();
+    return () => {
+      previouslyFocused?.focus?.();
+    };
+  }, [open, initialFocusRef]);
 
+  // Esc key — re-subscribe on every render so we always call the latest onClose
+  useEffect(() => {
+    if (!open) return;
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && dismissOnEsc) {
         e.stopPropagation();
@@ -67,9 +75,8 @@ export function Dialog({
     document.addEventListener("keydown", handleKey);
     return () => {
       document.removeEventListener("keydown", handleKey);
-      previouslyFocused?.focus?.();
     };
-  }, [open, dismissOnEsc, onClose, initialFocusRef]);
+  }, [open, dismissOnEsc, onClose]);
 
   if (!open) return null;
 

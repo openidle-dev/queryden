@@ -346,14 +346,6 @@ export function MainContent() {
         setQueryTabs(restored);
         if (data.activeTabId && restored.some((t) => t.id === data.activeTabId)) {
           setActiveTabId(data.activeTabId);
-          const tab = restored.find((t) => t.id === data.activeTabId);
-          if (tab?.target?.connectionId && tab.target?.database) {
-            try {
-              await connectToDatabase(tab.target.connectionId, tab.target.database);
-            } catch (e) {
-              logger.debug("Auto-restore connection failed:", e);
-            }
-          }
         }
         tabCounterRef.current = restored.length + 1;
         logger.debug(`Restored ${restored.length} tabs from session`);
