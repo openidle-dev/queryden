@@ -64,7 +64,7 @@ export const ActivityMonitor: React.FC<ActivityMonitorProps> = ({ isOpen, onClos
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
-  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(true);
   const [targetDb, setTargetDb] = useState<string>("");
   // Filters
   const [stateFilter, setStateFilter] = useState<string>("all");
@@ -103,7 +103,7 @@ export const ActivityMonitor: React.FC<ActivityMonitorProps> = ({ isOpen, onClos
     } catch (err: any) { setError(err.message); }
   };
 
-  useEffect(() => { if (isOpen) { setTargetDb(""); setSearchTerm(""); setStateFilter("all"); setLongRunningOnly(false); setBackendTypeFilter("all"); fetchStats(); } }, [isOpen]);
+  useEffect(() => { if (isOpen) { setAutoRefresh(true); setTargetDb(""); setSearchTerm(""); setStateFilter("all"); setLongRunningOnly(false); setBackendTypeFilter("all"); fetchStats(); } }, [isOpen]);
   useEffect(() => { if (autoRefresh && isOpen) { let i: ReturnType<typeof setInterval> | undefined; i = setInterval(fetchStats, 3000); return () => { if (i) clearInterval(i); }; } }, [autoRefresh, isOpen, fetchStats]);
 
   if (!isOpen) return null;

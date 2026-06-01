@@ -1,2 +1,7 @@
 # Let cargo-xwin handle the linker and libraries automatically
 # Static CRT (+crt-static) can sometimes cause linker errors during cross-compilation
+
+# Use LLVM's lld-link on Windows for faster linking than MSVC link.exe.
+# rust-lld ships with the Rust toolchain — no extra install needed.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"

@@ -1,0 +1,99 @@
+/* ── React Flow theme overrides for ER Diagram ──────────────── */
+
+.react-flow {
+  background: transparent;
+}
+
+.react-flow__viewport {
+  background: transparent;
+}
+
+.react-flow__node {
+  cursor: grab;
+}
+
+.react-flow__node:active {
+  cursor: grabbing;
+}
+
+.react-flow__node.selected > div {
+  border-color: var(--accent-9);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-9) 30%, transparent),
+              0 4px 12px rgba(0,0,0,0.25);
+}
+
+.react-flow__edge-path {
+  stroke: var(--neutral-7);
+  stroke-width: 2;
+  transition: stroke 0.15s, stroke-width 0.15s;
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: var(--accent-9);
+  stroke-width: 2.5;
+}
+
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke: var(--accent-10);
+  stroke-width: 2.5;
+}
+
+.react-flow__handle {
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.react-flow__node:hover .react-flow__handle {
+  opacity: 0.6;
+}
+
+.react-flow__handle:hover {
+  opacity: 1 !important;
+}
+
+.react-flow__controls {
+  display: flex;
+  gap: 2px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--neutral-6);
+  background: var(--surface-elevated);
+}
+
+.react-flow__controls-button {
+  width: 28px;
+  height: 28px;
+  fill: var(--neutral-11);
+  border-bottom: 1px solid var(--neutral-6);
+  background: var(--surface-elevated);
+  transition: background 0.1s;
+}
+
+.react-flow__controls-button:hover {
+  background: var(--neutral-4);
+}
+
+.react-flow__controls-button:last-child {
+  border-bottom: none;
+}
+
+.react-flow__controls-button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.react-flow__minimap {
+  border-radius: 8px;
+  border: 1px solid var(--neutral-6);
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+
+.react-flow__minimap-mask {
+  fill-opacity: 0.7;
+}
+
+.react-flow__background {
+  background: transparent;
+}
