@@ -36,7 +36,7 @@ function FitViewHelper() {
   const { fitView } = useReactFlow();
   useEffect(() => {
     requestAnimationFrame(() => fitView({ padding: 0.3, duration: 200 }));
-  });
+  }, []);
   return null;
 }
 

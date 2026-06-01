@@ -118,7 +118,7 @@ async function fetchPostgresForeignKeys(
 ): Promise<any[]> {
   const schemaClause =
     schemas && schemas.length > 0
-      ? `AND c.connamespace::regnamespace::text IN (${schemas.map((s) => `'${s}'`).join(",")})`
+      ? `AND c.connamespace::regnamespace::text IN (${schemas.map((s) => `'${s.replace(/'/g, "''")}'`).join(",")})`
       : "";
   try {
     const rows = await db.select(
@@ -128,9 +128,12 @@ async function fetchPostgresForeignKeys(
         confrelid::regclass::text AS target_table,
         af.attname AS target_column
       FROM pg_constraint AS c
-      JOIN pg_attribute AS a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
-      JOIN pg_attribute AS af ON af.attrelid = c.confrelid AND af.attnum = ANY(c.confkey)
+      CROSS JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS sk(attnum, ord)
+      CROSS JOIN LATERAL unnest(c.confkey) WITH ORDINALITY AS tk(attnum, ord)
+      JOIN pg_attribute AS a ON a.attrelid = c.conrelid AND a.attnum = sk.attnum
+      JOIN pg_attribute AS af ON af.attrelid = c.confrelid AND af.attnum = tk.attnum
       WHERE c.contype = 'f'
+        AND sk.ord = tk.ord
         AND c.connamespace::regnamespace::text NOT IN ('information_schema', 'pg_catalog', 'topology')
         ${schemaClause}`,
     );
@@ -280,10 +283,10 @@ export function useERData(
   const [data, setData] = useState<ERData | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const abortRef = useRef(false);
+  const generationRef = useRef(0);
 
   const dbType = connectionType || "";
-  const isPostgres = ["postgres", "supabase", "cockroachdb"].includes(dbType);
+  const isPostgres = ["postgres", "supabase", "cockroach"].includes(dbType);
   const isMySQL = ["mysql", "mariadb"].includes(dbType);
   const isSQLite = dbType === "sqlite";
 
@@ -311,7 +314,7 @@ export function useERData(
       return;
     }
 
-    abortRef.current = false;
+    const gen = ++generationRef.current;
     setIsLoading(true);
     setError(null);
 
@@ -398,7 +401,7 @@ export function useERData(
         }
       }
 
-      if (abortRef.current) return;
+      if (gen !== generationRef.current) return;
 
       const columnMap = new Map<string, ERColumn[]>();
       for (const col of allColumns) {
@@ -448,7 +451,7 @@ export function useERData(
         });
       }
 
-      if (abortRef.current) return;
+      if (gen !== generationRef.current) return;
 
       const nodes: Node[] = [];
       const edges: Edge[] = [];
@@ -479,7 +482,7 @@ export function useERData(
         const src = normalizeTableName(fk.sourceTable, nodeIdSet);
         const tgt = normalizeTableName(fk.targetTable, nodeIdSet);
         if (!src || !tgt) continue;
-        const edgeKey = `${src}->${tgt}`;
+        const edgeKey = `${src}.${fk.sourceColumn}->${tgt}.${fk.targetColumn}`;
         if (edgeSet.has(edgeKey)) continue;
         edgeSet.add(edgeKey);
 
@@ -510,11 +513,11 @@ export function useERData(
       schemaCache.set(cacheKey, { data: result, ts: Date.now() });
       setData(result);
     } catch (e: any) {
-      if (!abortRef.current) {
+      if (gen === generationRef.current) {
         setError(e?.message || "Failed to load schema data");
       }
     } finally {
-      if (!abortRef.current) {
+      if (gen === generationRef.current) {
         setIsLoading(false);
       }
     }
@@ -534,7 +537,7 @@ export function useERData(
   useEffect(() => {
     buildERData();
     return () => {
-      abortRef.current = true;
+      generationRef.current += 1;
     };
   }, [buildERData, refreshKey]);
 

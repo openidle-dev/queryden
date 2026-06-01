@@ -164,7 +164,7 @@ export function HelpDialog({ isOpen, onClose }: HelpDialogProps) {
                                 });
                               } catch (winErr) {
                                 console.error("WebviewWindow also failed:", winErr);
-                                window.open(url, "_blank");
+                                window.open(url, "_blank", "noopener,noreferrer");
                               }
                             }
                           }}

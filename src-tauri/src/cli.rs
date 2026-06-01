@@ -64,7 +64,7 @@ impl ToolKind {
 
     fn all_binaries(&self) -> &'static [&'static str] {
         match self {
-            ToolKind::Psql => &["psql", "pg_dump", "pg_restore", "pg_dumpall"],
+            ToolKind::Psql => &["psql"],
             ToolKind::MySql => &["mysql", "mysqldump"],
             ToolKind::Mongo => &["mongosh"],
             ToolKind::Redis => &["redis-cli"],
@@ -197,30 +197,24 @@ impl CliManager {
     /// adding it to the system PATH).
     #[cfg(target_os = "windows")]
     fn find_windows_psql_path(&self) -> Option<PathBuf> {
-        let candidates = [
-            r"C:\Program Files\PostgreSQL\17\bin\psql.exe",
-            r"C:\Program Files\PostgreSQL\16\bin\psql.exe",
-            r"C:\Program Files\PostgreSQL\15\bin\psql.exe",
-            r"C:\Program Files\PostgreSQL\14\bin\psql.exe",
-            r"C:\Program Files\PostgreSQL\13\bin\psql.exe",
-            r"C:\Program Files\PostgreSQL\12\bin\psql.exe",
-            r"C:\Program Files\PostgreSQL\11\bin\psql.exe",
-            r"C:\Program Files\PostgreSQL\10\bin\psql.exe",
-            r"C:\Program Files\PostgreSQL\9.6\bin\psql.exe",
-            r"C:\Program Files (x86)\PostgreSQL\17\bin\psql.exe",
-            r"C:\Program Files (x86)\PostgreSQL\16\bin\psql.exe",
-            r"C:\Program Files (x86)\PostgreSQL\15\bin\psql.exe",
-            r"C:\Program Files (x86)\PostgreSQL\14\bin\psql.exe",
-            r"C:\Program Files (x86)\PostgreSQL\13\bin\psql.exe",
-            r"C:\Program Files (x86)\PostgreSQL\12\bin\psql.exe",
-            r"C:\Program Files (x86)\PostgreSQL\11\bin\psql.exe",
-            r"C:\Program Files (x86)\PostgreSQL\10\bin\psql.exe",
-            r"C:\Program Files (x86)\PostgreSQL\9.6\bin\psql.exe",
+        let prog_files = std::env::var("ProgramFiles")
+            .or_else(|_| std::env::var("ProgramW6432"))
+            .unwrap_or_else(|_| r"C:\Program Files".to_string());
+        let prog_files_x86 = std::env::var("ProgramFiles(x86)")
+            .unwrap_or_else(|_| r"C:\Program Files (x86)".to_string());
+        let versions = [
+            "17", "16", "15", "14", "13", "12", "11", "10", "9.6",
         ];
-        for path_str in &candidates {
-            let p = Path::new(path_str);
-            if p.exists() {
-                return Some(p.to_path_buf());
+        for root in [&prog_files, &prog_files_x86] {
+            for ver in &versions {
+                let p = Path::new(root)
+                    .join("PostgreSQL")
+                    .join(ver)
+                    .join("bin")
+                    .join("psql.exe");
+                if p.exists() {
+                    return Some(p);
+                }
             }
         }
         None

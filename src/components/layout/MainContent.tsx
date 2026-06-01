@@ -2622,7 +2622,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               try {
                 await connectToDatabase(activeTab.target.connectionId, activeTab.target.database);
               } catch {
-                // connection will show error state in dialog
+                return;
               }
             }
             setShowERDDialog(true);
