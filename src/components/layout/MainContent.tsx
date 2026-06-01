@@ -1005,7 +1005,8 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               psqlEntries: [...(currentTab?.psqlEntries || []), errEntry],
               psqlOutput: [],
             });
-            clearPsqlOutput();
+            psqlOutputRef.current = [];
+            setPsqlOutput([]);
           }
           setIsExecuting(false);
       isExecutingRef.current = false;
@@ -1041,7 +1042,8 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                 psqlEntries: [...(currentTab?.psqlEntries || []), errEntry],
                 psqlOutput: [],
               });
-              clearPsqlOutput();
+              psqlOutputRef.current = [];
+              setPsqlOutput([]);
             }
             setIsExecuting(false);
       isExecutingRef.current = false;
@@ -1067,7 +1069,8 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                 psqlEntries: [...(currentTab?.psqlEntries || []), errEntry],
                 psqlOutput: [],
               });
-              clearPsqlOutput();
+              psqlOutputRef.current = [];
+              setPsqlOutput([]);
             }
             setIsExecuting(false);
       isExecutingRef.current = false;
@@ -1107,7 +1110,8 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                   psqlEntries: [...(currentTab?.psqlEntries || []), errEntry],
                   psqlOutput: [],
                 });
-                clearPsqlOutput();
+                psqlOutputRef.current = [];
+                setPsqlOutput([]);
               }
               setIsExecuting(false);
               isExecutingRef.current = false;
@@ -1351,7 +1355,8 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                   psqlEntries: [...(currentTab?.psqlEntries || []), errEntry],
                   psqlOutput: [],
                 });
-                clearPsqlOutput();
+                psqlOutputRef.current = [];
+                setPsqlOutput([]);
               }
               setIsExecuting(false);
               isExecutingRef.current = false;
@@ -1392,7 +1397,8 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                 psqlEntries: [...(currentTab?.psqlEntries || []), watchEntry],
                 psqlOutput: [],
               });
-              clearPsqlOutput();
+              psqlOutputRef.current = [];
+              setPsqlOutput([]);
             }
             setIsExecuting(false);
             isExecutingRef.current = false;
@@ -1415,7 +1421,8 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                   psqlEntries: [...(currentTab?.psqlEntries || []), newEntry],
                   psqlOutput: [],
                 });
-                clearPsqlOutput();
+                psqlOutputRef.current = [];
+                setPsqlOutput([]);
               }
               setIsExecuting(false);
               isExecutingRef.current = false;
@@ -1454,15 +1461,16 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                 hasErrors: true,
                 executionTime: Date.now() - startTime,
               };
-              updateTabState(currentTabId, {
-                psqlEntries: [...(currentTab?.psqlEntries || []), errEntry],
-                psqlOutput: [],
-              });
-              clearPsqlOutput();
-            }
-            setIsExecuting(false);
-      isExecutingRef.current = false;
-            return;
+                updateTabState(currentTabId, {
+                  psqlEntries: [...(currentTab?.psqlEntries || []), errEntry],
+                  psqlOutput: [],
+                });
+                psqlOutputRef.current = [];
+                setPsqlOutput([]);
+              }
+              setIsExecuting(false);
+              isExecutingRef.current = false;
+              return;
           }
           if (currentTabId) updateTabState(currentTabId, { statementResults });
         }
