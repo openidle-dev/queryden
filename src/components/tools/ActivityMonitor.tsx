@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { X, RefreshCw, Activity, Trash2, Search, ShieldAlert, Cpu, Zap, Clock, Filter } from "lucide-react";
 import { useConnections } from "../../contexts/useConnections";
 import { useConfirmDialog } from "../ui/ConfirmDialog";
@@ -64,8 +64,9 @@ export const ActivityMonitor: React.FC<ActivityMonitorProps> = ({ isOpen, onClos
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
-  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(true);
   const [targetDb, setTargetDb] = useState<string>("");
+  const latestTargetDbRef = useRef(targetDb);
   // Filters
   const [stateFilter, setStateFilter] = useState<string>("all");
   const [longRunningOnly, setLongRunningOnly] = useState(false);
@@ -74,24 +75,28 @@ export const ActivityMonitor: React.FC<ActivityMonitorProps> = ({ isOpen, onClos
   const [sortKey, setSortKey] = useState<SortKey>("pid");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
-  const fetchStats = useCallback(async () => {
+  useEffect(() => { latestTargetDbRef.current = targetDb; }, [targetDb]);
+
+  const fetchStats = useCallback(async (overrideTargetDb?: string) => {
     if (!activeConnection) return;
     if (activeConnection.type !== 'postgres') { setError("PostgreSQL only"); return; }
     if (!currentDb) { setError("Not connected"); return; }
+
+    const dbTarget = overrideTargetDb ?? latestTargetDbRef.current;
 
     setIsLoading(true);
     setError(null);
 
     try {
-      const dbFilter = targetDb ? `AND datname = $1` : "";
+      const dbFilter = dbTarget ? `AND datname = $1` : "";
       const query = `SELECT pid, COALESCE(datname::text, '') as datname, COALESCE(usename::text, '') as usename, COALESCE(application_name::text, '') as application_name, COALESCE(client_addr::text, 'local') as client_addr, COALESCE(client_port::text, '') as client_port, COALESCE(backend_start::text, '') as backend_start, COALESCE(xact_start::text, '') as xact_start, COALESCE(query_start::text, '') as query_start, COALESCE(state_change::text, '') as state_change, COALESCE(wait_event_type::text, '') as wait_event_type, COALESCE(wait_event::text, '') as wait_event, COALESCE(state::text, 'unknown') as state, COALESCE(backend_type::text, '') as backend_type, COALESCE(query::text, '') as query FROM pg_stat_activity WHERE pid <> pg_backend_pid() ${dbFilter} ORDER BY backend_start DESC`;
-      const result = await (currentDb as any).select(query, targetDb ? [targetDb] : []) as ConnectionStats[];
+      const result = await (currentDb as any).select(query, dbTarget ? [dbTarget] : []) as ConnectionStats[];
       setStats(result);
       setError(null);
     } catch (err: any) {
       setError(err.message || "Failed to fetch");
     } finally { setIsLoading(false); }
-  }, [currentDb, activeConnection, targetDb]);
+  }, [currentDb, activeConnection]);
 
   const terminateBackend = async (pid: number | string) => {
     if (!currentDb) return;
@@ -103,7 +108,7 @@ export const ActivityMonitor: React.FC<ActivityMonitorProps> = ({ isOpen, onClos
     } catch (err: any) { setError(err.message); }
   };
 
-  useEffect(() => { if (isOpen) { setTargetDb(""); setSearchTerm(""); setStateFilter("all"); setLongRunningOnly(false); setBackendTypeFilter("all"); fetchStats(); } }, [isOpen]);
+  useEffect(() => { if (isOpen) { setAutoRefresh(true); setTargetDb(""); setSearchTerm(""); setStateFilter("all"); setLongRunningOnly(false); setBackendTypeFilter("all"); fetchStats(""); } }, [isOpen]);
   useEffect(() => { if (autoRefresh && isOpen) { let i: ReturnType<typeof setInterval> | undefined; i = setInterval(fetchStats, 3000); return () => { if (i) clearInterval(i); }; } }, [autoRefresh, isOpen, fetchStats]);
 
   if (!isOpen) return null;
@@ -249,7 +254,7 @@ export const ActivityMonitor: React.FC<ActivityMonitorProps> = ({ isOpen, onClos
           Long Running
         </Button>
 
-        <IconButton icon={<RefreshCw />} label="Refresh" variant="ghost" size="sm" onClick={fetchStats} />
+        <IconButton icon={<RefreshCw />} label="Refresh" variant="ghost" size="sm" onClick={() => fetchStats()} />
         <div className="flex-1" />
         <span className="text-[10px] text-[var(--neutral-11)]"><Filter className="w-3 h-3 inline mr-1 opacity-40" />{filteredStats.length} / {stats.length} sessions</span>
       </div>

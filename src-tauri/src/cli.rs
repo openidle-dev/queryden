@@ -8,7 +8,8 @@
 //!
 //! - **PostgreSQL**: Auto-download removed. Users must install psql via their
 //!   system package manager or from https://www.postgresql.org/download/.
-//!   QueryDen detects the system psql on PATH automatically.
+//!   QueryDen detects the system psql on PATH automatically. On Windows,
+//!   common install paths in Program Files are checked as a fallback.
 //! - **MySQL**: https://dev.mysql.com/get/Downloads/
 //!   - Archives: mysql-{version}-macos{arch}.tar.gz, etc.
 //! - **MongoDB**: GitHub releases (mongosh)
@@ -18,13 +19,15 @@
 //!
 //! 1. User connects via libpq → server responds `SELECT version()`
 //! 2. App parses server version (e.g. "PostgreSQL 16.5")
-//! 3. For psql: checks system PATH. If not found, shows install guide.
+//! 3. For psql: checks system PATH, then Windows fallback paths. If not found, shows install guide.
 //! 4. For other tools: checks ~/queryden/cli-tools/{tool}-{version}/ for cached binaries
 //! 5. If not cached → dialog asks user to confirm download
 //! 6. Download + extract → cache forever under the versioned path
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+#[cfg(target_os = "windows")]
+use std::path::Path;
 use std::process::Stdio;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -61,7 +64,7 @@ impl ToolKind {
 
     fn all_binaries(&self) -> &'static [&'static str] {
         match self {
-            ToolKind::Psql => &["psql", "pg_dump", "pg_restore", "pg_dumpall"],
+            ToolKind::Psql => &["psql"],
             ToolKind::MySql => &["mysql", "mysqldump"],
             ToolKind::Mongo => &["mongosh"],
             ToolKind::Redis => &["redis-cli"],
@@ -75,7 +78,11 @@ impl ToolKind {
                 Linux (Debian/Ubuntu): sudo apt install postgresql-client\n\
                 Linux (Fedora/RHEL):   sudo dnf install postgresql\n\
                 macOS:                 brew install libpq\n\
-                Windows:              https://www.postgresql.org/download/windows/\n\n\
+                Windows (winget):     winget install PostgreSQL.PostgreSQL\n\
+                Windows (manual):     https://www.postgresql.org/download/windows/\n\
+                Windows (chocolatey): choco install postgresql\n\n\
+                If psql is already installed, make sure it's in your PATH\n\
+                or check C:\\Program Files\\PostgreSQL\\<version>\\bin\\.\n\n\
                 After installation, restart QueryDen.",
             ToolKind::MySql => "MySQL client not found.\n\n\
                 Linux (Debian/Ubuntu): sudo apt install mysql-client\n\
@@ -185,12 +192,48 @@ impl CliManager {
             .join(format!("{}{}", binary, ext))
     }
 
-    /// Try system PATH, then bundled binaries for all known versions.
+    /// On Windows, check common PostgreSQL installation paths that aren't always
+    /// on PATH (EDB/BigSQL installers put psql.exe in Program Files without
+    /// adding it to the system PATH).
+    #[cfg(target_os = "windows")]
+    fn find_windows_psql_path(&self) -> Option<PathBuf> {
+        let prog_files = std::env::var("ProgramFiles")
+            .or_else(|_| std::env::var("ProgramW6432"))
+            .unwrap_or_else(|_| r"C:\Program Files".to_string());
+        let prog_files_x86 = std::env::var("ProgramFiles(x86)")
+            .unwrap_or_else(|_| r"C:\Program Files (x86)".to_string());
+        let versions = [
+            "17", "16", "15", "14", "13", "12", "11", "10", "9.6",
+        ];
+        for root in [&prog_files, &prog_files_x86] {
+            for ver in &versions {
+                let p = Path::new(root)
+                    .join("PostgreSQL")
+                    .join(ver)
+                    .join("bin")
+                    .join("psql.exe");
+                if p.exists() {
+                    return Some(p);
+                }
+            }
+        }
+        None
+    }
+
+    /// Try system PATH, then Windows fallback paths, then bundled binaries.
     /// Returns (path, major_version) of the first match.
     async fn find_available(&self, kind: ToolKind) -> Option<(PathBuf, u32)> {
         for binary in kind.all_binaries() {
             if which::which(binary).is_ok() {
                 return which::which(binary).ok().map(|p| (p, 0)); // version 0 = system
+            }
+        }
+
+        // Windows: check common install paths (psql.exe often not on PATH)
+        #[cfg(target_os = "windows")]
+        if kind == ToolKind::Psql {
+            if let Some(path) = self.find_windows_psql_path() {
+                return Some((path, 0));
             }
         }
 
@@ -713,20 +756,14 @@ pub async fn cli_detect_pg_version(
     database: String,
     username: String,
     password: String,
+    manager: tauri::State<'_, CliManager>,
 ) -> Result<u32, String> {
     // Try to use psql to get server version
-    // First check if psql is available anywhere
-    let binary = match which::which("psql") {
-        Ok(p) => p,
-        Err(_) => {
-            return Err(
-                "psql not found in PATH. Install PostgreSQL client first:\n\n\
-                 Linux: sudo apt install postgresql-client\n\
-                 macOS: brew install libpq\n\
-                 Windows: Download from postgresql.org".to_string(),
-            );
-        }
-    };
+    // Uses find_available which checks PATH, Windows fallback paths, and cached dirs
+    let (binary, _) = manager
+        .find_available(ToolKind::Psql)
+        .await
+        .ok_or_else(|| ToolKind::Psql.system_install_hint().to_string())?;
 
     let output = Command::new(&binary)
         .env("PGPASSWORD", &password)

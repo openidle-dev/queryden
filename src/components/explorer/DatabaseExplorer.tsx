@@ -115,6 +115,8 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
   const treeContainerRef = useRef<HTMLDivElement>(null);
   const [dragState, setDragState] = useState<{ kind: "connection" | "folder"; id: string } | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const [dragOverRoot, setDragOverRoot] = useState(false);
+  const autoExpandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   // Listen for jump events from global search
   useEffect(() => {
@@ -1404,15 +1406,40 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
   };
 
   const handleDragEnd = () => {
+    if (autoExpandTimerRef.current) {
+      clearTimeout(autoExpandTimerRef.current);
+      autoExpandTimerRef.current = null;
+    }
     setDragState(null);
     setDropTargetId(null);
+    setDragOverRoot(false);
   };
 
   const handleDragOver = (e: React.DragEvent, node: TreeNode) => {
     if (!dragState) return;
     e.preventDefault();
     e.stopPropagation();
-    setDropTargetId(node.id);
+    setDragOverRoot(false);
+    setDropTargetId((prev) => (prev === node.id ? prev : node.id));
+
+    // Auto-expand: 600ms timer on collapsed expandable folders
+    const isCollapsibleFolder = node.contextMenuId?.startsWith("folder:");
+    const isCollapsed = !expandedNodes.has(node.id);
+    const hasChildNodes = node.children && node.children.length > 0;
+    if (isCollapsibleFolder && isCollapsed && hasChildNodes) {
+      if (!autoExpandTimerRef.current) {
+        autoExpandTimerRef.current = setTimeout(() => {
+          autoExpandTimerRef.current = null;
+          toggleExpand(node.id);
+        }, 600);
+      }
+    } else {
+      if (autoExpandTimerRef.current) {
+        clearTimeout(autoExpandTimerRef.current);
+        autoExpandTimerRef.current = null;
+      }
+    }
+
     if (!isValidDropTarget(node)) {
       e.dataTransfer.dropEffect = "none";
       return;
@@ -1424,6 +1451,10 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
     // Only clear if actually leaving the node (not entering a child)
     if (e.currentTarget === e.target || !e.currentTarget.contains(e.relatedTarget as Node)) {
       setDropTargetId(null);
+      if (autoExpandTimerRef.current) {
+        clearTimeout(autoExpandTimerRef.current);
+        autoExpandTimerRef.current = null;
+      }
     }
   };
 
@@ -1431,6 +1462,11 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
     e.preventDefault();
     e.stopPropagation();
     setDropTargetId(null);
+    setDragOverRoot(false);
+    if (autoExpandTimerRef.current) {
+      clearTimeout(autoExpandTimerRef.current);
+      autoExpandTimerRef.current = null;
+    }
     if (!dragState) return;
     const ctxId = node.contextMenuId;
     if (!ctxId || !ctxId.startsWith("folder:")) return;
@@ -1448,6 +1484,11 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
   const handleRootDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setDropTargetId(null);
+    setDragOverRoot(false);
+    if (autoExpandTimerRef.current) {
+      clearTimeout(autoExpandTimerRef.current);
+      autoExpandTimerRef.current = null;
+    }
     if (!dragState) return;
     // Drop to root: parentId = null
     if (dragState.kind === "connection") {
@@ -1481,7 +1522,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
       const isDragSource = isUserFolderNode || isServerNode;
       /** Drop targets: only user folders. */
       const isDropTarget = isUserFolderNode;
-      const isValid = isDropTarget && isValidDropTarget(node);
+      const isValid = isDropTarget && isValidDropTarget(node) && dropTargetId === node.id;
       const isInvalid = isDropTarget && !isValid && dropTargetId === node.id;
 
       return (
@@ -1500,6 +1541,9 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
             <div className="absolute inset-0 rounded border-2 border-solid border-[var(--danger-8)] bg-[var(--danger-3)]/30 pointer-events-none z-10" />
           )}
           <button
+            draggable={isDragSource}
+            onDragStart={isDragSource ? (e) => { handleDragStart(e, node); } : undefined}
+            onDragEnd={isDragSource ? handleDragEnd : undefined}
             onClick={async () => {
               // Left click: expand/collapse folders, trigger action for database and server
               if ((node.icon === "database" || node.icon === "server") && node.action) {
@@ -1537,7 +1581,9 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
               }
             }}
             id={`node-${node.id}`}
-            className={`w-full flex items-center gap-1 px-2 py-1 transition-colors text-sm text-left truncate cursor-pointer ${
+            className={`w-full flex items-center gap-1 px-2 py-1 transition-colors text-sm text-left truncate ${
+              isDragSource ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
+            } ${
               focusedNodeId === node.id
                 ? "bg-[var(--accent-3)] ring-1 ring-inset ring-[var(--accent-6)]"
                 : node.icon === "server" && node.color
@@ -1595,15 +1641,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
             {isDbLoading || isServerConnecting ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--accent-9)] shrink-0" />
             ) : (
-              <span
-                draggable={isDragSource}
-                onDragStart={isDragSource ? (e) => {
-                  e.stopPropagation();
-                  handleDragStart(e, node);
-                } : undefined}
-                onDragEnd={isDragSource ? handleDragEnd : undefined}
-                className={isDragSource ? "cursor-grab active:cursor-grabbing hover:bg-[var(--neutral-4)] rounded p-0.5 shrink-0 flex items-center justify-center" : "shrink-0 flex items-center justify-center"}
-              >
+              <span className="hover:bg-[var(--neutral-4)] rounded p-0.5 shrink-0 flex items-center justify-center">
                 {getIcon(node.icon, isExpanded, node.providerType, node.color)}
               </span>
             )}
@@ -1937,7 +1975,19 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
           ref={treeContainerRef}
           tabIndex={0}
           onKeyDown={handleTreeKeyDown}
-          onDragOver={(e) => { if (dragState) { e.preventDefault(); } }}
+          onDragOver={(e) => {
+            if (dragState) {
+              e.preventDefault();
+              setDragOverRoot(true);
+              setDropTargetId("__root__");
+            }
+          }}
+          onDragLeave={(e) => {
+            if (e.currentTarget === e.target || !e.currentTarget.contains(e.relatedTarget as Node)) {
+              setDragOverRoot(false);
+              setDropTargetId(prev => prev === "__root__" ? null : prev);
+            }
+          }}
           onDrop={handleRootDrop}
           className="w-full h-full overflow-y-auto pt-1 bg-[var(--surface-panel)] scrollbar-thin outline-none focus:ring-1 focus:ring-[var(--accent-8)]/30"
         >
@@ -1958,6 +2008,12 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
               >
                  Add a connection
               </button>
+            </div>
+          )}
+
+          {dragOverRoot && dragState && (
+            <div className="sticky bottom-0 mx-2 mb-2 p-3 text-center text-xs text-[var(--accent-11)] border-2 border-dashed border-[var(--accent-8)] rounded bg-[var(--accent-3)]/40">
+              Drop here to move to top level
             </div>
           )}
         </div>

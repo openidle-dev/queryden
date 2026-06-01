@@ -146,16 +146,16 @@ export function HelpDialog({ isOpen, onClose }: HelpDialogProps) {
                           size="sm"
                           leftIcon={<BookOpen className="w-3 h-3" />}
                           onClick={async () => {
+                            const url = "https://queryden.openidle.com/docs";
                             try {
                               const { openUrl } = await import("@tauri-apps/plugin-opener");
-                              const url = window.location.origin + "/docs.html";
                               await openUrl(url);
                             } catch (err) {
                               console.error("openUrl failed, trying WebviewWindow:", err);
                               try {
                                 const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
                                 new WebviewWindow("docs", {
-                                  url: "/docs.html",
+                                  url,
                                   title: `${appName} Documentation Guide`,
                                   width: 1100,
                                   height: 800,
@@ -164,7 +164,7 @@ export function HelpDialog({ isOpen, onClose }: HelpDialogProps) {
                                 });
                               } catch (winErr) {
                                 console.error("WebviewWindow also failed:", winErr);
-                                window.open("/docs.html", "_blank");
+                                window.open(url, "_blank", "noopener,noreferrer");
                               }
                             }
                           }}

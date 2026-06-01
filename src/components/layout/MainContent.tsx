@@ -7,7 +7,7 @@ import { useSettings } from "../../store/settingsStore";
 import { Play, Plus, X, ChevronDown, ChevronRight, Terminal, Database, Sparkles, GitCompare, Save, Square, Activity, Loader2, CheckCircle, XCircle } from "lucide-react";
 import { useSavedQueries } from "../../store/savedQueryStore";
 import { useConfirmDialog } from "../ui/ConfirmDialog";
-import { Copy, FileText, BarChart2, Activity as ActivityIcon, Layers } from "lucide-react";
+import { Copy, FileText, BarChart2, Activity as ActivityIcon, Layers, Table } from "lucide-react";
 import { EmptyStateLauncher } from "./EmptyStateLauncher";
 import { logger } from "../../utils/logger";
 import { getDefaultDatabaseName } from "../../config/app";
@@ -36,6 +36,7 @@ const DefinitionModal = lazy(() => import("../tools/DefinitionModal").then(m => 
 const CloneDialog = lazy(() => import("../tools/CloneDialog").then(m => ({ default: m.CloneDialog })));
 const ActivityMonitor = lazy(() => import("../tools/ActivityMonitor").then(m => ({ default: m.ActivityMonitor })));
 const MultiQueryDialog = lazy(() => import("../tools/MultiQueryDialog").then(m => ({ default: m.MultiQueryDialog })));
+const ERDDialog = lazy(() => import("../tools/ERDDialog").then(m => ({ default: m.ERDDialog })));
 const PsqlWindow = lazy(() => import("../ui/PsqlWindow").then(m => ({ default: m.PsqlWindow })));
 const LocalHistoryDialog = lazy(() => import("../ui/LocalHistoryDialog").then(m => ({ default: m.LocalHistoryDialog })));
 
@@ -202,6 +203,7 @@ export function MainContent() {
   const [showCloneDialog, setShowCloneDialog] = useState(false);
   const [showActivityMonitor, setShowActivityMonitor] = useState(false);
   const [showMultiQueryDialog, setShowMultiQueryDialog] = useState(false);
+  const [showERDDialog, setShowERDDialog] = useState(false);
   const [showAIDialog, setShowAIDialog] = useState(false);
   const [_showLocalHistory, setShowLocalHistory] = useState(false);
   const [optimizerData, setOptimizerData] = useState<any>(null);
@@ -290,6 +292,7 @@ export function MainContent() {
         }
         await mkdir(dir, { recursive: true });
         const lastSaved = autoSaveLastRef.current;
+        const writtenIds: string[] = [];
         for (const tab of tabs) {
           if (!tab.query || tab.query.trim() === "") continue;
           if (lastSaved.get(tab.id) === tab.query) continue;
@@ -308,9 +311,15 @@ export function MainContent() {
             const filePath = await join(dir, `${folderPart}_${dbPart}_${shortId}.sql`);
             await writeTextFile(filePath, tab.query);
             lastSaved.set(tab.id, tab.query);
+            writtenIds.push(tab.id);
           } catch (e) {
             logger.error(`Auto-save failed for tab ${tab.id}:`, e);
           }
+        }
+        if (writtenIds.length > 0) {
+          setQueryTabs(prev => prev.map(tab =>
+            writtenIds.includes(tab.id) ? { ...tab, originalQuery: tab.query } : tab
+          ));
         }
       } catch (e) {
         logger.error("Auto-save failed:", e);
@@ -336,7 +345,7 @@ export function MainContent() {
           id: t.id,
           name: t.name,
           query: t.query ?? "",
-          originalQuery: t.originalQuery,
+          originalQuery: t.originalQuery ?? t.query ?? "",
           savedQueryName: t.savedQueryName,
           target: t.targetConnectionId
             ? { connectionId: t.targetConnectionId, connectionName: t.targetConnectionName || "", database: t.targetDatabase || "" }
@@ -820,7 +829,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         }
 
         logger.debug("[CLI Path] Final majorVersion to use:", majorVersion);
-        const toolStatus = await cliStore.checkTool("postgresql", majorVersion);
+        let toolStatus = await cliStore.checkTool("postgresql", majorVersion);
         logger.debug("[CLI Path] Tool status (checkTool):", toolStatus);
 
         if (toolStatus.needsDownload) {
@@ -853,26 +862,34 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           }
         } else if (!toolStatus.available) {
           // Tool not available and cannot be auto-downloaded — show install guide
+          // with a "Check Again" retry loop so users can install and retry
+          // without closing/reopening the PSQL tab.
           const installHint = toolStatus.installHint || "PostgreSQL client (psql) not found. Please install it and restart QueryDen.";
-          const confirmed = await confirmDialog.confirm({
-            title: "psql Not Found",
-            message: installHint,
-            confirmLabel: "Open Download Page",
-            type: "info",
-          });
-          if (confirmed) {
-            try {
-              const { openUrl } = await import("@tauri-apps/plugin-opener");
-              await openUrl("https://www.postgresql.org/download/");
-            } catch (e) {
-              logger.error("[CLI Path] Failed to open URL:", e);
+          while (!toolStatus.available) {
+            const shouldOpenPage = await confirmDialog.confirm({
+              title: "psql Not Found",
+              message: installHint,
+              confirmLabel: "Open Download Page",
+              cancelLabel: "Check Again",
+              type: "info",
+            });
+            if (shouldOpenPage) {
+              try {
+                const { openUrl } = await import("@tauri-apps/plugin-opener");
+                await openUrl("https://www.postgresql.org/download/");
+              } catch (e) {
+                logger.error("[CLI Path] Failed to open URL:", e);
+              }
+              appendPsqlOutput([`ERROR: ${installHint}`]);
+              setError("psql not found");
+              setIsExecuting(false);
+              isExecutingRef.current = false;
+              return;
             }
+            // User clicked "Check Again" — re-check after potential install
+            toolStatus = await cliStore.checkTool("postgresql", majorVersion);
           }
-          appendPsqlOutput([`ERROR: ${installHint}`]);
-          setError("psql not found");
-          setIsExecuting(false);
-      isExecutingRef.current = false;
-          return;
+          // Fall through to execute when psql is now available
         }
         
         const cliHost = actualConnection.host || "localhost";
@@ -1789,7 +1806,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               id: t.id,
               name: t.name,
               query: t.query ?? "",
-              originalQuery: t.originalQuery,
+          originalQuery: t.originalQuery ?? t.query ?? "",
               savedQueryName: t.savedQueryName,
               targetConnectionId: t.target?.connectionId,
               targetConnectionName: t.target?.connectionName,
@@ -1824,6 +1841,25 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           });
 
           if (discard) {
+            // Overwrite the session with clean state so these tabs don't
+            // re-prompt on next startup — the user chose to discard,
+            // so the persisted snapshot should treat current content
+            // as the new authoritative baseline (issue #121, #138).
+            try {
+              const { invokeCmd } = await import("../../lib/ipc");
+              const cleanTabs = queryTabsRef.current.map((t) => ({
+                id: t.id,
+                name: t.name,
+                query: t.query ?? "",
+                originalQuery: t.query ?? "",
+                savedQueryName: t.savedQueryName,
+                targetConnectionId: t.target?.connectionId,
+                targetConnectionName: t.target?.connectionName,
+                targetDatabase: t.target?.database,
+                usePsql: t.usePsql ?? false,
+              }));
+              await invokeCmd("save_sessions", { tabs: cleanTabs, activeTabId: activeTabIdRef.current ?? null });
+            } catch { /* non-critical */ }
             try {
               await getCurrentWindow().destroy();
             } catch (err) {
@@ -2580,6 +2616,21 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           className={showMultiQueryDialog ? "bg-[var(--accent-3)] text-[var(--accent-11)] hover:bg-[var(--accent-4)]" : undefined}
         />
         <IconButton
+          label="ER Diagram"
+          onClick={async () => {
+            if (activeTab?.target && (activeTab.target.connectionId !== activeConnection?.id || activeTab.target.database !== selectedDatabase)) {
+              try {
+                await connectToDatabase(activeTab.target.connectionId, activeTab.target.database);
+              } catch {
+                return;
+              }
+            }
+            setShowERDDialog(true);
+          }}
+          icon={<Table />}
+          className={showERDDialog ? "bg-[var(--accent-3)] text-[var(--accent-11)] hover:bg-[var(--accent-4)]" : undefined}
+        />
+        <IconButton
           label="Save Query (Ctrl+S)"
           onClick={async () => {
             if (!activeConnection) return;
@@ -2892,6 +2943,9 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         )}
         {showMultiQueryDialog && (
           <MultiQueryDialog isOpen={showMultiQueryDialog} onClose={() => setShowMultiQueryDialog(false)} />
+        )}
+        {showERDDialog && (
+          <ERDDialog isOpen={showERDDialog} onClose={() => setShowERDDialog(false)} />
         )}
         {showAIDialog && (
           <AIAssistantDialog isOpen={showAIDialog} onClose={() => setShowAIDialog(false)} currentQuery={activeTab?.query || ""} onUpdateQuery={updateTabQuery} />

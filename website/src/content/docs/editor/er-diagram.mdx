@@ -1,0 +1,57 @@
+---
+title: ER Diagram
+description: Visualize your database schema as an interactive entity-relationship diagram with auto-layout, search, and SVG export.
+section: editor
+order: 15
+updated: 2026-06-01
+---
+
+import Callout from '../../../components/Callout.astro';
+
+The **ER Diagram** tool renders the tables and foreign-key relationships in your database as an interactive entity-relationship diagram. It supports PostgreSQL, MySQL/MariaDB, and SQLite.
+
+## Opening the diagram
+
+Click the <kbd>ER Diagram</kbd> button in the toolbar (the <kbd>Table</kbd> icon) above the query editor. The diagram always reflects the database targeted by the active editor tab — if your current tab is scoped to `production`, the diagram shows `production`, even when another tab targets a different database.
+
+## Table selection
+
+A **table selector** dialog appears before the diagram renders. Pick which tables to include:
+
+- **Check** individual tables, or use **Select All / Deselect All**.
+- **Filter by schema** (PostgreSQL multi-schema databases) using the dropdown.
+- Click **Show Diagram** to generate the layout for your selection.
+
+This scoped approach prevents the freeze that would occur when introspecting every table in a large database — dagre auto-layout runs only on the tables you selected.
+
+### Adding more tables
+
+Once the diagram is open, click **+ Add tables** in the toolbar to return to the table selector and add more tables to the existing diagram.
+
+## Controls and toolbar
+
+| Control | Description |
+|---------|-------------|
+| **Schema filter** | Filter the displayed tables by schema (PostgreSQL only, shown when multiple schemas are present). |
+| **Search** | Type to filter tables by name. Matching tables and their FK-related tables stay visible. |
+| **Compact view** | Toggle between all columns and PK/FK columns only. On by default. |
+| **PKs only** | Show only primary-key columns. |
+| **Refresh** | Re-fetch schema metadata (drops the 30-second in-memory cache). |
+| **Export SVG** | Saves the current diagram as an `.svg` file via the native save dialog. |
+
+## Navigation
+
+- **Pan** — click and drag the canvas background.
+- **Zoom** — scroll wheel, or use the zoom controls in the bottom-right corner.
+- **Select** — click a table node to highlight it and its relationships.
+- **Mini-map** — the overview in the bottom-right corner shows your position in the full diagram.
+
+## Supported engines
+
+| Engine | Introspection method |
+|--------|---------------------|
+| PostgreSQL | Bulk queries via `pg_attribute`, `pg_index`, `pg_constraint`, and `pg_class`. Handles `public.` schema prefix transparently. |
+| MySQL / MariaDB | `information_schema` tables (`COLUMNS`, `KEY_COLUMN_USAGE`, `TABLE_CONSTRAINTS`). |
+| SQLite | `PRAGMA table_info()` and `PRAGMA foreign_key_list()` per table, batched with `Promise.all` for performance. |
+
+Schema data is cached in memory for 30 seconds — re-opening the same set of tables within that window returns instantly without re-querying the database.
