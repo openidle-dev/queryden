@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useConnections } from "../../contexts/useConnections";
 import { Dialog } from "../ui/Dialog";
+import { useConfirmDialog } from "../ui/ConfirmDialog";
 import { IconButton } from "../ui/IconButton";
 import { Input } from "../ui/Input";
 import { ERDCanvas } from "./ERDCanvas";
@@ -88,6 +89,7 @@ function getRelatedTableIds(
 export function ERDDialog({ isOpen, onClose }: ERDDialogProps) {
   const { currentDb, activeConnection, selectedDatabase, schemaItems } =
     useConnections();
+  const confirmDialog = useConfirmDialog();
 
   const [selectedTables, setSelectedTables] = useState<string[]>([]);
   const [showSelector, setShowSelector] = useState(true);
@@ -272,8 +274,9 @@ export function ERDDialog({ isOpen, onClose }: ERDDialogProps) {
       if (path) {
         await writeTextFile(path, svgData);
       }
-    } catch {
-      // export failed silently
+    } catch (e: any) {
+      const errMsg = e?.message || String(e);
+      confirmDialog.dialog({ title: "Export Failed", message: errMsg, confirmLabel: "OK", type: "danger" });
     }
   }, [selectedDatabase]);
 

@@ -1625,7 +1625,8 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                     }));
                   }
                 } catch (e) {
-                  console.error("Failed to get DDL:", e);
+                  const errMsg = typeof e === 'string' ? e : (e as any)?.message || "Failed to get DDL";
+                  confirmDialog.dialog({ title: "Failed to Load DDL", message: errMsg, confirmLabel: "OK", type: "danger" });
                 }
               }
               if (hasChildren || isFolder || node.icon === "server") toggleExpand(node.id);
@@ -1771,7 +1772,10 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                       detail: { query: ddl, name: `DDL ${node.name}` }
                     }));
                   }
-                } catch (e) {}
+                } catch (e) {
+                  const errMsg = typeof e === 'string' ? e : (e as any)?.message || "Failed to get DDL";
+                  confirmDialog.dialog({ title: "Failed to Load DDL", message: errMsg, confirmLabel: "OK", type: "danger" });
+                }
              })();
           }
         }
@@ -2612,7 +2616,8 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                     try {
                       await dropRole(roleName);
                     } catch (e: any) {
-                      console.error("Drop role failed:", e);
+                      const errMsg = typeof e === 'string' ? e : e?.message || String(e);
+                      confirmDialog.dialog({ title: "Drop Role Failed", message: errMsg, confirmLabel: "OK", type: "danger" });
                     }
                     closeContextMenu();
                   }}
