@@ -134,6 +134,27 @@ export const PsqlWindow = memo(function PsqlWindow({
   const [copied, setCopied] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const isAtBottomRef = useRef(true);
+  // Keep the live section visible for a short grace window after execution
+  // finishes, so the output doesn't flash-gap before psqlEntries are
+  // committed (Windows WebView2 can split React 18's batch).
+  const [showLiveGrace, setShowLiveGrace] = useState(false);
+  useEffect(() => {
+    if (isExecuting) {
+      setShowLiveGrace(true);
+    } else if (showLiveGrace) {
+      // Cancel grace as soon as entries catch up, with a 300ms timeout
+      // fallback for edge cases where entries never reflect the output.
+      if (liveOutput.length > 0 && entries.length > 0) {
+        const lastEntry = entries[entries.length - 1];
+        if (lastEntry && lastEntry.outputLines.join("") === liveOutput.join("")) {
+          setShowLiveGrace(false);
+          return;
+        }
+      }
+      const timer = setTimeout(() => setShowLiveGrace(false), 300);
+      return () => clearTimeout(timer);
+    }
+  }, [isExecuting, showLiveGrace, entries, liveOutput]);
 
   const fontFamily = settings.editorFontFamily || "'JetBrains Mono', 'Fira Code', 'Consolas', 'Cascadia Code', monospace";
 
@@ -360,7 +381,7 @@ export const PsqlWindow = memo(function PsqlWindow({
         ))}
 
         {/* Live output (during execution) */}
-        {(liveOutput.length > 0 || isExecuting) && (
+        {(isExecuting || showLiveGrace) && (
           <div className="mb-1">
             {entries.length > 0 && <div className="border-t border-[#21262d] my-3" />}
             <div className="flex items-start gap-2 mt-1">

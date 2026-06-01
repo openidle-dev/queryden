@@ -4,7 +4,7 @@ import { ResultsPanel } from "../results/ResultsPanel";
 import { useConnections } from "../../contexts/useConnections";
 import { useQueryHistory } from "../../store/queryHistoryStore";
 import { useSettings } from "../../store/settingsStore";
-import { Play, Plus, X, ChevronDown, ChevronRight, Terminal, Database, Sparkles, GitCompare, Save, Square, Activity, Loader2, CheckCircle, XCircle } from "lucide-react";
+import { Play, Plus, X, ChevronDown, ChevronRight, Terminal, Database, Sparkles, GitCompare, Save, Square, Activity, Loader2, CheckCircle, XCircle, Copy as CopyIcon, FolderOpen, Clipboard, Pencil } from "lucide-react";
 import { useSavedQueries } from "../../store/savedQueryStore";
 import { useConfirmDialog } from "../ui/ConfirmDialog";
 import { Copy, FileText, BarChart2, Activity as ActivityIcon, Layers, Table } from "lucide-react";
@@ -18,6 +18,8 @@ import { useLocalHistory } from "../../store/localHistoryStore";
 import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
 import { Select } from "../ui/Select";
+import { Menu, MenuItem, MenuSeparator } from "../ui/Menu";
+import { quoteIdentifier, type DatabaseType } from "../../utils/sqlSecurity";
 
 // Lazy-loaded editor — Monaco (core + SQL contribution) is the single
 // heaviest dependency in the app. Pulling QueryEditor out of the cold-start
@@ -126,18 +128,32 @@ export function MainContent() {
   const [executionTime, setExecutionTime] = useState<number>(0);
   const [runningTimeMs, setRunningTimeMs] = useState<number>(0);
   const [lastColumns, setLastColumns] = useState<string[]>([]);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [showToast, setShowToast] = useState(false);
+  const showToastMessage = useCallback((msg: string) => {
+    setToastMessage(msg);
+    setShowToast(true);
+    setTimeout(() => setShowToast(false), 2000);
+  }, []);
   /** Raw psql stdout lines — only populated when running via CLI */
   const [psqlOutput, setPsqlOutput] = useState<string[]>([]);
   const psqlOutputRef = useRef<string[]>([]);
+  // Retain the last non-empty psqlOutput so PsqlWindow's live section doesn't
+  // go blank before psqlEntries are committed (WebView2 on Windows can split
+  // React 18's batch, creating a frame where neither liveOutput nor entries
+  // carries the result).
+  const stashPsqlOutputRef = useRef<string[]>([]);
   // Wrapper to keep ref and state in sync
   const appendPsqlOutput = (linesOrFn: string[] | ((prev: string[]) => string[])) => {
     const next = typeof linesOrFn === 'function' ? linesOrFn(psqlOutputRef.current) : [...psqlOutputRef.current, ...linesOrFn];
     psqlOutputRef.current = next;
     setPsqlOutput(next);
+    stashPsqlOutputRef.current = next;
   };
   const clearPsqlOutput = () => {
     psqlOutputRef.current = [];
     setPsqlOutput([]);
+    stashPsqlOutputRef.current = [];
   };
   // Ref to always have the latest query text from the active editor
   // This avoids stale closures where React state hasn't flushed yet
@@ -160,6 +176,7 @@ export function MainContent() {
   useEffect(() => { connectionsRef.current = connections; }, [connections]);
   useEffect(() => { foldersRef.current = folders; }, [folders]);
   const [activeTableName, setActiveTableName] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
   /**
    * Column name -> SQL type for the current table-backed result set, plus the
    * table name those types belong to. Populated when the explorer opens a
@@ -329,6 +346,114 @@ export function MainContent() {
       if (autoSaveDebounceRef.current) clearTimeout(autoSaveDebounceRef.current);
     };
   }, [settings.autoSaveEnabled, settings.autoSaveInterval, settings.autoSavePath, queryTabs]);
+
+  async function getTabAutoSavePath(tab: QueryTab): Promise<string | null> {
+    if (!tab.query || tab.query.trim() === "") return null;
+    try {
+      const { join } = await import("@tauri-apps/api/path");
+      let dir: string;
+      if (settings.autoSavePath) {
+        dir = settings.autoSavePath;
+      } else {
+        const { appDataDir } = await import("@tauri-apps/api/path");
+        dir = await appDataDir().then((b: string) => join(b, "auto-save"));
+      }
+      const conn = connectionsRef.current.find(
+        c => c.id === (tab.target?.connectionId || activeConnRef.current?.id),
+      );
+      const folder = conn?.folderId
+        ? foldersRef.current.find(f => f.id === conn.folderId)
+        : null;
+      const folderPart = (folder?.name || conn?.name || "unknown")
+        .replace(/[^a-zA-Z0-9_-]/g, "_");
+      const dbPart = (tab.target?.database || selectedDbRef.current || "none")
+        .replace(/[^a-zA-Z0-9_-]/g, "_");
+      const shortId = tab.id.slice(0, 8);
+      return await join(dir, `${folderPart}_${dbPart}_${shortId}.sql`);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Cross-platform clipboard write: uses the modern async API first, falls
+   *  back to execCommand('copy') for platforms where the async API isn't
+   *  available (e.g. WebKitGTK on Linux). */
+  async function copyToClipboard(text: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // fall through to execCommand
+    }
+    // execCommand fallback — works in all webview engines (WebKitGTK,
+    // WebView2, WKWebView) despite being technically deprecated.
+    const el = document.createElement("textarea");
+    el.value = text;
+    el.style.position = "fixed";
+    el.style.left = "-9999px";
+    el.style.top = "-9999px";
+    el.setAttribute("readonly", "");
+    document.body.appendChild(el);
+    el.focus();
+    el.select();
+    try {
+      document.execCommand("copy");
+    } catch {
+      // clipboard write failed on all paths
+    }
+    document.body.removeChild(el);
+  }
+
+  async function openTabFileInExplorer(tab: QueryTab): Promise<void> {
+    const path = await getTabAutoSavePath(tab);
+    if (!path) return;
+    // Ensure parent directory exists on disk so the file manager can navigate to it
+    let parentDir: string | null = null;
+    try {
+      const { dirname } = await import("@tauri-apps/api/path");
+      parentDir = await dirname(path);
+      const { mkdir } = await import("@tauri-apps/plugin-fs");
+      await mkdir(parentDir, { recursive: true });
+    } catch {
+      // can't create dir, try to open anyway
+    }
+    try {
+      const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
+      await revealItemInDir(path);
+    } catch {
+      // revealItemInDir failed (file doesn't exist on disk yet) — open the
+      // parent directory in the file manager instead
+      if (parentDir) {
+        try {
+          const { openPath } = await import("@tauri-apps/plugin-opener");
+          await openPath(parentDir);
+        } catch {
+          // swallow — can't open explorer
+        }
+      }
+    }
+  }
+
+  // Close tab context menu on outside click / Escape
+  useEffect(() => {
+    if (!contextMenu) return;
+    const handler = (e: MouseEvent | KeyboardEvent) => {
+      if (e instanceof KeyboardEvent && e.key !== "Escape") return;
+      setContextMenu(null);
+    };
+    // Delay adding the listener so the menu's own render + click doesn't close itself
+    const id = setTimeout(() => {
+      document.addEventListener("click", handler);
+      document.addEventListener("keydown", handler);
+    }, 0);
+    return () => {
+      clearTimeout(id);
+      document.removeEventListener("click", handler);
+      document.removeEventListener("keydown", handler);
+    };
+  }, [contextMenu]);
+
+  const qid = (name: string) => quoteIdentifier(name, (activeConnection?.type || "postgres") as DatabaseType);
 
   // ── Session persistence: restore open tabs on startup ────────────────────
   const sessionRestoredRef = useRef(false);
@@ -583,6 +708,21 @@ export function MainContent() {
     });
   }, [activeTabId]);
 
+  const closeOthers = useCallback((tabId: string) => {
+    setQueryTabs((prev) => {
+      const tab = prev.find((t) => t.id === tabId);
+      if (!tab) return prev;
+      if (!prev.find((t) => t.id !== tabId)) return prev;
+      setActiveTabId(tab.id);
+      return [tab];
+    });
+  }, []);
+
+  const closeAll = useCallback(() => {
+    setQueryTabs([]);
+    setActiveTabId(null);
+  }, []);
+
   // Extract the single statement at cursor position, or selected text
 // Mirrors QueryEditor's "smart run" logic
 const extractSelectedOrCursorStatement = (fullText: string): string => {
@@ -710,11 +850,22 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     }
 
     // Attempt to extract table name for enabling row operations (ADD/DUP/REMOVE)
-    const tableNameMatch = queryToRun.match(/FROM\s+["']?([a-zA-Z0-9_.]+(?:\.[a-zA-Z0-9_.]+)*)["']?/i);
+    // Match the first identifier after FROM/JOIN/UPDATE/INTO, handling:
+    //   - Quoted identifiers: "MyTable", "my_schema"."MyTable"
+    //   - Schema-qualified: schema.table
+    //   - Excludes CTE aliases and subqueries
+    const tableNameMatch = queryToRun.match(/(?:FROM|JOIN|UPDATE|INTO)\s+(?:"([^"]+)"(?:\."([^"]+)")?|([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)?))\b/i);
     if (tableNameMatch) {
-      const detectedTable = tableNameMatch[1];
+      let detectedTable = "";
+      if (tableNameMatch[1]) {
+        detectedTable = tableNameMatch[2]
+          ? `${tableNameMatch[1]}.${tableNameMatch[2]}`
+          : tableNameMatch[1];
+      } else if (tableNameMatch[3]) {
+        detectedTable = tableNameMatch[3];
+      }
       // Only update if it looks like a simple table name and not a complex subquery
-      if (!detectedTable.startsWith("(")) {
+      if (detectedTable && !detectedTable.startsWith("(")) {
         setActiveTableName(detectedTable);
         if (currentTabId) updateTabState(currentTabId, { tableName: detectedTable });
       }
@@ -1924,25 +2075,25 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     
     for (const col of columns) {
       if (String(oldRow[col]) !== String(newRow[col])) {
-        setClauses.push(`${col} = ${formatSqlValue(newRow[col])}`);
+        setClauses.push(`${qid(col)} = ${formatSqlValue(newRow[col])}`);
       }
     }
     
     if (setClauses.length === 0) return;
     
     if (pk && oldRow[pk] !== undefined && oldRow[pk] !== null) {
-      whereClauses.push(`${pk} = ${formatSqlValue(oldRow[pk])}`);
+      whereClauses.push(`${qid(pk)} = ${formatSqlValue(oldRow[pk])}`);
     } else {
       for (const col of columns) {
         const val = oldRow[col];
-        if (val === null) whereClauses.push(`${col} IS NULL`);
-        else whereClauses.push(`${col} = ${formatSqlValue(val)}`);
+        if (val === null) whereClauses.push(`${qid(col)} IS NULL`);
+        else whereClauses.push(`${qid(col)} = ${formatSqlValue(val)}`);
       }
     }
     
     const sqlSet = setClauses.join(", ");
     const sqlWhere = whereClauses.length > 0 ? whereClauses.join(" AND ") : "TRUE";
-    const updateQuery = `UPDATE ${activeTableName} SET ${sqlSet} WHERE ${sqlWhere}`;
+    const updateQuery = `UPDATE ${qid(activeTableName)} SET ${sqlSet} WHERE ${sqlWhere}`;
 
     const confirmed = await confirmDialog.confirm({
       title: "Confirm Changes",
@@ -1993,16 +2144,16 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     const whereClauses: string[] = [];
     
     if (pk && cleanRow[pk] !== undefined && cleanRow[pk] !== null) {
-      whereClauses.push(`${pk} = ${formatSqlValue(cleanRow[pk])}`);
+      whereClauses.push(`${qid(pk)} = ${formatSqlValue(cleanRow[pk])}`);
     } else {
       for (const col of columns) {
         const val = cleanRow[col];
-        if (val === null) whereClauses.push(`${col} IS NULL`);
-        else whereClauses.push(`${col} = ${formatSqlValue(val)}`);
+        if (val === null) whereClauses.push(`${qid(col)} IS NULL`);
+        else whereClauses.push(`${qid(col)} = ${formatSqlValue(val)}`);
       }
     }
     
-    const deleteQuery = `DELETE FROM ${activeTableName} WHERE ` + (whereClauses.length > 0 ? whereClauses.join(" AND ") : "FALSE");
+    const deleteQuery = `DELETE FROM ${qid(activeTableName)} WHERE ` + (whereClauses.length > 0 ? whereClauses.join(" AND ") : "FALSE");
     
     try {
       setSuppressTabSwitch(true);
@@ -2037,36 +2188,42 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       setSuppressTabSwitch(true);
 
       // ─── Step 1: Build a DB connection for the save operation ───
-      // This connection is used for both NOT NULL validation and for executing
-      // the actual INSERT/UPDATE queries. Using db.execute() directly (instead
-      // of executeQuery, which silently swallows errors) ensures that DB errors
-      // propagate to the outer catch and are reported to the user.
+      // Respect the active tab's target database, same as executeQuery does.
+      // Also respect the target connection's own credentials (host, port, type)
+      // when the tab's target points to a different connection than the
+      // globally active one. Without this, INSERT/UPDATE would use the wrong
+      // database or wrong server credentials.
+      const activeTab = queryTabs.find(t => t.id === activeTabId);
+      const targetConn = activeTab?.target;
+      const saveConn = targetConn
+        ? connections.find(c => c.id === targetConn.connectionId)
+        : activeConnection;
+      const saveDbName = targetConn?.database || selectedDatabase || activeConnection.database;
+      const conn = saveConn || activeConnection;
+      let username = conn.username || "";
+      let password = conn.password || "";
+      if (conn.vaultCredentialId) {
+        const vaultCred = vaultCredentials.find(vc => vc.id === conn.vaultCredentialId);
+        if (vaultCred) { username = vaultCred.username || ""; password = vaultCred.password || ""; }
+      }
+      const encodedUser = encodeURIComponent(username);
+      const encodedPass = encodeURIComponent(password);
+      const port = conn.port || (conn.type === "mysql" || conn.type === "mariadb" ? 3306 : 5432);
+      const Database = (await import("@tauri-apps/plugin-sql")).default;
+      let connectionString = "";
+      let db: any;
+      if (conn.type === "sqlite") {
+        connectionString = `sqlite:${conn.filepath || "queryden.db"}`;
+      } else if (["postgres", "supabase", "cockroach"].includes(conn.type)) {
+        connectionString = `postgres://${encodedUser}:${encodedPass}@${conn.host}:${port}/${saveDbName}`;
+      } else {
+        connectionString = `mysql://${encodedUser}:${encodedPass}@${conn.host}:${port}/${saveDbName}`;
+      }
+      db = await Database.load(connectionString);
+
       const tableParts = activeTableName.split(".");
       const schemaName = tableParts.length > 1 ? tableParts[0] : "public";
       const tableName = tableParts.length > 1 ? tableParts.slice(1).join(".") : activeTableName;
-
-      let db = currentDb;
-      if (!db) {
-        const Database = (await import("@tauri-apps/plugin-sql")).default;
-        let username = activeConnection.username || "";
-        let password = activeConnection.password || "";
-        if (activeConnection.vaultCredentialId) {
-          const vaultCred = vaultCredentials.find(vc => vc.id === activeConnection.vaultCredentialId);
-          if (vaultCred) { username = vaultCred.username || ""; password = vaultCred.password || ""; }
-        }
-        const encodedUser = encodeURIComponent(username);
-        const encodedPass = encodeURIComponent(password);
-        const port = activeConnection.port || (activeConnection.type === "mysql" || activeConnection.type === "mariadb" ? 3306 : 5432);
-        let connectionString = "";
-        if (activeConnection.type === "sqlite") {
-          connectionString = `sqlite:${activeConnection.filepath || "queryden.db"}`;
-        } else if (["postgres", "supabase", "cockroach"].includes(activeConnection.type)) {
-          connectionString = `postgres://${encodedUser}:${encodedPass}@${activeConnection.host}:${port}/${selectedDatabase || activeConnection.database}`;
-        } else {
-          connectionString = `mysql://${encodedUser}:${encodedPass}@${activeConnection.host}:${port}/${selectedDatabase || activeConnection.database}`;
-        }
-        db = await Database.load(connectionString);
-      }
 
       // ─── Step 2: Validate NOT NULL + FK constraints (all providers) ───
       const rowsWithMissing: { rowIndex: number; missing: string[] }[] = [];
@@ -2138,14 +2295,14 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         
         let query = "";
         if (columns.length === 0) {
-          query = `INSERT INTO ${activeTableName} DEFAULT VALUES`;
+          query = `INSERT INTO ${qid(activeTableName)} DEFAULT VALUES`;
           if (activeConnection.type === "mysql" || activeConnection.type === "mariadb") {
-             query = `INSERT INTO ${activeTableName} () VALUES ()`;
+             query = `INSERT INTO ${qid(activeTableName)} () VALUES ()`;
           }
         } else {
-          const cols = columns.join(", ");
+          const cols = columns.map(c => qid(c)).join(", ");
           const vals = columns.map(c => formatSqlValue(data[c])).join(", ");
-          query = `INSERT INTO ${activeTableName} (${cols}) VALUES (${vals})`;
+          query = `INSERT INTO ${qid(activeTableName)} (${cols}) VALUES (${vals})`;
         }
         await db.execute(query);
       }
@@ -2165,29 +2322,23 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         const setClauses: string[] = [];
         const whereClauses: string[] = [];
         
-        // For simplicity in buffered mode, we update ALL columns or we'd need a "snapshot" of original values.
-        // Since we don't have the original row values here easily without more state, 
-        // we'll just use the columns we have.
-        // Actually, let's just generate the update based on what's there.
         for (const col of columns) {
-           setClauses.push(`${col} = ${formatSqlValue(data[col])}`);
+           setClauses.push(`${qid(col)} = ${formatSqlValue(data[col])}`);
         }
         
         if (pk && data[pk] !== undefined && data[pk] !== null) {
-          whereClauses.push(`${pk} = ${formatSqlValue(data[pk])}`);
+          whereClauses.push(`${qid(pk)} = ${formatSqlValue(data[pk])}`);
         } else {
-          // Fallback to all columns for WHERE if no PK
-          // This is risky but standard for DB managers without PKs
           for (const col of columns) {
             const val = data[col];
-            if (val === null) whereClauses.push(`${col} IS NULL`);
-            else whereClauses.push(`${col} = ${formatSqlValue(val)}`);
+            if (val === null) whereClauses.push(`${qid(col)} IS NULL`);
+            else whereClauses.push(`${qid(col)} = ${formatSqlValue(val)}`);
           }
         }
         
         const sqlSet = setClauses.join(", ");
         const sqlWhere = whereClauses.length > 0 ? whereClauses.join(" AND ") : "TRUE";
-        const updateQuery = `UPDATE ${activeTableName} SET ${sqlSet} WHERE ${sqlWhere}`;
+        const updateQuery = `UPDATE ${qid(activeTableName)} SET ${sqlSet} WHERE ${sqlWhere}`;
         
         await db.execute(updateQuery);
       }
@@ -2206,7 +2357,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       isExecutingRef.current = false;
       setSuppressTabSwitch(false);
     }
-  }, [activeTableName, activeConnection, selectedDatabase, currentDb, vaultCredentials, executeQuery, confirmDialog]);
+  }, [activeTableName, activeConnection, selectedDatabase, vaultCredentials, executeQuery, confirmDialog, connections]);
 
   const handleAddRow = useCallback(async (newRow: any, localOnly = true): Promise<void> => {
     if (localOnly) {
@@ -2237,9 +2388,9 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       // Just insert default values
       try {
         setSuppressTabSwitch(true);
-        let sql = `INSERT INTO ${activeTableName} DEFAULT VALUES`;
+        let sql = `INSERT INTO ${qid(activeTableName)} DEFAULT VALUES`;
         if (activeConnection.type === "mysql") {
-          sql = `INSERT INTO ${activeTableName} () VALUES ()`;
+          sql = `INSERT INTO ${qid(activeTableName)} () VALUES ()`;
         }
         await executeQuery(sql);
         if (lastSelectQueryRef.current) {
@@ -2261,16 +2412,16 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       setSuppressTabSwitch(true);
       if (Object.keys(newRow).length === 0) {
         // Insert a default blank row
-        let sql = `INSERT INTO ${activeTableName} DEFAULT VALUES`;
+        let sql = `INSERT INTO ${qid(activeTableName)} DEFAULT VALUES`;
         if (activeConnection.type === "mysql" || activeConnection.type === "mariadb") {
-          sql = `INSERT INTO ${activeTableName} () VALUES ()`;
+          sql = `INSERT INTO ${qid(activeTableName)} () VALUES ()`;
         }
         await executeQuery(sql);
         await executeQuery(lastSelectQueryRef.current);
       } else {
-        const cols = columns.join(", ");
+        const cols = columns.map(c => qid(c)).join(", ");
         const vals = columns.map(c => formatSqlValue(newRow[c])).join(", ");
-        const query = `INSERT INTO ${activeTableName} (${cols}) VALUES (${vals})`;
+        const query = `INSERT INTO ${qid(activeTableName)} (${cols}) VALUES (${vals})`;
         await executeQuery(query);
         await executeQuery(lastSelectQueryRef.current);
       }
@@ -2702,8 +2853,10 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       </div>
       )}
 
-      {/* Query Tabs - DataGrip Style — gated alongside the toolbar (#84). */}
-      {isDatabaseReady && (
+      {/* Query Tabs - DataGrip Style — visible whenever tabs exist, even
+          before a database is connected (#84 relaxed: restored sessions
+          should render immediately). */}
+      {queryTabs.length > 0 && (
       <div className="flex items-center bg-[var(--surface-panel)] border-b border-[var(--neutral-6)] shrink-0 overflow-x-auto no-scrollbar">
         <div className="flex items-center flex-nowrap min-w-0">
           {queryTabs.map((tab) => {
@@ -2736,6 +2889,11 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                   setTimeout(() => {
                     window.dispatchEvent(new CustomEvent("focus-editor"));
                   }, 50);
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setContextMenu({ x: e.clientX, y: e.clientY, tabId: tab.id });
                 }}
               >
                 {/* Connection color stripe - left edge */}
@@ -2806,11 +2964,87 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       </div>
       )}
 
+      {/* Tab context menu */}
+      {contextMenu && (() => {
+        const ctxTab = queryTabs.find(t => t.id === contextMenu.tabId);
+        if (!ctxTab) return null;
+        return (
+          <Menu x={contextMenu.x} y={contextMenu.y}>
+            <MenuItem
+              icon={<X className="w-3.5 h-3.5" />}
+              onClick={async () => { closeTab(ctxTab.id); setContextMenu(null); }}
+            >
+              Close
+            </MenuItem>
+            <MenuItem
+              icon={<X className="w-3.5 h-3.5" />}
+              onClick={() => { closeOthers(ctxTab.id); setContextMenu(null); }}
+              disabled={queryTabs.length <= 1}
+            >
+              Close Others
+            </MenuItem>
+            <MenuItem
+              icon={<X className="w-3.5 h-3.5" />}
+              onClick={() => { closeAll(); setContextMenu(null); }}
+              disabled={queryTabs.length <= 1}
+            >
+              Close All
+            </MenuItem>
+            <MenuSeparator />
+            <MenuItem
+              icon={<Pencil className="w-3.5 h-3.5" />}
+              onClick={() => {
+                const newName = window.prompt("Rename tab:", ctxTab.name);
+                if (newName && newName.trim()) {
+                  updateTabState(ctxTab.id, { name: newName.trim() });
+                }
+                setContextMenu(null);
+              }}
+            >
+              Rename
+            </MenuItem>
+            <MenuItem
+              icon={<CopyIcon className="w-3.5 h-3.5" />}
+              onClick={() => {
+                addNewTab(ctxTab.query, ctxTab.name + " (copy)", ctxTab.usePsql,
+                  ctxTab.target?.connectionId, ctxTab.target?.connectionName, ctxTab.target?.database);
+                setContextMenu(null);
+              }}
+            >
+              Duplicate
+            </MenuItem>
+            <MenuSeparator />
+            <MenuItem
+              icon={<Clipboard className="w-3.5 h-3.5" />}
+              onClick={async () => {
+                const path = await getTabAutoSavePath(ctxTab);
+                if (path) {
+                  await copyToClipboard(path);
+                  showToastMessage("Copied to clipboard");
+                }
+                setContextMenu(null);
+              }}
+            >
+              Copy File Path
+            </MenuItem>
+            <MenuItem
+              icon={<FolderOpen className="w-3.5 h-3.5" />}
+              onClick={async () => {
+                await openTabFileInExplorer(ctxTab);
+                setContextMenu(null);
+              }}
+            >
+              Open in Explorer
+            </MenuItem>
+          </Menu>
+        );
+      })()}
+
       {/* Query Editor and Results */}
       <PanelGroup direction="vertical" className="flex-1 min-h-0">
         {/* Top panel: Editor or Dashboard — must be a Panel for PanelGroup to work */}
         <Panel minSize={20} maxSize={80}>
-          {!isDatabaseReady ? (
+          {!activeTab && queryTabs.length === 0 ? (
             <EmptyStateLauncher />
           ) : activeTab ? (
             activeTab.usePsql ? (
@@ -2819,7 +3053,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                   <Suspense fallback={null}>
                     <PsqlWindow
                       entries={activeTab.psqlEntries || []}
-                      liveOutput={isExecuting ? psqlOutput : []}
+                      liveOutput={psqlOutput.length > 0 ? psqlOutput : stashPsqlOutputRef.current}
                       runningCommand={isExecuting ? (runningCmdRef.current || activeTab.query || "") : null}
                       isExecuting={isExecuting}
                       executionTime={executionTime}
@@ -2965,6 +3199,12 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           />
         )}
       </Suspense>
+
+      {showToast && toastMessage && (
+        <div className="fixed bottom-4 right-4 z-50 bg-[var(--neutral-12)] text-[var(--neutral-1)] px-4 py-2 rounded-md shadow-lg text-sm animate-in fade-in slide-in-from-bottom-2">
+          {toastMessage}
+        </div>
+      )}
     </div>
   );
 }
