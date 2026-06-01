@@ -405,32 +405,51 @@ export function MainContent() {
   }
 
   async function openTabFileInExplorer(tab: QueryTab): Promise<void> {
-    const path = await getTabAutoSavePath(tab);
-    if (!path) return;
-    // Ensure parent directory exists on disk so the file manager can navigate to it
+    // Resolve path and parent directory; handle empty tabs by using the
+    // auto-save directory as fallback parent.
+    let path: string | null = null;
     let parentDir: string | null = null;
+
     try {
-      const { dirname } = await import("@tauri-apps/api/path");
-      parentDir = await dirname(path);
-      const { mkdir } = await import("@tauri-apps/plugin-fs");
-      await mkdir(parentDir, { recursive: true });
-    } catch {
-      // can't create dir, try to open anyway
-    }
-    try {
-      const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
-      await revealItemInDir(path);
-    } catch {
-      // revealItemInDir failed (file doesn't exist on disk yet) — open the
-      // parent directory in the file manager instead
-      if (parentDir) {
-        try {
-          const { openPath } = await import("@tauri-apps/plugin-opener");
-          await openPath(parentDir);
-        } catch {
-          // swallow — can't open explorer
-        }
+      const { join, dirname, appDataDir } = await import("@tauri-apps/api/path");
+
+      path = await getTabAutoSavePath(tab);
+      if (path) {
+        parentDir = await dirname(path);
+      } else {
+        parentDir = settings.autoSavePath
+          ? settings.autoSavePath
+          : await appDataDir().then((b: string) => join(b, "auto-save"));
       }
+
+      const { mkdir } = await import("@tauri-apps/plugin-fs");
+      if (parentDir) {
+        await mkdir(parentDir, { recursive: true });
+      }
+    } catch {
+      showToastMessage("Could not prepare file manager path");
+    }
+
+    if (path) {
+      try {
+        const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
+        await revealItemInDir(path);
+        return;
+      } catch {
+        showToastMessage("Could not reveal file, opening parent folder");
+      }
+    }
+
+    if (parentDir) {
+      try {
+        const { openPath } = await import("@tauri-apps/plugin-opener");
+        await openPath(parentDir);
+        return;
+      } catch {
+        showToastMessage("Could not open file manager");
+      }
+    } else {
+      showToastMessage("Could not open file manager");
     }
   }
 
@@ -974,6 +993,20 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           const msg = "PostgreSQL version unknown. Connect to the database first so QueryDen can detect the server version.";
           appendPsqlOutput([`ERROR: ${msg}`]);
           setError(msg);
+          if (currentTabId) {
+            const errEntry: PsqlConsoleEntry = {
+              id: crypto.randomUUID(),
+              command: runningCmdRef.current || queryToRun,
+              outputLines: psqlOutputRef.current.length > 0 ? [...psqlOutputRef.current] : [`ERROR: ${msg}`],
+              hasErrors: true,
+              executionTime: 0,
+            };
+            updateTabState(currentTabId, {
+              psqlEntries: [...(currentTab?.psqlEntries || []), errEntry],
+              psqlOutput: [],
+            });
+            clearPsqlOutput();
+          }
           setIsExecuting(false);
       isExecutingRef.current = false;
           return;
@@ -993,8 +1026,23 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
             type: "info",
           });
           if (!confirmed) {
-            appendPsqlOutput([`ERROR: CLI tool download cancelled.`]);
-            setError("CLI tool download cancelled.");
+            const errMsg = "CLI tool download cancelled.";
+            appendPsqlOutput([`ERROR: ${errMsg}`]);
+            setError(errMsg);
+            if (currentTabId) {
+              const errEntry: PsqlConsoleEntry = {
+                id: crypto.randomUUID(),
+                command: runningCmdRef.current || queryToRun,
+                outputLines: psqlOutputRef.current.length > 0 ? [...psqlOutputRef.current] : [`ERROR: ${errMsg}`],
+                hasErrors: true,
+                executionTime: 0,
+              };
+              updateTabState(currentTabId, {
+                psqlEntries: [...(currentTab?.psqlEntries || []), errEntry],
+                psqlOutput: [],
+              });
+              clearPsqlOutput();
+            }
             setIsExecuting(false);
       isExecutingRef.current = false;
             return;
@@ -1007,6 +1055,20 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
             const msg = `Download failed: ${dlErr.message || String(dlErr)}`;
             appendPsqlOutput([`ERROR: ${msg}`]);
             setError(msg);
+            if (currentTabId) {
+              const errEntry: PsqlConsoleEntry = {
+                id: crypto.randomUUID(),
+                command: runningCmdRef.current || queryToRun,
+                outputLines: psqlOutputRef.current.length > 0 ? [...psqlOutputRef.current] : [`ERROR: ${msg}`],
+                hasErrors: true,
+                executionTime: 0,
+              };
+              updateTabState(currentTabId, {
+                psqlEntries: [...(currentTab?.psqlEntries || []), errEntry],
+                psqlOutput: [],
+              });
+              clearPsqlOutput();
+            }
             setIsExecuting(false);
       isExecutingRef.current = false;
             return;
@@ -1033,6 +1095,20 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               }
               appendPsqlOutput([`ERROR: ${installHint}`]);
               setError("psql not found");
+              if (currentTabId) {
+                const errEntry: PsqlConsoleEntry = {
+                  id: crypto.randomUUID(),
+                  command: runningCmdRef.current || queryToRun,
+                  outputLines: psqlOutputRef.current.length > 0 ? [...psqlOutputRef.current] : [`ERROR: ${installHint}`],
+                  hasErrors: true,
+                  executionTime: 0,
+                };
+                updateTabState(currentTabId, {
+                  psqlEntries: [...(currentTab?.psqlEntries || []), errEntry],
+                  psqlOutput: [],
+                });
+                clearPsqlOutput();
+              }
               setIsExecuting(false);
               isExecutingRef.current = false;
               return;
@@ -1263,6 +1339,20 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               const msg = "\\watch cannot be used with an empty query on the PSQLWindow / console. Run a query first (e.g. SELECT 1) and then use \\watch.";
               appendPsqlOutput([`ERROR: ${msg}`]);
               setError(msg);
+              if (currentTabId) {
+                const errEntry: PsqlConsoleEntry = {
+                  id: crypto.randomUUID(),
+                  command: runningCmdRef.current || queryToRun,
+                  outputLines: psqlOutputRef.current.length > 0 ? [...psqlOutputRef.current] : [`ERROR: ${msg}`],
+                  hasErrors: true,
+                  executionTime: 0,
+                };
+                updateTabState(currentTabId, {
+                  psqlEntries: [...(currentTab?.psqlEntries || []), errEntry],
+                  psqlOutput: [],
+                });
+                clearPsqlOutput();
+              }
               setIsExecuting(false);
               isExecutingRef.current = false;
               return;
@@ -1287,6 +1377,23 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               }
             }
             
+            // Commit accumulated watch output as a persistent entry
+            if (currentTabId) {
+              const watchCmd = runningCmdRef.current || queryToRun;
+              const watchOutput = psqlOutputRef.current;
+              const watchEntry: PsqlConsoleEntry = {
+                id: crypto.randomUUID(),
+                command: watchCmd,
+                outputLines: watchOutput.length > 0 ? [...watchOutput] : ["(watch cancelled)"],
+                hasErrors: watchOutput.some(l => l.startsWith("ERROR:") || l.startsWith("FATAL:")),
+                executionTime: Date.now() - startTime,
+              };
+              updateTabState(currentTabId, {
+                psqlEntries: [...(currentTab?.psqlEntries || []), watchEntry],
+                psqlOutput: [],
+              });
+              clearPsqlOutput();
+            }
             setIsExecuting(false);
             isExecutingRef.current = false;
             return;
@@ -2773,6 +2880,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               try {
                 await connectToDatabase(activeTab.target.connectionId, activeTab.target.database);
               } catch {
+                showToastMessage("Failed to connect — cannot open ER Diagram");
                 return;
               }
             }
