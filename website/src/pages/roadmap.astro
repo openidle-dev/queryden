@@ -64,11 +64,6 @@ const HORIZONS: Horizon[] = [
         issue: 46,
       },
       {
-        title: 'Import connections from pgAdmin / DBeaver',
-        body: 'Read existing connection exports so new users don\'t have to retype every host, port, and database to try QueryDen.',
-        issue: 53,
-      },
-      {
         title: 'psql console correctness',
         body: 'Auto-appended LIMIT after a trailing semicolon produces a syntax error; the Extended-display shortcut (\\x) doesn\'t fire. Two small fixes that make the embedded psql usable.',
         issue: 38,
@@ -99,18 +94,6 @@ const HORIZONS: Horizon[] = [
         title: 'Schema-aware row editor',
         body: 'FK dropdowns, NOT NULL enforcement, and type-aware widgets so editing a row feels like editing a form, not a JSON blob.',
         issue: 50,
-        status: 'exploring',
-      },
-      {
-        title: 'Inline add-row in the grid',
-        body: 'New rows added at the bottom of the grid alongside (or instead of) the AddRowModal — fewer modal hops for bulk inserts.',
-        issue: 49,
-        status: 'exploring',
-      },
-      {
-        title: 'Image columns as thumbnails',
-        body: 'Render bytea / base64 image columns as inline previews with click-to-zoom, so picture-heavy tables are actually browsable.',
-        issue: 52,
         status: 'exploring',
       },
       {

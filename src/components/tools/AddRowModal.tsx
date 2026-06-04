@@ -1,37 +1,88 @@
-import { useState, useEffect } from "react";
-import { Save, AlertCircle, Type } from "lucide-react";
+import { useState, useEffect, useMemo } from "react";
+import { Save, AlertCircle } from "lucide-react";
 import { Dialog } from "../ui/Dialog";
 import { Button } from "../ui/Button";
+import { SchemaAwareField, type ColumnMeta, type FKMeta, type FKOption } from "../ui/fields/SchemaAwareField";
 
 interface AddRowModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (row: any) => Promise<void>;
-  columns: string[];
+  columns: ColumnMeta[];
+  foreignKeys?: FKMeta[];
+  loadFKOptions?: (fk: FKMeta, search: string) => Promise<FKOption[]>;
   tableName: string;
 }
 
-export function AddRowModal({ isOpen, onClose, onSave, columns, tableName }: AddRowModalProps) {
+export function AddRowModal({ isOpen, onClose, onSave, columns, foreignKeys, loadFKOptions, tableName }: AddRowModalProps) {
   const [row, setRow] = useState<Record<string, any>>({});
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [violations, setViolations] = useState<Set<string>>(new Set());
+
+  const fkMap = useMemo(() => {
+    const map = new Map<string, FKMeta>();
+    if (foreignKeys) {
+      for (const fk of foreignKeys) {
+        for (const col of fk.columns) {
+          map.set(col, fk);
+        }
+      }
+    }
+    return map;
+  }, [foreignKeys]);
 
   useEffect(() => {
     if (isOpen) {
-      const initialRow = columns.reduce((acc, col) => ({ ...acc, [col]: "" }), {});
+      const initialRow: Record<string, any> = {};
+      for (const col of columns) {
+        if (col.default != null && col.default !== "") {
+          // For expressions like 'now()' or sequences, leave empty (let DB handle)
+          if (col.default.includes("(") || col.default.includes("nextval")) {
+            initialRow[col.name] = null;
+          } else {
+            initialRow[col.name] = col.default.replace(/^'|'$/g, "").replace(/::\w+/g, "").trim();
+          }
+        } else {
+          initialRow[col.name] = "";
+        }
+      }
       setRow(initialRow);
       setError(null);
+      setViolations(new Set());
     }
   }, [isOpen, columns]);
 
+  const validate = (): Set<string> => {
+    const v = new Set<string>();
+    for (const col of columns) {
+      if (!col.nullable && !col.default) {
+        const val = row[col.name];
+        if (val === null || val === undefined || val === "") {
+          v.add(col.name);
+        }
+      }
+    }
+    return v;
+  };
+
   const handleSave = async () => {
+    const v = validate();
+    setViolations(v);
+    if (v.size > 0) return;
+
     setIsSaving(true);
     setError(null);
     try {
       const cleanedRow = { ...row };
-      Object.keys(cleanedRow).forEach(key => {
-        if (cleanedRow[key] === "") cleanedRow[key] = null;
-      });
+      for (const key of Object.keys(cleanedRow)) {
+        const col = columns.find(c => c.name === key);
+        // Only coerce empty string → null for non-textual types (number, date, time)
+        const nonTextPrefixes = ["int", "smallint", "bigint", "tinyint", "mediumint", "float", "double", "decimal", "numeric", "real", "money", "serial", "date", "time", "timestamp"];
+        if (col && cleanedRow[key] === "" && nonTextPrefixes.some(p => col.type.toLowerCase().startsWith(p))) {
+          cleanedRow[key] = null;
+        }
+      }
 
       await onSave(cleanedRow);
       onClose();
@@ -42,10 +93,12 @@ export function AddRowModal({ isOpen, onClose, onSave, columns, tableName }: Add
     }
   };
 
-  // Don't let the modal be dismissed while a write is in flight.
   const handleRequestClose = () => {
     if (!isSaving) onClose();
   };
+
+  const numViolations = violations.size;
+  const hasViolations = numViolations > 0;
 
   return (
     <Dialog open={isOpen} onClose={handleRequestClose} size="lg" dismissOnBackdrop={!isSaving} dismissOnEsc={!isSaving}>
@@ -71,27 +124,26 @@ export function AddRowModal({ isOpen, onClose, onSave, columns, tableName }: Add
           </div>
         )}
 
-        <div className="grid grid-cols-1 gap-4">
-          {columns.map(col => {
-            const isId = col.toLowerCase() === "id" || col.toLowerCase().endsWith("_id");
+        {hasViolations && (
+          <div className="p-3 bg-[var(--danger-3)] border border-[var(--danger-6)] rounded-md flex items-center gap-3 text-[var(--danger-11)] text-sm">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            {numViolations} required field{numViolations !== 1 ? "s" : ""} need{numViolations === 1 ? "s" : ""} a value
+          </div>
+        )}
 
+        <div className="grid grid-cols-1 gap-4 max-h-[60vh] overflow-y-auto pr-1">
+          {columns.map(col => {
+            const fk = fkMap.get(col.name);
             return (
-              <div key={col} className="space-y-1.5">
-                <label className="text-[10px] uppercase font-bold text-[var(--neutral-11)] tracking-wider flex items-center justify-between px-1">
-                  <span className="flex items-center gap-1.5">
-                    <Type className="w-3 h-3 opacity-50" />
-                    {col}
-                  </span>
-                  {isId && <span className="text-[8px] font-normal opacity-50 italic">Auto-gen?</span>}
-                </label>
-                <input
-                  type="text"
-                  value={row[col] ?? ""}
-                  onChange={(e) => setRow(prev => ({ ...prev, [col]: e.target.value }))}
-                  placeholder={isId ? "Leave empty for auto-increment" : `Enter ${col}…`}
-                  className="w-full bg-[var(--surface-base)] border border-[var(--neutral-7)] focus:border-[var(--accent-8)] focus:ring-1 focus:ring-[var(--accent-8)]/30 outline-none rounded-md px-3 py-2 text-sm font-mono text-[var(--neutral-12)] placeholder:text-[var(--neutral-9)] transition-colors"
-                />
-              </div>
+              <SchemaAwareField
+                key={col.name}
+                column={col}
+                fk={fk}
+                value={row[col.name]}
+                onChange={(val) => setRow(prev => ({ ...prev, [col.name]: val }))}
+                error={violations.has(col.name)}
+                loadFKOptions={loadFKOptions}
+              />
             );
           })}
         </div>
@@ -106,9 +158,10 @@ export function AddRowModal({ isOpen, onClose, onSave, columns, tableName }: Add
           size="sm"
           onClick={handleSave}
           loading={isSaving}
+          disabled={hasViolations && !isSaving}
           leftIcon={isSaving ? undefined : <Save className="w-3.5 h-3.5" />}
         >
-          Save record
+          {hasViolations ? "Fix required fields" : "Save record"}
         </Button>
       </Dialog.Footer>
     </Dialog>

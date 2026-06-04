@@ -1,4 +1,4 @@
-import React, { useMemo, useCallback } from "react";
+import React, { useMemo, useCallback, useState } from "react";
 import DataEditor, { 
   GridCell, 
   GridCellKind, 
@@ -6,12 +6,116 @@ import DataEditor, {
   Theme,
   EditableGridCell,
   Item,
-  BooleanCell
+  BooleanCell,
+  CustomCell,
+  CustomRenderer,
+  DrawArgs,
+  measureTextCached,
+  getMiddleCenterBias,
 } from "@glideapps/glide-data-grid";
 import "@glideapps/glide-data-grid/dist/index.css";
 import { useSettings } from "../../store/settingsStore";
 import { toNormalizedBytes, detectFileType, formatFileSize, detectBinaryColumns, FileType } from "../../utils/binaryUtils";
 import { isDateTimeType } from "../../utils/columnTypes";
+
+interface FkCellData {
+  __fk__: true;
+  value: string;
+  fkCol: string;
+  fk: { refTable: string; refColumns: string[] };
+  fkValue: any;
+  onNavigate: () => void;
+}
+
+const ICON_W = 12;
+const ICON_PAD = 6;
+
+const fkCellRenderer: CustomRenderer<CustomCell<FkCellData>> = {
+  kind: GridCellKind.Custom,
+  isMatch: (cell): cell is CustomCell<FkCellData> =>
+    cell.kind === GridCellKind.Custom &&
+    typeof cell.data === "object" &&
+    cell.data !== null &&
+    "__fk__" in cell.data,
+  needsHover: false,
+  needsHoverPosition: true,
+  draw: (args: DrawArgs<CustomCell<FkCellData>>, cell: CustomCell<FkCellData>) => {
+    const { ctx, theme, rect, hoverX, hoverY, overrideCursor } = args;
+    const txt = cell.data.value;
+    const s = ICON_W;
+
+    ctx.font = theme.baseFontFull;
+    const bias = getMiddleCenterBias(ctx, theme);
+    const padding = theme.cellHorizontalPadding;
+
+    // Draw FK text in link color
+    ctx.fillStyle = theme.linkColor;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText(txt, rect.x + padding, rect.y + rect.height / 2 + bias);
+
+    // Blue external link icon on the right
+    const iconX = rect.x + rect.width - s - ICON_PAD;
+    const iconY = rect.y + (rect.height - s) / 2;
+
+    const localIconX = rect.width - s - ICON_PAD;
+    const localIconY = (rect.height - s) / 2;
+
+    const isHoveringIcon =
+      hoverX !== undefined && hoverY !== undefined &&
+      hoverX >= localIconX && hoverX <= localIconX + s &&
+      hoverY >= localIconY && hoverY <= localIconY + s;
+
+    if (isHoveringIcon && overrideCursor) {
+      overrideCursor("pointer");
+    }
+
+    const iconColor = isHoveringIcon ? theme.accentColor : theme.linkColor;
+    ctx.strokeStyle = iconColor;
+    ctx.lineWidth = 1.2;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    // Draw the box (open at top-right)
+    ctx.beginPath();
+    ctx.moveTo(iconX + s * 0.6, iconY + s * 0.15);
+    ctx.lineTo(iconX + s * 0.15, iconY + s * 0.15);
+    ctx.lineTo(iconX + s * 0.15, iconY + s * 0.85);
+    ctx.lineTo(iconX + s * 0.85, iconY + s * 0.85);
+    ctx.lineTo(iconX + s * 0.85, iconY + s * 0.4);
+    ctx.stroke();
+
+    // Draw diagonal arrow pointing up-right
+    ctx.beginPath();
+    ctx.moveTo(iconX + s * 0.4, iconY + s * 0.6);
+    ctx.lineTo(iconX + s * 0.85, iconY + s * 0.15);
+    ctx.stroke();
+
+    // Arrow tip
+    ctx.beginPath();
+    ctx.moveTo(iconX + s * 0.65, iconY + s * 0.15);
+    ctx.lineTo(iconX + s * 0.85, iconY + s * 0.15);
+    ctx.lineTo(iconX + s * 0.85, iconY + s * 0.35);
+    ctx.stroke();
+  },
+  onClick: (args) => {
+    const { bounds, posX, posY, preventDefault } = args;
+    // posX/posY are cell-relative (localEventX = ev.clientX - bounds.x);
+    // bounds.width/height are the cell dimensions.
+    const s = ICON_W;
+    const iconX = bounds.width - s - ICON_PAD;
+    const iconY = (bounds.height - s) / 2;
+    if (posX >= iconX && posX <= iconX + s && posY >= iconY && posY <= iconY + s) {
+      args.cell.data.onNavigate();
+      preventDefault?.();
+    }
+    return undefined;
+  },
+  measure: (ctx, cell, theme) =>
+    measureTextCached(cell.data.value, ctx, theme.baseFontFull).width +
+    theme.cellHorizontalPadding * 2 + ICON_W + ICON_PAD,
+  provideEditor: () => undefined,
+};
 
 interface GridViewProps {
   data: any[];
@@ -30,14 +134,17 @@ interface GridViewProps {
   onColumnMoved?: (fromIdx: number, toIdx: number) => void;
   columnWidths?: Record<string, number>;
   isReadOnly?: boolean;
-  /**
-   * Optional map of column name -> SQL type (e.g. "TIMESTAMP", "TEXT").
-   * Used to decide which cells render the date/time overlay editor. When a
-   * column is missing from this map (e.g. ad-hoc query results without a
-   * table-level schema), we fall back to the column-name heuristic — see
-   * `isDateTimeType` and issue #51.
-   */
   columnTypes?: Record<string, string>;
+  /**
+   * Full table schema for FK-aware inline editing. When present, FK columns
+   * render a searchable dropdown of referenced PK values.
+   */
+  tableSchema?: {
+    columns: { name: string; type: string; nullable: boolean; default: string | null }[];
+    foreignKeys: { columns: string[]; refTable: string; refColumns: string[] }[];
+  };
+  loadFKOptions?: (fk: { refTable: string; refColumns: string[] }, search: string) => Promise<{ pk: any; label: string }[]>;
+  onFkCellClick?: (fk: { refTable: string; refColumns: string[] }, fkValue: any) => void;
 }
 
 export interface GridViewRef {
@@ -132,6 +239,7 @@ const getTheme = (p: GridPalette): Partial<Theme> => ({
   bgSearchResult: p.accentTint,
   drilldownBorder: p.border,
   editorFontSize: "13px",
+  linkColor: p.accentText,
 });
 
 
@@ -141,6 +249,112 @@ const maskValue = (val: string) => {
   if (val.length > 10) return val.substring(0, 3) + "********";
   return "********";
 };
+
+function inferFromColumnName(col: string): string {
+  const colLower = col.toLowerCase();
+  if (colLower === "id" || colLower.endsWith("_id")) return "int";
+  if (colLower.includes("date") || colLower.includes("time") || colLower === "created_at" || colLower === "updated_at" || colLower.includes("timestamp")) return "timestamp";
+  if (colLower.includes("name") || colLower.includes("title") || colLower.includes("email") || colLower.includes("phone") || colLower.includes("address") || colLower.includes("username")) return "varchar";
+  if (colLower.includes("description") || colLower.includes("comment") || colLower.includes("note") || colLower.includes("content") || colLower.includes("message") || colLower.includes("body")) return "text";
+  if (colLower.includes("price") || colLower.includes("amount") || colLower.includes("cost") || colLower.includes("total") || colLower.includes("salary") || colLower.includes("balance")) return "float";
+  if (colLower.includes("age") || colLower.includes("count") || colLower.includes("quantity") || colLower.includes("score") || colLower.includes("year")) return "int";
+  if (colLower.includes("active") || colLower.includes("enabled") || colLower.includes("is_") || colLower.includes("has_") || colLower === "deleted") return "bool";
+  if (colLower.includes("json") || colLower.includes("data") || colLower.includes("metadata") || colLower.includes("properties") || colLower.includes("attributes")) return "jsonb";
+  if (colLower.includes("image") || colLower.includes("photo") || colLower.includes("avatar") || colLower.includes("file") || colLower.includes("binary") || colLower.includes("blob")) return "bytea";
+  if (colLower.includes("uuid") || colLower.includes("guid")) return "uuid";
+  return "varchar";
+}
+
+function inferColumnType(data: any[], col: string): string | undefined {
+  if (!col) return undefined;
+  let samples = 0;
+  const MAX_SAMPLES = 100;
+  let hasNumber = false;
+  let allNumbers = true;
+  let allInt = true;
+  let seenBoolString = false;
+  let seenNonBoolString = false;
+  let hasDateString = false;
+
+  for (const row of data) {
+    if (!row) continue;
+    const val = row[col];
+    if (val === null || val === undefined) continue;
+
+    samples++;
+    const isNumber = typeof val === "number";
+    const isBool = typeof val === "boolean";
+    const isDateObj = val instanceof Date;
+    const isJson = typeof val === "object" && !isDateObj;
+
+    if (isNumber) {
+      hasNumber = true;
+      if (!Number.isInteger(val)) allInt = false;
+    } else if (isBool) {
+      seenBoolString = true;
+      allNumbers = false;
+    } else if (isJson) {
+      return "json";
+    } else {
+      const str = String(val).trim();
+      if (!str) continue;
+
+      if (isDateObj || (str.length >= 8 && !isNaN(Date.parse(str)) && /[\-T\/:\s]/.test(str))) {
+        hasDateString = true;
+        allNumbers = false;
+      } else if (/^-?\d+(\.\d+)?$/.test(str)) {
+        if (str.includes(".")) allInt = false;
+      } else if (["true", "false", "t", "f", "yes", "no", "y", "n"].includes(str.toLowerCase())) {
+        seenBoolString = true;
+        allNumbers = false;
+      } else {
+        seenNonBoolString = true;
+        allNumbers = false;
+        allInt = false;
+      }
+    }
+
+    if (samples >= MAX_SAMPLES) break;
+  }
+
+  if (samples === 0) return inferFromColumnName(col);
+
+  if (hasNumber && allNumbers) return allInt ? "int" : "float";
+  if (hasDateString) return "timestamp";
+  if (seenBoolString && !seenNonBoolString && !hasNumber) return "bool";
+  if (allNumbers) return allInt ? "int" : "float";
+  return "varchar";
+}
+
+function getTypeHeaderPrefix(type: string, isFk: boolean, colName: string): string {
+  const t = type.toLowerCase().trim();
+  let base = "";
+  
+  if (t === "jsonb" || t === "json") {
+    base = "{}";
+  } else if (t.includes("char") || t.includes("text") || t.includes("uuid") || t.includes("string") || t.includes("clob")) {
+    base = "A·Z";
+  } else if (t.includes("time") || t.includes("date") || t.includes("timestamp") || t.includes("interval")) {
+    base = "🕑";
+  } else if (t.includes("int") || t.includes("num") || t.includes("dec") || t.includes("float") || t.includes("double") || t.includes("real") || t === "serial" || t === "bigserial") {
+    base = "123";
+  } else if (t.includes("bool")) {
+    base = "bool";
+  } else if (t.includes("blob") || t.includes("bytea") || t.includes("bin")) {
+    base = "01";
+  } else {
+    base = "A·Z"; // Default fallback
+  }
+
+  // Key/FK indicators
+  if (isFk) {
+    return `${base}🔗 `;
+  } else if (colName === "id" || colName.endsWith("_id")) {
+    return `${base}🔑 `;
+  }
+  
+  return `${base} `;
+}
 
 export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
   data,
@@ -157,9 +371,12 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
   columnWidths,
   onHeaderClicked,
   isReadOnly = false,
-  columnTypes
+  columnTypes,
+  tableSchema,
+  onFkCellClick
 }, ref) => {
   const editorRef = React.useRef<any>(null);
+  const [hoveredHeader, setHoveredHeader] = useState<{ colIdx: number; bounds: { x: number; y: number; width: number; height: number } } | null>(null);
 
   React.useImperativeHandle(ref, () => ({
     scrollToColumn: (colIdx: number) => {
@@ -183,14 +400,37 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
   const palette = useMemo(() => getPalette(gridMode), [gridMode]);
   const gridTheme = useMemo(() => getTheme(palette), [palette]);
 
+  const fkCols = useMemo(() => {
+    const map = new Map<string, { refTable: string; refColumns: string[] }>();
+    if (tableSchema?.foreignKeys) {
+      for (const fk of tableSchema.foreignKeys) {
+        for (const col of fk.columns) {
+          map.set(col, { refTable: fk.refTable, refColumns: fk.refColumns });
+        }
+      }
+    }
+    return map;
+  }, [tableSchema]);
+
   const gridColumns = useMemo<GridColumn[]>(() => 
-    columns.map(col => ({ 
-      title: col, 
-      id: col, 
-      width: columnWidths?.[col] || 150, 
-      hasMenu: false 
-    })), 
-  [columns, columnWidths]);
+    columns.map(col => {
+      let type = columnTypes?.[col];
+      if (!type) {
+        type = inferColumnType(data, col);
+      }
+      
+      const isFk = fkCols.has(col);
+      const prefix = type ? getTypeHeaderPrefix(type, isFk, col) : "";
+      const title = `${prefix}${col}`;
+      
+      return { 
+        title, 
+        id: col, 
+        width: columnWidths?.[col] || 150, 
+        hasMenu: false 
+      };
+    }), 
+  [columns, columnWidths, columnTypes, fkCols, data]);
 
   // Pre-compute column metadata so getCellContent avoids per-cell string ops
   const sensitiveColumns = useMemo(() => new Set(
@@ -242,6 +482,29 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
     }
 
     if (val === null || val === undefined) {
+      // FK columns: custom cell so provideEditor opens the FK dropdown even for null cells
+      const isFkNull = fkCols.has(col) && canEdit;
+      if (isFkNull) {
+        const fk = fkCols.get(col)!;
+        return {
+          kind: GridCellKind.Custom,
+          data: {
+            __fk__: true,
+            value: "",
+            fkCol: col,
+            fk,
+            fkValue: null,
+            onNavigate: () => { onFkCellClick?.(fk, null); },
+          } as FkCellData,
+          copyData: "",
+          allowOverlay: canEdit,
+          readonly: false,
+          themeOverride: {
+            ...themeOverride,
+            textDark: palette.textFaint,
+          }
+        } as CustomCell<FkCellData>;
+      }
       return {
         kind: GridCellKind.Text,
         data: "",
@@ -250,9 +513,31 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
         readonly: !canEdit,
         themeOverride: {
           ...themeOverride,
-          textDark: palette.textFaint, // Greyed out NULL
+          textDark: palette.textFaint,
         }
       };
+    }
+
+    // FK columns: custom cell with icon (DBeaver-style)
+    if (fkCols.has(col) && canEdit) {
+      const fk = fkCols.get(col)!;
+      return {
+        kind: GridCellKind.Custom,
+          data: {
+            __fk__: true,
+            value: String(val),
+            fkCol: col,
+            fk,
+            fkValue: val,
+            onNavigate: () => { onFkCellClick?.(fk, val); },
+          } as FkCellData,
+        copyData: String(val),
+        allowOverlay: canEdit,
+        readonly: false,
+        themeOverride: {
+          ...themeOverride,
+        }
+      } as CustomCell<FkCellData>;
     }
 
     // Common text color for data rows
@@ -299,6 +584,7 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
         data: boolVal,
         allowOverlay: canEdit,
         readonly: !canEdit,
+        maxSize: 14,
         themeOverride: themeOverride
       } as BooleanCell;
     }
@@ -343,7 +629,7 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
       readonly: !canEdit,
       themeOverride
     };
-  }, [data, columns, isProductionMode, palette, isReadOnly, sensitiveColumns, dateColumns, binaryColumns]);
+  }, [data, columns, isProductionMode, palette, isReadOnly, sensitiveColumns, dateColumns, binaryColumns, fkCols, onFkCellClick]);
 
   return (
     <div className="w-full h-full relative overflow-hidden bg-[var(--surface-base)]">
@@ -353,6 +639,64 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
         columns={gridColumns}
         rows={data.length}
         getCellContent={getCellContent}
+        drawHeader={(args) => {
+          const { ctx, column, theme, rect } = args;
+          
+          // Draw background
+          ctx.fillStyle = theme.bgHeader;
+          ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+
+          // Draw bottom border
+          ctx.strokeStyle = theme.borderColor;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(rect.x, rect.y + rect.height - 0.5);
+          ctx.lineTo(rect.x + rect.width, rect.y + rect.height - 0.5);
+          ctx.stroke();
+
+          // Draw right border (column separator)
+          ctx.beginPath();
+          ctx.moveTo(rect.x + rect.width - 0.5, rect.y);
+          ctx.lineTo(rect.x + rect.width - 0.5, rect.y + rect.height);
+          ctx.stroke();
+
+          // Draw text with clipping to avoid overflow
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(rect.x, rect.y, rect.width - 8, rect.height);
+          ctx.clip();
+
+          const padding = theme.cellHorizontalPadding;
+          const textY = rect.y + rect.height / 2;
+          ctx.textBaseline = "middle";
+          ctx.font = theme.headerFontStyle;
+
+          const title = column.title;
+          const HEADER_PREFIX_REGEX = /^(123|A·Z|🕑|\{\}|bool|01)[🔑🔗∞]*\s+/;
+          const match = title.match(HEADER_PREFIX_REGEX);
+
+          if (match) {
+            const prefix = match[0];
+            const rest = title.substring(prefix.length);
+
+            // Draw blue prefix
+            ctx.fillStyle = theme.linkColor;
+            ctx.textAlign = "left";
+            ctx.fillText(prefix, rect.x + padding, textY);
+
+            // Draw default color rest of title
+            const prefixWidth = ctx.measureText(prefix).width;
+            ctx.fillStyle = theme.textHeader;
+            ctx.fillText(rest, rect.x + padding + prefixWidth, textY);
+          } else {
+            ctx.fillStyle = theme.textHeader;
+            ctx.textAlign = "left";
+            ctx.fillText(title, rect.x + padding, textY);
+          }
+
+          ctx.restore();
+          return true;
+        }}
         onCellEdited={(cell, newValue) => {
           if (isReadOnly) return;
           if (onCellEdited) {
@@ -367,14 +711,16 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
           }
         }}
         onCellClicked={(cell) => {
-          if (!onBinaryCellClick) return;
           const [colIdx, rowIdx] = cell;
           const col = columns[colIdx];
           const val = data[rowIdx]?.[col];
-          if (val == null || !binaryColumns.has(col)) return;
-          const bytes = toNormalizedBytes(val);
-          if (bytes !== null) {
-            onBinaryCellClick(rowIdx, col, bytes, detectFileType(bytes), typeof val === "string" ? val : undefined);
+
+          // Binary cell click → preview
+          if (onBinaryCellClick && val != null && binaryColumns.has(col)) {
+            const bytes = toNormalizedBytes(val);
+            if (bytes !== null) {
+              onBinaryCellClick(rowIdx, col, bytes, detectFileType(bytes), typeof val === "string" ? val : undefined);
+            }
           }
         }}
         gridSelection={gridSelection}
@@ -393,40 +739,136 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
         onHeaderClicked={(colIdx) => {
           if (onHeaderClicked) onHeaderClicked(colIdx);
         }}
+        onItemHovered={(args) => {
+          const colIdx = args.location[0];
+          if (args.kind === "header") {
+            if (hoveredHeader?.colIdx !== colIdx || hoveredHeader?.bounds !== args.bounds) {
+              setHoveredHeader({ colIdx, bounds: args.bounds });
+            }
+          } else if (hoveredHeader !== null) {
+            setHoveredHeader(null);
+          }
+        }}
         onColumnMoved={(from, to) => {
           if (onColumnMoved) onColumnMoved(from, to);
         }}
+        customRenderers={[fkCellRenderer]}
         provideEditor={(cell) => {
-          // Detect date/time cells by their specific styling applied in getCellContent
+          // FK column (CustomCell): edit as plain text input
+          if (cell.kind === GridCellKind.Custom && typeof cell.data === "object" && cell.data !== null && "__fk__" in cell.data) {
+            if (!isReadOnly) {
+              return (props) => {
+                const { value, onChange, onFinishedEditing } = props;
+                const initialVal = value.kind === GridCellKind.Custom
+                  ? (value.data as FkCellData).value
+                  : ("displayData" in value ? String(value.displayData ?? "") : "");
+
+                return (
+                  <div className="w-full h-full bg-[var(--surface-base)] p-1 flex items-center">
+                    <input 
+                      type="text" 
+                      defaultValue={initialVal === "NULL" ? "" : initialVal}
+                      onKeyDown={e => {
+                        if (e.key === "Enter") {
+                          const newCell = {
+                            ...value,
+                            kind: GridCellKind.Text,
+                            data: e.currentTarget.value === "" ? null : e.currentTarget.value,
+                            displayData: e.currentTarget.value
+                          } as any;
+                          onChange(newCell);
+                          onFinishedEditing(newCell);
+                        } else if (e.key === "Escape") {
+                          onFinishedEditing();
+                        }
+                      }}
+                      onBlur={e => {
+                        const newCell = {
+                          ...value,
+                          kind: GridCellKind.Text,
+                          data: e.target.value === "" ? null : e.target.value,
+                          displayData: e.target.value
+                        } as any;
+                        onChange(newCell);
+                        onFinishedEditing(newCell);
+                      }}
+                      autoFocus
+                      className="w-full bg-transparent text-[var(--neutral-12)] outline-none border-none text-[13px] font-mono"
+                    />
+                  </div>
+                );
+              };
+            }
+          }
+          // Date/time cells by italic styling in getCellContent
           if (cell.kind === GridCellKind.Text && cell.themeOverride?.baseFontStyle?.includes("italic")) {
              return (props) => {
-               const { value, onChange, onFinishedEditing } = props;
-               if (value.kind !== GridCellKind.Text) return null;
+                const { value, onChange, onFinishedEditing } = props;
+                if (value.kind !== GridCellKind.Text) return null;
 
-               // Try to normalize date for datetime-local input (YYYY-MM-DDTHH:mm)
-               let dateVal = String(value.data || "");
-               if (dateVal && !dateVal.includes("T") && dateVal.includes("-")) {
-                 dateVal = dateVal.replace(" ", "T").substring(0, 16);
-               }
-               return (
-                 <div className="w-full h-full bg-[var(--surface-base)] p-1 flex items-center">
-                   <input 
-                     type="datetime-local" 
-                     value={dateVal}
-                     onChange={e => onChange({ ...value, kind: GridCellKind.Text, data: e.target.value.replace("T", " "), displayData: e.target.value.replace("T", " ") })}
-                     onKeyDown={e => { if (e.key === "Enter") onFinishedEditing(); }}
-                     onBlur={() => onFinishedEditing()}
-                     autoFocus
-                     className="w-full bg-transparent text-[var(--neutral-12)] outline-none border-none text-[13px] font-mono"
-                   />
-                 </div>
-               );
+                let dateVal = String(value.data || "");
+                if (dateVal && !dateVal.includes("T") && dateVal.includes("-")) {
+                  dateVal = dateVal.replace(" ", "T").substring(0, 16);
+                }
+                return (
+                  <div className="w-full h-full bg-[var(--surface-base)] p-1 flex items-center">
+                    <input 
+                      type="datetime-local" 
+                      value={dateVal}
+                      onChange={e => onChange({ ...value, kind: GridCellKind.Text, data: e.target.value.replace("T", " "), displayData: e.target.value.replace("T", " ") })}
+                      onKeyDown={e => { if (e.key === "Enter") onFinishedEditing(); }}
+                      onBlur={() => onFinishedEditing()}
+                      autoFocus
+                      className="w-full bg-transparent text-[var(--neutral-12)] outline-none border-none text-[13px] font-mono"
+                    />
+                  </div>
+                );
              };
           }
           return undefined;
         }}
         ref={editorRef}
       />
+
+      {hoveredHeader !== null && (() => {
+        const col = columns[hoveredHeader.colIdx];
+        const type = columnTypes?.[col] ?? inferColumnType(data, col) ?? "varchar";
+        const b = hoveredHeader.bounds;
+        const fk = fkCols.get(col);
+        const schemaCol = tableSchema?.columns?.find(c => c.name === col);
+        return (
+          <div
+            className="fixed z-50 px-2.5 py-1.5 text-xs rounded shadow-lg pointer-events-none"
+            style={{
+              left: `${b.x}px`,
+              top: `${b.y + b.height + 2}px`,
+              background: "var(--surface-raised, #1e1e2e)",
+              color: "var(--neutral-12, #e6e9f2)",
+              border: "1px solid var(--neutral-6, #363a3f)",
+              maxWidth: "320px",
+              whiteSpace: "nowrap",
+            }}
+          >
+            <div className="font-semibold text-[13px]">{col}</div>
+            <div className="flex items-center gap-1" style={{ color: "var(--accent-11, #93b8fc)" }}>
+              {type}
+              {schemaCol?.nullable === false && (
+                <span style={{ color: "var(--danger-11, #ff6369)" }}> NOT NULL</span>
+              )}
+            </div>
+            {schemaCol?.default !== null && schemaCol?.default !== undefined && (
+              <div style={{ color: "var(--neutral-11, #9aa3bd)" }}>
+                default: {schemaCol.default}
+              </div>
+            )}
+            {fk !== undefined && (
+              <div style={{ color: "var(--neutral-11, #9aa3bd)" }}>
+                FK → {fk.refTable}({fk.refColumns.join(", ")})
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 });

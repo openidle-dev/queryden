@@ -43,6 +43,17 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 
 ### Changed
 - **ER diagram compact view is now the default.** The diagram opens in compact mode (PK/FK columns only) instead of showing all columns, reducing visual clutter on first open. Users can toggle back to full-column view via the toolbar button.
+- **PostgreSQL FK introspection now uses `pg_catalog.pg_constraint` instead of `information_schema`.** The Database Explorer and post-SELECT FK auto-loading both query `pg_constraint` directly, correctly handling cross-schema foreign keys, composite (multi-column) FKs, and environments where `information_schema` permissions are restricted. Cross-schema FK references are schema-qualified in the UI (e.g. `"billing"."invoices"`).
+- **FK metadata is now auto-loaded after SELECT queries.** When the results grid detects a table-backed SELECT, it fetches FK constraints from the relevant engine (PostgreSQL/Supabase/CockroachDB via `information_schema`, MySQL/MariaDB via `information_schema`, SQLite via `PRAGMA foreign_key_list`) and caches them per `schema.table` so subsequent queries on the same table are instant. FK columns then render as link cells without requiring a prior tree-expand.
+- **Webview default right-click context menu re-enabled.** The document-level `contextmenu` `preventDefault()` that suppressed the browser-native Reload/Inspect Element menu on Linux WebKitGTK has been removed. The app's own context menus (tab strip, Monaco editor, grid) stop propagation and remain unaffected.
+
+### Added
+- **FK-aware inline navigation in the results grid.** FK columns render as styled link cells with an external-link icon. Clicking the icon fires a `SELECT * FROM refTable WHERE refCol = value` query, navigating directly to the referenced row — enabling quick parent-row lookup from any query result.
+- **Schema-aware Add Row modal.** The Add Row dialog now reads real column metadata (name, type, nullable, default) from the table schema. NOT NULL columns without a default are validated before save with inline error badges. FK columns render as searchable dropdowns (`loadFKOptions` queries the referenced table with ILIKE/LIKE search across display columns, returning up to 50 matches). Default values from column definitions are pre-filled (stripping type casts and surrounding quotes).
+- **Type-inferred column headers with PK/FK indicators.** Each grid column header is prefixed with a type-category label (`123` for numerics, `A·Z` for text, `🕑` for date/time, `{}` for JSON, `bool` for booleans, `01` for binary). PK columns (`id`, `*_id`) get a `🔑` suffix; FK columns get a `🔗` suffix. Column tooltips on hover show the raw SQL type, NOT NULL status, default expression, and FK reference info.
+
+### Removed
+- **Roadmap items removed as addressed.** "Import connections from pgAdmin / DBeaver" (#53), "Inline add-row in the grid" (#49), and "Image columns as thumbnails" (#52) removed from the website roadmap — the inline FK cell navigation, schema-aware grid rendering, and grid improvements in this release subsume those feature requests.
 
 ### Added
 - **[#67](https://github.com/openidle-dev/queryden/issues/67) — Master key storage status surfaced in Help → About.** A new "Master Key" info card in the About dialog shows whether the encryption key is stored in the OS keyring, a local file fallback, or is unavailable. When the file fallback is in use, a warning explains how to install a keyring service for OS-level protection.
