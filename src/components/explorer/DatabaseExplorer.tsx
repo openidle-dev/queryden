@@ -626,27 +626,37 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
         `, [schemaName, tableName]);
         details.triggers = trgs.map((t: any) => t.trigger_name);
         
-        // Load foreign keys
+        // Load foreign keys via pg_catalog (more reliable than
+        // information_schema for cross-schema FKs and permissions)
         const fks = await currentDb.select(`
-          SELECT 
-            kcu.column_name,
-            ccu.table_name AS foreign_table_name,
-            ccu.column_name AS foreign_column_name
-          FROM information_schema.table_constraints tc
-          JOIN information_schema.key_column_usage kcu 
-            ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
-          JOIN information_schema.constraint_column_usage ccu
-            ON ccu.constraint_name = tc.constraint_name
-          WHERE tc.constraint_type = 'FOREIGN KEY'
-            AND tc.table_schema = $1 AND tc.table_name = $2
+          SELECT
+            con.conname AS constraint_name,
+            att.attname AS column_name,
+            cl2.relname AS foreign_table_name,
+            n2.nspname AS foreign_table_schema,
+            att2.attname AS foreign_column_name
+          FROM pg_catalog.pg_constraint con
+          JOIN pg_catalog.pg_class cl ON cl.oid = con.conrelid
+          JOIN pg_catalog.pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = ANY(con.conkey)
+          JOIN pg_catalog.pg_class cl2 ON cl2.oid = con.confrelid
+          JOIN pg_catalog.pg_attribute att2 ON att2.attrelid = con.confrelid AND att2.attnum = ANY(con.confkey)
+          JOIN pg_catalog.pg_namespace n ON n.oid = con.connamespace
+          JOIN pg_catalog.pg_namespace n2 ON n2.oid = cl2.relnamespace
+          WHERE con.contype = 'f'
+            AND n.nspname = $1
+            AND cl.relname = $2
         `, [schemaName, tableName]);
         
-        // Group FKs by constraint
+        // Group FKs by constraint (uses the constraint name so composite FKs
+        // with multiple columns are collected into one FK entry)
         const fkMap: Record<string, { columns: string[]; refTable: string; refColumns: string[] }> = {};
         for (const fk of fks) {
-          const conName = `${fk.column_name}_${fk.foreign_table_name}`;
+          const conName = fk.constraint_name;
           if (!fkMap[conName]) {
-            fkMap[conName] = { columns: [], refTable: fk.foreign_table_name, refColumns: [] };
+            const refTable = fk.foreign_table_schema !== 'public' && fk.foreign_table_schema !== schemaName
+              ? `${fk.foreign_table_schema}.${fk.foreign_table_name}`
+              : fk.foreign_table_name;
+            fkMap[conName] = { columns: [], refTable, refColumns: [] };
           }
           fkMap[conName].columns.push(fk.column_name);
           fkMap[conName].refColumns.push(fk.foreign_column_name);
@@ -1567,7 +1577,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                   ? Object.fromEntries(details.columns.map(c => [c.name, c.type]))
                   : undefined;
                 window.dispatchEvent(new CustomEvent("run-specific-query", {
-                  detail: { query, name: fullTableName, lineNumber: 1, columnTypes }
+                  detail: { query, name: fullTableName, lineNumber: 1, columnTypes, tableSchema: details }
                 }));
               }
             }}
@@ -2591,7 +2601,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                       ? Object.fromEntries(details.columns.map(c => [c.name, c.type]))
                       : undefined;
                     window.dispatchEvent(new CustomEvent("run-specific-query", {
-                      detail: { query: sql, name: fullTableName, lineNumber: 1, columnTypes }
+                      detail: { query: sql, name: fullTableName, lineNumber: 1, columnTypes, tableSchema: details }
                     }));
                     closeContextMenu();
                   }}

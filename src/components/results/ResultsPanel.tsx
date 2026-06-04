@@ -47,6 +47,12 @@ interface ResultsPanelProps {
    * grid falls back to the legacy name heuristic.
    */
   columnTypes?: Record<string, string>;
+  tableSchema?: {
+    columns: { name: string; type: string; nullable: boolean; default: string | null }[];
+    foreignKeys: { columns: string[]; refTable: string; refColumns: string[] }[];
+  };
+  loadFKOptions?: (fk: { refTable: string; refColumns: string[] }, search: string) => Promise<{ pk: any; label: string }[]>;
+  onFkCellClick?: (fk: { refTable: string; refColumns: string[] }, fkValue: any) => void;
   optimizerData?: any;
   onApplyFix?: (sql: string) => void;
   isReadOnly?: boolean;
@@ -67,7 +73,7 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
  export const ResultsPanel = memo(function ResultsPanel({ 
   results, error, isLoading, executionTime = 0, tableName,
   onUpdateRow, onDeleteRow, onAddRow, onResultsChange, onRefresh,
-  successMessage, forcedColumns, columnTypes, optimizerData, onApplyFix, onSave, onDiscard,
+  successMessage, forcedColumns, columnTypes, tableSchema, loadFKOptions, onFkCellClick, optimizerData, onApplyFix, onSave, onDiscard,
   multiResults, isReadOnly = false, suppressTabSwitch = false
 }: ResultsPanelProps) {
   const settings = useSettings();
@@ -1080,6 +1086,9 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
                 data={sortedResults}
                 columns={displayColumns || columns}
                 columnTypes={columnTypes}
+                tableSchema={tableSchema}
+                loadFKOptions={loadFKOptions}
+                onFkCellClick={onFkCellClick}
                 isProductionMode={isProductionMode}
                 isReadOnly={isReadOnly}
                 onBinaryCellClick={handleBinaryCellClick}
@@ -1148,7 +1157,15 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
       {showCopyToast && <div className="fixed bottom-12 right-12 bg-[var(--accent-9)] text-white px-4 py-2 rounded-xl shadow-2xl text-[11px] font-bold z-[200] animate-in bounce-in duration-300 flex items-center gap-2"><CheckCircle className="w-4 h-4" /> {toastMessage}</div>}
 
       {tableName && onAddRow && (
-        <AddRowModal isOpen={showAddRowModal} onClose={() => setShowAddRowModal(false)} onSave={onAddRow} columns={columns} tableName={tableName} />
+        <AddRowModal
+          isOpen={showAddRowModal}
+          onClose={() => setShowAddRowModal(false)}
+          onSave={onAddRow}
+          columns={tableSchema?.columns || columns.map((name: string) => ({ name, type: "text", nullable: true, default: null }))}
+          foreignKeys={tableSchema?.foreignKeys}
+          loadFKOptions={loadFKOptions}
+          tableName={tableName}
+        />
       )}
     </div>
   );

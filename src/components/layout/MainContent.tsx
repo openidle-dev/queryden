@@ -190,6 +190,10 @@ export function MainContent() {
   const [tableColumnTypes, setTableColumnTypes] = useState<
     { tableName: string; types: Record<string, string> } | undefined
   >(undefined);
+  const [tableSchema, setTableSchema] = useState<{
+    columns: { name: string; type: string; nullable: boolean; default: string | null }[];
+    foreignKeys: { columns: string[]; refTable: string; refColumns: string[] }[];
+  } | undefined>(undefined);
   // Suppresses auto-tab-switching to messages when a save/delete refresh is in progress
   const [suppressTabSwitch, setSuppressTabSwitch] = useState(false);
   // Transaction state
@@ -233,6 +237,8 @@ export function MainContent() {
   }>({ isOpen: false, query: "", cacheKey: "" });
   // Ref to the executeQuery function so the dialog handler can call it without circular deps
   const executeQueryRef = useRef<typeof executeQuery | null>(null);
+  // FK metadata cache keyed by "schema.tableName" — avoids redundant information_schema queries
+  const fkCacheRef = useRef<Map<string, { columns: { name: string; type: string; nullable: boolean; default: string | null }[]; foreignKeys: { columns: string[]; refTable: string; refColumns: string[] }[] }>>(new Map());
   // Session-level cache for variable values (survives across executions)
   const varCacheRef = useRef<Record<string, VariableValues>>({});
   // Pending execution context when dialog is open
@@ -474,6 +480,36 @@ export function MainContent() {
 
   const qid = (name: string) => quoteIdentifier(name, (activeConnection?.type || "postgres") as DatabaseType);
 
+  const loadFKOptions = useCallback(async (fk: { refTable: string; refColumns: string[] }, search: string): Promise<{ pk: any; label: string }[]> => {
+    if (!currentDb) return [];
+    const refCol = fk.refColumns[0];
+    const dbType = (activeConnection?.type || "postgres") as DatabaseType;
+    const qTable = quoteIdentifier(fk.refTable, dbType);
+    const qRefCol = quoteIdentifier(refCol, dbType);
+    try {
+      if (search) {
+        const sample = await currentDb.select(`SELECT * FROM ${qTable} LIMIT 1`);
+        const displayCol = sample.length > 0
+          ? Object.keys(sample[0]).find(k => k !== refCol && !k.endsWith("_id") && typeof sample[0][k] === "string") || refCol
+          : refCol;
+        const qDisplayCol = quoteIdentifier(displayCol, dbType);
+        const likeOp = ["postgres", "supabase", "cockroach", "sqlite"].includes(dbType) ? "ILIKE" : "LIKE";
+        const results = await currentDb.select(
+          `SELECT ${qRefCol}, ${qDisplayCol} FROM ${qTable} WHERE ${qDisplayCol} ${likeOp} $1 LIMIT 50`,
+          [`%${search}%`]
+        );
+        return results.map((r: any) => ({ pk: r[refCol], label: String(r[displayCol] ?? r[refCol]) }));
+      }
+      // No search: single SELECT * already has refCol + all candidate display cols
+      const rows = await currentDb.select(`SELECT * FROM ${qTable} LIMIT 100`);
+      if (rows.length === 0) return [];
+      const displayCol = Object.keys(rows[0]).find(k => k !== refCol && !k.endsWith("_id") && typeof rows[0][k] === "string") || refCol;
+      return rows.map((r: any) => ({ pk: r[refCol], label: String(r[displayCol] ?? r[refCol]) }));
+    } catch {
+      return [];
+    }
+  }, [currentDb, activeConnection?.type]);
+
   // ── Session persistence: restore open tabs on startup ────────────────────
   const sessionRestoredRef = useRef(false);
   useEffect(() => {
@@ -545,6 +581,17 @@ export function MainContent() {
       setTableColumnTypes(undefined);
     }
   }, [activeTableName, tableColumnTypes]);
+
+  // Keep tableSchema in sync with activeTableName. When column types reference
+  // a different table the stale FK schema must go. When tableColumnTypes is
+  // undefined the FK schema was set independently (e.g. ad-hoc query FK cache)
+  // and should NOT be cleared.
+  useEffect(() => {
+    if (!tableSchema) return;
+    if (tableColumnTypes && tableColumnTypes.tableName !== activeTableName) {
+      setTableSchema(undefined);
+    }
+  }, [activeTableName, tableColumnTypes, tableSchema]);
 
   useEffect(() => {
     if (activeTab?.target?.connectionId) {
@@ -873,6 +920,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     //   - Quoted identifiers: "MyTable", "my_schema"."MyTable"
     //   - Schema-qualified: schema.table
     //   - Excludes CTE aliases and subqueries
+    let extractTableName: string | null = null;
     const tableNameMatch = queryToRun.match(/(?:FROM|JOIN|UPDATE|INTO)\s+(?:"([^"]+)"(?:\."([^"]+)")?|([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)?))\b/i);
     if (tableNameMatch) {
       let detectedTable = "";
@@ -885,6 +933,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       }
       // Only update if it looks like a simple table name and not a complex subquery
       if (detectedTable && !detectedTable.startsWith("(")) {
+        extractTableName = detectedTable;
         setActiveTableName(detectedTable);
         if (currentTabId) updateTabState(currentTabId, { tableName: detectedTable });
       }
@@ -1732,6 +1781,100 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           setLastColumns([]);
         }
       }
+
+      // Load FK metadata for the detected table so FK columns render as
+      // clickable cells even when the table was opened via SQL editor.
+      // Use extractTableName (local var) instead of activeTableName (stale closure).
+      // Use db (the same connection used for the main query) instead of currentDb
+      // because db may be a transaction-specific connection.
+      if (isSelect && rows.length > 0 && extractTableName && db) {
+        const dbType = actualConnection?.type;
+        let schemaName: string | null = null;
+        let tableName = extractTableName;
+        if (extractTableName.includes('.')) {
+          const parts = extractTableName.split('.');
+          schemaName = parts[0];
+          tableName = parts.slice(1).join('.');
+        }
+        // Resolve actual schema when none was specified (table resolved via search_path).
+        if (!schemaName && ["postgres", "supabase", "cockroach"].includes(dbType || "")) {
+          try {
+            const schemaRows = await db.select(
+              "SELECT n.nspname FROM pg_catalog.pg_class cl JOIN pg_catalog.pg_namespace n ON n.oid = cl.relnamespace WHERE cl.relname = $1 LIMIT 1",
+              [tableName]
+            );
+            schemaName = (schemaRows as any[])?.[0]?.nspname || 'public';
+          } catch {
+            schemaName = 'public';
+          }
+        } else if (!schemaName) {
+          schemaName = 'public';
+        }
+        const cacheKey = `${schemaName}.${tableName}`;
+        const cached = fkCacheRef.current.get(cacheKey);
+        if (cached) {
+          setTableSchema(cached);
+        } else {
+          (async () => {
+            try {
+              let fks: any[] = [];
+              if (["postgres", "supabase", "cockroach"].includes(dbType || "")) {
+                fks = await db.select(`
+                  SELECT kcu.column_name, tc.constraint_name,
+                    ccu.table_schema AS foreign_table_schema,
+                    ccu.table_name AS foreign_table_name,
+                    ccu.column_name AS foreign_column_name
+                  FROM information_schema.table_constraints tc
+                  JOIN information_schema.key_column_usage kcu
+                    ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
+                  JOIN information_schema.constraint_column_usage ccu
+                    ON ccu.constraint_name = tc.constraint_name AND ccu.constraint_schema = tc.table_schema
+                  WHERE tc.constraint_type = 'FOREIGN KEY'
+                    AND tc.table_schema = $1 AND tc.table_name = $2
+                `, [schemaName, tableName]);
+              } else if (["mysql", "mariadb"].includes(dbType || "")) {
+                fks = await db.select(`
+                  SELECT kcu.column_name, kcu.referenced_table_name, kcu.referenced_column_name
+                  FROM information_schema.key_column_usage kcu
+                  JOIN information_schema.table_constraints tc
+                    ON tc.constraint_name = kcu.constraint_name AND tc.constraint_schema = kcu.constraint_schema
+                  WHERE tc.constraint_type = 'FOREIGN KEY' AND kcu.table_schema = DATABASE() AND kcu.table_name = ?
+                `, [tableName]);
+              } else if (dbType === "sqlite") {
+                const quoted = quoteIdentifier(tableName, dbType as any);
+                fks = await db.select(`PRAGMA foreign_key_list(${quoted})`);
+              }
+              if (fks && fks.length > 0) {
+                const fkMap: Record<string, { columns: string[]; refTable: string; refColumns: string[] }> = {};
+                for (const fk of fks) {
+                  const colName = fk.column_name || fk.from;
+                  const refTbl = fk.foreign_table_name || fk.table;
+                  const refCol = fk.foreign_column_name || fk.to;
+                  const conName = fk.constraint_name || `${colName}_${refTbl}`;
+                  if (!fkMap[conName]) {
+                    const refTable = (fk.foreign_table_schema && fk.foreign_table_schema !== 'public' && fk.foreign_table_schema !== schemaName)
+                      ? `${fk.foreign_table_schema}.${refTbl}`
+                      : refTbl;
+                    fkMap[conName] = { columns: [], refTable, refColumns: [] };
+                  }
+                  fkMap[conName].columns.push(colName);
+                  fkMap[conName].refColumns.push(refCol);
+                }
+                const fkSchema = { columns: [], foreignKeys: Object.values(fkMap) };
+                fkCacheRef.current.set(cacheKey, fkSchema);
+                setTableSchema(fkSchema);
+              } else {
+                fkCacheRef.current.set(cacheKey, { columns: [], foreignKeys: [] });
+                setTableSchema(undefined);
+              }
+            } catch {
+              setTableSchema(undefined);
+            }
+          })();
+        }
+      } else if (isSelect) {
+        setTableSchema(undefined);
+      }
       setExecutionTime(duration);
       
       // Update status bar
@@ -2012,11 +2155,17 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         } else {
           setTableColumnTypes(undefined);
         }
+        if (detail.tableSchema) {
+          setTableSchema({ columns: detail.tableSchema.columns, foreignKeys: detail.tableSchema.foreignKeys || [] });
+        } else {
+          setTableSchema(undefined);
+        }
         lastSelectQueryRef.current = detail.query;
         executeQuery(detail.query);
       } else {
         setActiveTableName(null);
         setTableColumnTypes(undefined);
+        setTableSchema(undefined);
         lastSelectQueryRef.current = "";
       }
     };
@@ -2546,6 +2695,21 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       setSuppressTabSwitch(false);
     }
   }, [activeTableName, activeConnection, executeQuery, confirmDialog, lastColumns, results]);
+
+  const handleFkCellClick = useCallback((fk: { refTable: string; refColumns: string[] }, fkValue: any) => {
+    if (!currentDb || !activeConnection) return;
+    const dbType = (activeConnection?.type || "postgres") as DatabaseType;
+    const qTable = quoteIdentifier(fk.refTable, dbType);
+    const whereClause = fk.refColumns.map((refCol, i) => {
+      const qCol = quoteIdentifier(refCol, dbType);
+      const val = fk.refColumns.length > 1 && Array.isArray(fkValue) ? fkValue[i] : fkValue;
+      return `${qCol} = ${formatSqlValue(val)}`;
+    }).join(" AND ");
+    const query = `SELECT * FROM ${qTable} WHERE ${whereClause} LIMIT 1000`;
+    setActiveTableName(fk.refTable);
+    lastSelectQueryRef.current = query;
+    executeQuery(query);
+  }, [currentDb, activeConnection, executeQuery]);
 
   const handleFormatSql = useCallback(() => {
     window.dispatchEvent(new CustomEvent("format-sql"));
@@ -3238,6 +3402,9 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
             executionTime={executionTime}
             tableName={activeTableName || undefined}
             columnTypes={tableColumnTypes?.types}
+            tableSchema={tableSchema}
+            loadFKOptions={loadFKOptions}
+            onFkCellClick={handleFkCellClick}
             forcedColumns={lastColumns}
             onUpdateRow={handleUpdateRow}
             onDeleteRow={handleDeleteRow}
