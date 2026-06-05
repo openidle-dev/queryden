@@ -163,6 +163,7 @@ export function MainContent() {
   const cancelFlagRef = useRef<boolean>(false);
   const isExecutingRef = useRef(false);
   const runningCmdRef = useRef<string>("");
+  const executionGenRef = useRef(0);
   // Ref for latest activeTab to avoid stale closures in executeQuery
   const activeTabRef = useRef<QueryTab | undefined>(undefined);
   const activeTabIdRef = useRef<string | undefined>(undefined);
@@ -193,6 +194,7 @@ export function MainContent() {
   const [tableSchema, setTableSchema] = useState<{
     columns: { name: string; type: string; nullable: boolean; default: string | null }[];
     foreignKeys: { columns: string[]; refTable: string; refColumns: string[] }[];
+    primaryKeys?: string[];
   } | undefined>(undefined);
   // Suppresses auto-tab-switching to messages when a save/delete refresh is in progress
   const [suppressTabSwitch, setSuppressTabSwitch] = useState(false);
@@ -799,6 +801,7 @@ const extractSelectedOrCursorStatement = (fullText: string): string => {
 };
 
 const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { lineNumber: number; statementText: string }) => {
+    const gen = ++executionGenRef.current;
     // Use refs for latest values to avoid stale closures
     const currentTab = activeTabRef.current;
     const currentTabId = activeTabIdRef.current;
@@ -1766,7 +1769,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         if (intervalId) clearInterval(intervalId);
         intervalId = null;
       }
-      if (cancelFlagRef.current) return;
+      if (cancelFlagRef.current || gen !== executionGenRef.current) return;
 
       const duration = Date.now() - startTime;
       
@@ -1779,6 +1782,12 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           setLastColumns(Object.keys(rows[0]));
         } else {
           setLastColumns([]);
+        }
+        // Keep lastSelectQueryRef in sync with the last data-returning query so
+        // the toolbar refresh button and discard-revert always re-run the correct
+        // SELECT (not a stale query from a previous table click).
+        if (queryToRun) {
+          lastSelectQueryRef.current = queryToRun;
         }
       }
 
@@ -1818,55 +1827,84 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           (async () => {
             try {
               let fks: any[] = [];
+              let pks: string[] = [];
               if (["postgres", "supabase", "cockroach"].includes(dbType || "")) {
-                fks = await db.select(`
-                  SELECT kcu.column_name, tc.constraint_name,
-                    ccu.table_schema AS foreign_table_schema,
-                    ccu.table_name AS foreign_table_name,
-                    ccu.column_name AS foreign_column_name
-                  FROM information_schema.table_constraints tc
-                  JOIN information_schema.key_column_usage kcu
-                    ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
-                  JOIN information_schema.constraint_column_usage ccu
-                    ON ccu.constraint_name = tc.constraint_name AND ccu.constraint_schema = tc.table_schema
-                  WHERE tc.constraint_type = 'FOREIGN KEY'
-                    AND tc.table_schema = $1 AND tc.table_name = $2
-                `, [schemaName, tableName]);
+                [fks, pks] = await Promise.all([
+                  db.select(`
+                    SELECT kcu.column_name, tc.constraint_name,
+                      ccu.table_schema AS foreign_table_schema,
+                      ccu.table_name AS foreign_table_name,
+                      ccu.column_name AS foreign_column_name
+                    FROM information_schema.table_constraints tc
+                    JOIN information_schema.key_column_usage kcu
+                      ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
+                    JOIN information_schema.constraint_column_usage ccu
+                      ON ccu.constraint_name = tc.constraint_name AND ccu.constraint_schema = tc.table_schema
+                    WHERE tc.constraint_type = 'FOREIGN KEY'
+                      AND tc.table_schema = $1 AND tc.table_name = $2
+                  `, [schemaName, tableName]),
+                  db.select(`
+                    SELECT kcu.column_name
+                    FROM information_schema.table_constraints tc
+                    JOIN information_schema.key_column_usage kcu
+                      ON tc.constraint_name = kcu.constraint_name
+                      AND tc.table_schema = kcu.table_schema
+                    WHERE tc.table_schema = $1
+                      AND tc.table_name = $2
+                      AND tc.constraint_type = 'PRIMARY KEY'
+                    ORDER BY kcu.ordinal_position
+                  `, [schemaName, tableName]),
+                ]);
+                pks = (pks as any[]).map(p => p.column_name);
               } else if (["mysql", "mariadb"].includes(dbType || "")) {
-                fks = await db.select(`
-                  SELECT kcu.column_name, kcu.referenced_table_name, kcu.referenced_column_name
-                  FROM information_schema.key_column_usage kcu
-                  JOIN information_schema.table_constraints tc
-                    ON tc.constraint_name = kcu.constraint_name AND tc.constraint_schema = kcu.constraint_schema
-                  WHERE tc.constraint_type = 'FOREIGN KEY' AND kcu.table_schema = DATABASE() AND kcu.table_name = ?
-                `, [tableName]);
+                [fks, pks] = await Promise.all([
+                  db.select(`
+                    SELECT kcu.column_name, kcu.referenced_table_name, kcu.referenced_column_name
+                    FROM information_schema.key_column_usage kcu
+                    JOIN information_schema.table_constraints tc
+                      ON tc.constraint_name = kcu.constraint_name AND tc.constraint_schema = kcu.constraint_schema
+                    WHERE tc.constraint_type = 'FOREIGN KEY' AND kcu.table_schema = DATABASE() AND kcu.table_name = ?
+                  `, [tableName]),
+                  db.select(`
+                    SELECT column_name
+                    FROM information_schema.key_column_usage
+                    WHERE table_schema = DATABASE()
+                      AND table_name = ?
+                      AND constraint_name = 'PRIMARY'
+                    ORDER BY ordinal_position
+                  `, [tableName]),
+                ]);
+                pks = (pks as any[]).map(p => p.column_name);
               } else if (dbType === "sqlite") {
                 const quoted = quoteIdentifier(tableName, dbType as any);
-                fks = await db.select(`PRAGMA foreign_key_list(${quoted})`);
+                const [fkResults, pragmaInfo] = await Promise.all([
+                  db.select(`PRAGMA foreign_key_list(${quoted})`) as Promise<any[]>,
+                  db.select(`PRAGMA table_info(${quoted})`) as Promise<any[]>,
+                ]);
+                fks = fkResults;
+                pks = pragmaInfo
+                  .filter(c => c.pk > 0)
+                  .sort((a, b) => a.pk - b.pk)
+                  .map(c => c.name);
               }
-              if (fks && fks.length > 0) {
-                const fkMap: Record<string, { columns: string[]; refTable: string; refColumns: string[] }> = {};
-                for (const fk of fks) {
-                  const colName = fk.column_name || fk.from;
-                  const refTbl = fk.foreign_table_name || fk.table;
-                  const refCol = fk.foreign_column_name || fk.to;
-                  const conName = fk.constraint_name || `${colName}_${refTbl}`;
-                  if (!fkMap[conName]) {
-                    const refTable = (fk.foreign_table_schema && fk.foreign_table_schema !== 'public' && fk.foreign_table_schema !== schemaName)
-                      ? `${fk.foreign_table_schema}.${refTbl}`
-                      : refTbl;
-                    fkMap[conName] = { columns: [], refTable, refColumns: [] };
-                  }
-                  fkMap[conName].columns.push(colName);
-                  fkMap[conName].refColumns.push(refCol);
+              const fkMap: Record<string, { columns: string[]; refTable: string; refColumns: string[] }> = {};
+              for (const fk of (fks || [])) {
+                const colName = fk.column_name || fk.from;
+                const refTbl = fk.foreign_table_name || fk.table;
+                const refCol = fk.foreign_column_name || fk.to;
+                const conName = fk.constraint_name || `${colName}_${refTbl}`;
+                if (!fkMap[conName]) {
+                  const refTable = (fk.foreign_table_schema && fk.foreign_table_schema !== 'public' && fk.foreign_table_schema !== schemaName)
+                    ? `${fk.foreign_table_schema}.${refTbl}`
+                    : refTbl;
+                  fkMap[conName] = { columns: [], refTable, refColumns: [] };
                 }
-                const fkSchema = { columns: [], foreignKeys: Object.values(fkMap) };
-                fkCacheRef.current.set(cacheKey, fkSchema);
-                setTableSchema(fkSchema);
-              } else {
-                fkCacheRef.current.set(cacheKey, { columns: [], foreignKeys: [] });
-                setTableSchema(undefined);
+                fkMap[conName].columns.push(colName);
+                fkMap[conName].refColumns.push(refCol);
               }
+              const schemaData = { columns: [], foreignKeys: Object.values(fkMap), primaryKeys: pks };
+              fkCacheRef.current.set(cacheKey, schemaData);
+              setTableSchema(schemaData);
             } catch {
               setTableSchema(undefined);
             }
@@ -1908,7 +1946,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       });
     } catch (err: any) {
       if (intervalId) clearInterval(intervalId);
-      if (cancelFlagRef.current) return;
+      if (cancelFlagRef.current || gen !== executionGenRef.current) return;
 
       const duration = Date.now() - startTime;
       let errorMsg = typeof err === 'string' ? err : err?.message || JSON.stringify(err) || "Failed to execute query";
@@ -1998,9 +2036,10 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       });
     } finally {
       if (intervalId) clearInterval(intervalId);
-      if (!cancelFlagRef.current) {
+      cancelFlagRef.current = false;
+      if (gen === executionGenRef.current) {
         setIsExecuting(false);
-      isExecutingRef.current = false;
+        isExecutingRef.current = false;
       }
     }
   }, [activeConnection, selectedDatabase, addQuery, currentDb, vaultCredentials, settings, confirmDialog]);
@@ -2156,7 +2195,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           setTableColumnTypes(undefined);
         }
         if (detail.tableSchema) {
-          setTableSchema({ columns: detail.tableSchema.columns, foreignKeys: detail.tableSchema.foreignKeys || [] });
+          setTableSchema({ columns: detail.tableSchema.columns, foreignKeys: detail.tableSchema.foreignKeys || [], primaryKeys: detail.tableSchema.primaryKeys || [] });
         } else {
           setTableSchema(undefined);
         }
@@ -2323,6 +2362,17 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     return `'${String(val).replace(/'/g, "''")}'`;
   };
 
+  const getPrimaryKey = useCallback((columns: string[]): string | undefined => {
+    if (tableSchema?.primaryKeys && tableSchema.primaryKeys.length > 0) {
+      const found = tableSchema.primaryKeys.find(pk => columns.includes(pk));
+      if (found) return found;
+    }
+    if (!activeTableName) return undefined;
+    const baseTableName = activeTableName.includes('.') ? activeTableName.split('.').pop()! : activeTableName;
+    const candidates = new Set(["id", "uuid", "uid", "pk", "row_id", "object_id", "key", "code", "_id", `${baseTableName.toLowerCase()}_id`]);
+    return columns.find(c => candidates.has(c.toLowerCase()));
+  }, [tableSchema, activeTableName]);
+
   const handleUpdateRow = useCallback(async (oldRow: any, newRow: any) => {
     if (!activeConnection) return;
     if (!activeTableName) {
@@ -2330,9 +2380,10 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       return;
     }
     
+    // Extract base table name for PK detection — schema.prefix.table_name should
+    // produce `table_name_id`, not `schema.prefix.table_name_id`.
     const columns = Object.keys(oldRow);
-    const pkCandidates = ["id", "uuid", "uid", `${activeTableName.toLowerCase()}_id`];
-    const pk = columns.find(c => pkCandidates.includes(c.toLowerCase()));
+    const pk = getPrimaryKey(columns);
     
     const setClauses: string[] = [];
     const whereClauses: string[] = [];
@@ -2375,8 +2426,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       // Update local state optimistically
       setResults(prev => prev.map(row => {
         const columns = Object.keys(oldRow);
-        const pkCandidates = ["id", "uuid", "uid", `${activeTableName.toLowerCase()}_id`];
-        const pk = columns.find(c => pkCandidates.includes(c.toLowerCase()));
+        const pk = getPrimaryKey(columns);
         
         let isMatch = false;
         if (pk && oldRow[pk] !== undefined && oldRow[pk] !== null) {
@@ -2402,8 +2452,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     
     const { _isNew, _isModified, ...cleanRow } = row;
     const columns = Object.keys(cleanRow);
-    const pkCandidates = ["id", "uuid", "uid"];
-    const pk = columns.find(c => pkCandidates.includes(c.toLowerCase()));
+    const pk = getPrimaryKey(columns);
     
     const whereClauses: string[] = [];
     
@@ -2423,7 +2472,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       setSuppressTabSwitch(true);
       await executeQuery(deleteQuery);
       setResults(prev => prev.filter(r => {
-        const pkItem = columns.find(c => pkCandidates.includes(c.toLowerCase()));
+        const pkItem = getPrimaryKey(columns);
         if (pkItem && cleanRow[pkItem] !== undefined && cleanRow[pkItem] !== null) {
           return String(r[pkItem]) !== String(cleanRow[pkItem]);
         }
@@ -2439,6 +2488,11 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     
     const newRows = currentResults.filter(r => r._isNew);
     const modifiedRows = currentResults.filter(r => r._isModified && !r._isNew);
+    // Capture the user's original SELECT query before any writes so we can
+    // re-run it after save rather than replacing results with a generic
+    // `SELECT * FROM table`. This preserves the user's column selection,
+    // ORDER BY, LIMIT, and table aliases.
+    const originalQuery = lastSelectQueryRef.current;
     
     if (newRows.length === 0 && modifiedRows.length === 0) {
       setSuccess("No pending changes to save.");
@@ -2577,11 +2631,14 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         
         // Find original row for WHERE clause (to prevent overwriting if no PK)
         // In a real app we'd need more robust change tracking, but this works for buffered edits
-        const columns = Object.keys(data).filter(c => c !== '_isModified' && c !== '_isNew');
+        const columns = Object.keys(data).filter(c => c !== '_isModified' && c !== '_isNew' && c !== '_original');
+        // When no PK is found the fallback WHERE clause must use the pre-edit
+        // values (`_original`) so the UPDATE actually matches the DB row.
+        // Without this, a clause like `WHERE "name" = 'new_value'` would affect
+        // 0 rows because the DB still has `'old_value'`.
+        const originalData = (data as any)._original || data;
         
-        // Identical logic to handleUpdateRow but without the confirm dialog per row
-        const pkCandidates = ["id", "uuid", "uid", `${activeTableName.toLowerCase()}_id`];
-        const pk = columns.find(c => pkCandidates.includes(c.toLowerCase()));
+        const pk = getPrimaryKey(columns);
         
         const setClauses: string[] = [];
         const whereClauses: string[] = [];
@@ -2594,7 +2651,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           whereClauses.push(`${qid(pk)} = ${formatSqlValue(data[pk])}`);
         } else {
           for (const col of columns) {
-            const val = data[col];
+            const val = originalData[col];
             if (val === null) whereClauses.push(`${qid(col)} IS NULL`);
             else whereClauses.push(`${qid(col)} = ${formatSqlValue(val)}`);
           }
@@ -2609,7 +2666,44 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
 
       // ─── Step 6: Refresh to get server-side IDs etc. ───
       setSuccess(`Successfully saved ${newRows.length} new and ${modifiedRows.length} modified records.`);
-      await executeQuery(lastSelectQueryRef.current);
+      // Use the save db connection directly rather than going through
+      // executeQuery, which may target a different connection/database
+      // (stale lastSelectQueryRef) or have stale state. This ensures the
+      // refresh reads from the same database that received the writes.
+      // Prefer the user's original SELECT query so column selection, ORDER BY,
+      // and LIMIT are preserved. Fall back to a full table scan if unavailable.
+      let refreshedRows: any[];
+      try {
+        if (originalQuery) {
+          refreshedRows = await db.select(originalQuery) as any[];
+        } else {
+          throw new Error("no original query");
+        }
+      } catch {
+        const fallbackQuery = `SELECT * FROM ${qid(activeTableName)} LIMIT 1000`;
+        refreshedRows = await db.select(fallbackQuery) as any[];
+      }
+      setResults(refreshedRows);
+      if (refreshedRows.length > 0) {
+        setLastColumns(Object.keys(refreshedRows[0]));
+      }
+      // Stay on the saved record — scroll to the first modified/new row
+      // so the user doesn't have to hunt for it after the refresh.
+      setTimeout(() => {
+        const firstModified = modifiedRows.length > 0 ? modifiedRows[0] : null;
+        if (firstModified) {
+          const pk = getPrimaryKey(Object.keys(firstModified));
+          const pkVal = pk ? firstModified[pk] : undefined;
+          if (pk && pkVal !== undefined) {
+            const newIdx = refreshedRows.findIndex((r: any) => String(r[pk]) === String(pkVal));
+            if (newIdx >= 0) {
+              window.dispatchEvent(new CustomEvent("grid-scroll-to-row", { detail: { index: newIdx } }));
+            }
+          }
+        } else if (newRows.length > 0) {
+          window.dispatchEvent(new CustomEvent("grid-scroll-to-bottom"));
+        }
+      }, 50);
     } catch (err: any) {
       await confirmDialog.dialog({
         title: "Failed to Save",
@@ -2646,55 +2740,76 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     }
     
     if (!activeTableName || !activeConnection) return;
-    
-    const columns = Object.keys(newRow).filter(c => newRow[c] !== null);
-    if (columns.length === 0) {
-      // Just insert default values
-      try {
-        setSuppressTabSwitch(true);
-        let sql = `INSERT INTO ${qid(activeTableName)} DEFAULT VALUES`;
-        if (activeConnection.type === "mysql") {
-          sql = `INSERT INTO ${qid(activeTableName)} () VALUES ()`;
-        }
-        await executeQuery(sql);
-        if (lastSelectQueryRef.current) {
-          await executeQuery(lastSelectQueryRef.current);
-        }
-      } catch (err) {
-        confirmDialog.dialog({
-          title: "Add Row Failed",
-          message: "Could not add a default row. This usually happens if the table has columns that are NOT NULL and have no default value.\n\nError: " + (err as any).message,
-          type: "danger"
-        });
-      } finally {
-        setSuppressTabSwitch(false);
-      }
-      return;
-    }
 
+    // Persist directly via the same pattern as handleSave: create a dedicated
+    // db connection, run INSERT via db.execute(), then SELECT-refresh on the
+    // same connection.  This avoids the stale-lastSelectQueryRef and
+    // setResults-not-called-for-non-SELECT problems that plagued the old path.
+    let db: any;
     try {
       setSuppressTabSwitch(true);
-      if (Object.keys(newRow).length === 0) {
-        // Insert a default blank row
-        let sql = `INSERT INTO ${qid(activeTableName)} DEFAULT VALUES`;
+
+      // ── Build a save-scoped connection (mirrors handleSave Step 1) ──────────
+      const activeTab = queryTabs.find(t => t.id === activeTabId);
+      const targetConn = activeTab?.target;
+      const saveConn = targetConn
+        ? connections.find(c => c.id === targetConn.connectionId)
+        : activeConnection;
+      const saveDbName = targetConn?.database || selectedDatabase || activeConnection.database;
+      const conn = saveConn || activeConnection;
+      let username = conn.username || "";
+      let password = conn.password || "";
+      if (conn.vaultCredentialId) {
+        const vaultCred = vaultCredentials.find(vc => vc.id === conn.vaultCredentialId);
+        if (vaultCred) { username = vaultCred.username || ""; password = vaultCred.password || ""; }
+      }
+      const encodedUser = encodeURIComponent(username);
+      const encodedPass = encodeURIComponent(password);
+      const port = conn.port || (conn.type === "mysql" || conn.type === "mariadb" ? 3306 : 5432);
+      const Database = (await import("@tauri-apps/plugin-sql")).default;
+      let connectionString = "";
+      if (conn.type === "sqlite") {
+        connectionString = `sqlite:${conn.filepath || "queryden.db"}`;
+      } else if (["postgres", "supabase", "cockroach"].includes(conn.type)) {
+        connectionString = `postgres://${encodedUser}:${encodedPass}@${conn.host}:${port}/${saveDbName}`;
+      } else {
+        connectionString = `mysql://${encodedUser}:${encodedPass}@${conn.host}:${port}/${saveDbName}`;
+      }
+      db = await Database.load(connectionString);
+
+      // ── Build and run INSERT ───────────────────────────────────────────────
+      const columns = Object.keys(newRow).filter(c => newRow[c] !== null);
+      let query = "";
+      if (columns.length === 0) {
+        query = `INSERT INTO ${qid(activeTableName)} DEFAULT VALUES`;
         if (activeConnection.type === "mysql" || activeConnection.type === "mariadb") {
-          sql = `INSERT INTO ${qid(activeTableName)} () VALUES ()`;
+          query = `INSERT INTO ${qid(activeTableName)} () VALUES ()`;
         }
-        await executeQuery(sql);
-        await executeQuery(lastSelectQueryRef.current);
       } else {
         const cols = columns.map(c => qid(c)).join(", ");
         const vals = columns.map(c => formatSqlValue(newRow[c])).join(", ");
-        const query = `INSERT INTO ${qid(activeTableName)} (${cols}) VALUES (${vals})`;
-        await executeQuery(query);
-        await executeQuery(lastSelectQueryRef.current);
+        query = `INSERT INTO ${qid(activeTableName)} (${cols}) VALUES (${vals})`;
       }
+      await db.execute(query);
+
+      // ── Refresh results on the same connection ─────────────────────────────
+      const selectQuery = `SELECT * FROM ${qid(activeTableName)} LIMIT 1000`;
+      const refreshedRows = await db.select(selectQuery) as any[];
+      setResults(refreshedRows);
+      if (refreshedRows.length > 0) {
+        setLastColumns(Object.keys(refreshedRows[0]));
+      }
+      // Scroll to the last row (the one we just inserted) so the user
+      // doesn't have to hunt for it after the grid re-renders.
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent("grid-scroll-to-bottom"));
+      }, 50);
     } catch (err) {
       throw err;
     } finally {
       setSuppressTabSwitch(false);
     }
-  }, [activeTableName, activeConnection, executeQuery, confirmDialog, lastColumns, results]);
+  }, [activeTableName, activeConnection, executeQuery, confirmDialog, lastColumns, results, vaultCredentials, connections, selectedDatabase, queryTabs, activeTabId]);
 
   const handleFkCellClick = useCallback((fk: { refTable: string; refColumns: string[] }, fkValue: any) => {
     if (!currentDb || !activeConnection) return;

@@ -844,6 +844,16 @@ function ToggleOption({ label, description, checked, onChange }: {
 
 function AISettings() {
   const ai = useAI();
+  const settings = useSettings();
+
+  const persistAI = (patch: Partial<typeof ai>) => {
+    for (const [key, value] of Object.entries(patch)) {
+      const settingsKey = `ai${key.charAt(0).toUpperCase()}${key.slice(1)}` as keyof typeof settings;
+      if (settingsKey in settings) {
+        settings.setSetting(settingsKey, value as any);
+      }
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -859,7 +869,10 @@ function AISettings() {
         label="Enable AI Assistant"
         description="Enable AI-powered features in the SQL editor"
         checked={ai.enabled}
-        onChange={(checked) => ai.setEnabled(checked)}
+        onChange={(checked) => {
+          ai.setEnabled(checked);
+          persistAI({ enabled: checked });
+        }}
       />
 
       <div className={`space-y-5 transition-all duration-300 ${!ai.enabled ? "opacity-30 pointer-events-none grayscale" : ""}`}>
@@ -874,7 +887,10 @@ function AISettings() {
             ].map((p) => (
               <button
                 key={p.id}
-                onClick={() => ai.setProvider(p.id as AIProvider)}
+                onClick={() => {
+                  ai.setProvider(p.id as AIProvider);
+                  persistAI({ provider: p.id as AIProvider });
+                }}
                 className={`flex items-center gap-2 p-2 rounded border text-xs transition-all ${
                   ai.provider === p.id 
                     ? "bg-[var(--accent-3)] border-[var(--accent-8)] text-[var(--accent-11)] font-bold shadow-sm" 
@@ -896,7 +912,10 @@ function AISettings() {
               type="password"
               placeholder={`Enter your ${ai.provider} API key...`}
               value={ai.apiKey}
-              onChange={(e) => ai.setApiKey(e.target.value)}
+              onChange={(e) => {
+                ai.setApiKey(e.target.value);
+                persistAI({ apiKey: e.target.value });
+              }}
               className="w-full pl-9 pr-3 py-2 text-sm rounded bg-[var(--surface-base)] border border-[var(--neutral-6)] outline-none focus:border-[var(--accent-8)] font-mono"
             />
           </div>
@@ -907,7 +926,10 @@ function AISettings() {
           <label className="block text-xs font-medium mb-2">Model Selection</label>
           <Select
             value={ai.model}
-            onValueChange={(v) => ai.setModel(v)}
+            onValueChange={(v) => {
+              ai.setModel(v);
+              persistAI({ model: v });
+            }}
             options={
               ai.provider === "openai"
                 ? [

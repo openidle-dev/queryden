@@ -69,6 +69,13 @@ export interface DBSettings {
   autoSaveInterval: number;  // seconds
   autoSavePath: string;       // empty = default (appDataDir/auto-save)
 
+  // AI Assistant
+  aiProvider: "openai" | "anthropic" | "google" | "local";
+  aiApiKey: string;
+  aiModel: string;
+  aiEndpoint: string;
+  aiEnabled: boolean;
+
   // Export Formats
   enabledExportFormats: string[];
   
@@ -142,6 +149,13 @@ const defaultSettings: Omit<DBSettings, "setSetting" | "resetSettings"> = {
   // Export Formats
   enabledExportFormats: ["csv", "json", "xml", "html", "sql"],
 
+  // AI Assistant
+  aiProvider: "openai",
+  aiApiKey: "",
+  aiModel: "gpt-5.5",
+  aiEndpoint: "",
+  aiEnabled: false,
+
   // Auto Save
   autoSaveEnabled: true,
   autoSaveInterval: 30,
@@ -201,5 +215,16 @@ if (typeof window !== "undefined") {
     // Initialize vault state from loaded settings
     const { useVault } = await import('./vaultStore');
     useVault.getState().initFromSettings();
+
+    // Sync persisted AI settings to aiStore
+    const s = useSettings.getState();
+    const { useAI } = await import('./aiStore');
+    useAI.setState({
+      provider: s.aiProvider,
+      apiKey: s.aiApiKey,
+      model: s.aiModel,
+      endpoint: s.aiEndpoint,
+      enabled: s.aiEnabled,
+    });
   })();
 }
