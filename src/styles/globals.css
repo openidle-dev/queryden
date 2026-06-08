@@ -374,6 +374,19 @@ summary {
   border-radius: 2px;
 }
 
+/* "Will run" highlight: the statement the caret sits in — the block that
+   Ctrl+Enter (run-at-cursor) will execute. Kept subtle so it reads as an
+   affordance, not a selection. Uses the app accent so it tracks the theme. */
+.monaco-editor .cursor-statement-highlight {
+  background-color: color-mix(in srgb, var(--accent-9) 9%, transparent);
+}
+.monaco-editor .cursor-statement-bar {
+  width: 3px !important;
+  margin-left: 2px;
+  background-color: var(--accent-9);
+  opacity: 0.7;
+}
+
 /* Shimmer animation (used by loading skeletons) */
 @keyframes shimmer {
   0%   { transform: translateX(-100%); }
