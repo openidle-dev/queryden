@@ -801,6 +801,18 @@ const extractSelectedOrCursorStatement = (fullText: string): string => {
 };
 
 const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { lineNumber: number; statementText: string }) => {
+    // Re-entrancy guard: drop a second trigger (e.g. a rapid double
+    // Ctrl+Enter) while a run is already in flight. Previously the feedback
+    // delay below let users press Run again before the spinner appeared,
+    // firing the same query twice. The flag is set synchronously at the top
+    // of the try block and cleared in `finally`, so a duplicate press is
+    // dropped rather than double-executed. The variable-substitution dialog
+    // returns early *before* the flag is set, so its re-trigger still runs.
+    if (isExecutingRef.current) return;
+
+    // Bump the execution generation. A newer run supersedes any older one that
+    // is still unwinding: the generation checkpoints and the finally block
+    // below no-op when their captured `gen` no longer matches the latest.
     const gen = ++executionGenRef.current;
     // Use refs for latest values to avoid stale closures
     const currentTab = activeTabRef.current;
@@ -956,6 +968,16 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     let intervalId: any = null;
     
     try {
+      // Show the running state immediately — synchronously, before any
+      // awaited work. The first await is the `Database.load` connection
+      // handshake far below, which can take seconds on a cold connection;
+      // previously `setIsExecuting(true)` only ran *after* it, so the spinner
+      // and tab indicator appeared seconds after Ctrl+Enter. Setting it here
+      // makes feedback instant. The flag is cleared in `finally`; the
+      // per-path `setIsExecuting(true)` calls below are now redundant no-ops.
+      setIsExecuting(true);
+      isExecutingRef.current = true;
+
       // Declare execution state at the top so both libpq and CLI paths can reference them
       let rows: any[] = [];
       let rowsAffected = 0;
@@ -2036,8 +2058,11 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       });
     } finally {
       if (intervalId) clearInterval(intervalId);
-      cancelFlagRef.current = false;
+      // Only the latest generation may clear shared run state. A superseded
+      // (stale) run reaching its finally must NOT reset cancelFlagRef or the
+      // executing flags, or it would wipe the state a newer in-flight run set.
       if (gen === executionGenRef.current) {
+        cancelFlagRef.current = false;
         setIsExecuting(false);
         isExecutingRef.current = false;
       }
@@ -2363,9 +2388,17 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
   };
 
   const getPrimaryKey = useCallback((columns: string[]): string | undefined => {
-    if (tableSchema?.primaryKeys && tableSchema.primaryKeys.length > 0) {
-      const found = tableSchema.primaryKeys.find(pk => columns.includes(pk));
-      if (found) return found;
+    // Only a SINGLE-column primary key can be expressed through this
+    // one-column path. For a composite key, returning just one of its columns
+    // would build `WHERE <one col> = …`, which matches on a non-unique value
+    // and could UPDATE/DELETE the wrong rows. In that case return undefined so
+    // callers fall back to the safe full-row WHERE match below.
+    if (tableSchema?.primaryKeys && tableSchema.primaryKeys.length > 1) {
+      return undefined;
+    }
+    if (tableSchema?.primaryKeys && tableSchema.primaryKeys.length === 1) {
+      const [pk] = tableSchema.primaryKeys;
+      if (columns.includes(pk)) return pk;
     }
     if (!activeTableName) return undefined;
     const baseTableName = activeTableName.includes('.') ? activeTableName.split('.').pop()! : activeTableName;
@@ -3330,19 +3363,18 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                   </span>
                 </div>
                 
-                {/* Close Button */}
-                {queryTabs.length > 1 && (
-                  <IconButton
-                    size="xs"
-                    label="Close tab"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      closeTab(tab.id);
-                    }}
-                    icon={<X />}
-                    className="shrink-0"
-                  />
-                )}
+                {/* Close Button — always available, including for the last tab
+                    (closing it falls back to the EmptyStateLauncher). */}
+                <IconButton
+                  size="xs"
+                  label="Close tab"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    closeTab(tab.id);
+                  }}
+                  icon={<X />}
+                  className="shrink-0"
+                />
               </div>
             );
           })}
