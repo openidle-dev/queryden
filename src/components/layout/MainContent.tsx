@@ -3215,19 +3215,18 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                   </span>
                 </div>
                 
-                {/* Close Button */}
-                {queryTabs.length > 1 && (
-                  <IconButton
-                    size="xs"
-                    label="Close tab"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      closeTab(tab.id);
-                    }}
-                    icon={<X />}
-                    className="shrink-0"
-                  />
-                )}
+                {/* Close Button — always available, including for the last tab
+                    (closing it falls back to the EmptyStateLauncher). */}
+                <IconButton
+                  size="xs"
+                  label="Close tab"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    closeTab(tab.id);
+                  }}
+                  icon={<X />}
+                  className="shrink-0"
+                />
               </div>
             );
           })}
