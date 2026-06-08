@@ -13,6 +13,7 @@ import {
   detectAliasDotContext,
   matchesQualifiedOrBareName,
 } from "./completionContext";
+import { resolveStatementAtOffset } from "../../utils/statementAtCursor";
 
 // Global tracking to prevent duplicate provider registration across component mounts
 let sqlProviderDisposable: any = null;
@@ -421,6 +422,56 @@ export const QueryEditor = memo(function QueryEditor({
     updateVarDecorations();
     const contentChangeDisposable = editor.onDidChangeModelContent(() => throttledVarDecorations());
 
+    // ─── "Will run" statement highlight ────────────────────────────────────────
+    // DataGrip-style affordance: persistently highlight the statement the caret
+    // sits in, so the user can see which block Ctrl+Enter (run-at-cursor) will
+    // execute. Uses resolveStatementAtOffset — the same resolver run-at-cursor
+    // uses — so the highlight always matches what actually runs.
+    const cursorStmtCollection = editor.createDecorationsCollection([]);
+
+    const updateCursorStatementHighlight = () => {
+      const model = editor.getModel();
+      const position = editor.getPosition();
+      if (!model || !position) {
+        cursorStmtCollection.set([]);
+        return;
+      }
+
+      // When there's a real selection, that selection is what runs — Monaco's
+      // own selection highlight is the affordance, so don't double-paint.
+      const selection = editor.getSelection();
+      if (selection && !selection.isEmpty()) {
+        cursorStmtCollection.set([]);
+        return;
+      }
+
+      const text = model.getValue();
+      const target = resolveStatementAtOffset(text, model.getOffsetAt(position));
+      // Don't bother highlighting when the whole buffer is a single statement —
+      // there's nothing to disambiguate and a full-editor band is just noise.
+      if (!target || text.trim() === target.text) {
+        cursorStmtCollection.set([]);
+        return;
+      }
+
+      const startPos = model.getPositionAt(target.start);
+      const endPos = model.getPositionAt(target.start + target.text.length);
+      cursorStmtCollection.set([
+        {
+          range: new monaco.Range(startPos.lineNumber, 1, endPos.lineNumber, model.getLineMaxColumn(endPos.lineNumber)),
+          options: {
+            isWholeLine: true,
+            className: "cursor-statement-highlight",
+            linesDecorationsClassName: "cursor-statement-bar",
+          },
+        },
+      ]);
+    };
+
+    updateCursorStatementHighlight();
+    const cursorMoveDisposable = editor.onDidChangeCursorPosition(() => updateCursorStatementHighlight());
+    const cursorContentDisposable = editor.onDidChangeModelContent(() => updateCursorStatementHighlight());
+
     // Custom context menu handler (defined as named function for cleanup)
     const handleContextMenu = (e: MouseEvent) => {
       e.preventDefault();
@@ -534,65 +585,13 @@ export const QueryEditor = memo(function QueryEditor({
       }
 
       const offset = model.getOffsetAt(position);
-      
-      // Strategy: Find all semicolons and find which statement contains the cursor
-      const statements: { start: number; end: number; text: string; lineNumber: number }[] = [];
-      let searchFrom = 0;
-      
-      // Split text into individual statements by semicolons
-      while (searchFrom < text.length) {
-        const semiPos = text.indexOf(';', searchFrom);
-        let endPos = semiPos === -1 ? text.length : semiPos;
-        
-        // Skip leading whitespace for this statement
-        let startPos = searchFrom;
-        while (startPos < endPos && /\s/.test(text[startPos])) {
-          startPos++;
-        }
-        
-        // Extract statement (skip empty)
-        const statement = text.substring(startPos, endPos).trim();
-        if (statement) {
-          // Get line number for this statement
-          const statementStartPos = model.getPositionAt(startPos);
-          statements.push({ start: startPos, end: endPos, text: statement, lineNumber: statementStartPos.lineNumber });
-        }
-        
-        if (semiPos === -1) break;
-        searchFrom = semiPos + 1;
-      }
-      
-      // Find which statement contains the cursor or is closest before it
-      let targetStatement: { start: number; end: number; text: string; lineNumber: number } | null = null;
-      
-      for (let i = 0; i < statements.length; i++) {
-        const stmt = statements[i];
-        const nextStmt = statements[i + 1];
-        
-        // Case 1: Cursor is inside the statement bounds
-        if (offset >= stmt.start && offset <= stmt.end) {
-          targetStatement = stmt;
-          break;
-        }
-        
-        // Case 2: Cursor is between this statement and the next (whitespace/newlines)
-        // We prefer the statement just before the cursor (SQL typically runs what was just typed)
-        if (nextStmt && offset > stmt.end && offset < nextStmt.start) {
-          targetStatement = stmt;
-          break;
-        }
-      }
-      
-      // Case 3: Cursor is after everything - run the last one
-      if (!targetStatement && statements.length > 0 && offset > statements[statements.length - 1].end) {
-        targetStatement = statements[statements.length - 1];
-      }
-      
-      // Fallback: Default to first statement instead of failing
-      if (!targetStatement && statements.length > 0) {
-        targetStatement = statements[0];
-      }
-      
+
+      // Resolve the target statement with the shared helper so the block we
+      // paint under the cursor (updateCursorStatementHighlight, below) is the
+      // exact same statement we execute here — the highlight can never lie
+      // about what Ctrl+Enter will run.
+      const targetStatement = resolveStatementAtOffset(text, offset);
+
       if (targetStatement) {
         const startPos = model.getPositionAt(targetStatement.start);
         const endPos = model.getPositionAt(targetStatement.start + targetStatement.text.length);
@@ -666,6 +665,8 @@ export const QueryEditor = memo(function QueryEditor({
     
     editor.onDidDispose(() => {
       contentChangeDisposable?.dispose();
+      cursorMoveDisposable?.dispose();
+      cursorContentDisposable?.dispose();
       window.removeEventListener("focus-editor", focusHandler);
       window.removeEventListener("format-sql", formatHandler);
       window.removeEventListener("run-query-smart", handleRunSmart);
