@@ -3,7 +3,7 @@ title: Bring your own AI key
 description: QueryDen calls OpenAI, Anthropic, Gemini, or Ollama with a key you provide. No server-side AI.
 section: ai
 order: 10
-updated: 2026-05-13
+updated: 2026-06-05
 ---
 
 QueryDen does not run an inference server. When you use the AI features, the call goes directly from your machine to the provider you configured, with the API key you provided.
@@ -22,8 +22,7 @@ The key is written to the encrypted vault, alongside your connections. It never 
 ## Where the AI is actually used
 
 - **EXPLAIN visualizer** — given a plan tree, the AI is asked for a one-paragraph diagnosis and a suggested `CREATE INDEX` or `ALTER TABLE` statement. The suggestion is read-only until you click **Apply**.
-
-That is the **only** wired-up surface today. The standalone "AI Assistant" toolbar dialog is a stub and does not call any provider — [issue #10](https://github.com/openidle-dev/queryden/issues/10).
+- **AI Assistant dialog** — the toolbar **Sparkles** (✨) button opens a dialog where you describe a query in natural language. The dialog sends your prompt (plus any currently-edited query for context) to the configured provider and replaces the editor content with the generated SQL.
 
 ## Model selection
 
@@ -46,5 +45,4 @@ Override per-provider in settings.
 
 ## Coming soon
 
-- "Ask the schema" inline assistant in the editor — wired to the same provider chain. Currently blocked on the stub linked above.
 - Cost guardrails (max tokens per request, monthly spend ceiling).

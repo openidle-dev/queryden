@@ -236,13 +236,23 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
         }, 100);
       }
     };
+    const handleScrollToRow = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (gridRef.current && detail?.index !== undefined) {
+        setTimeout(() => {
+          gridRef.current?.scrollToRow(detail.index);
+        }, 100);
+      }
+    };
     window.addEventListener("click", handleClick);
     window.addEventListener("switch-results-tab", handleSwitchTab);
     window.addEventListener("grid-scroll-to-bottom", handleScrollBottom);
+    window.addEventListener("grid-scroll-to-row", handleScrollToRow);
     return () => {
       window.removeEventListener("click", handleClick);
       window.removeEventListener("switch-results-tab", handleSwitchTab);
       window.removeEventListener("grid-scroll-to-bottom", handleScrollBottom);
+      window.removeEventListener("grid-scroll-to-row", handleScrollToRow);
     };
   }, []);
 
@@ -365,7 +375,10 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
     newResults[sourceIdx] = { 
       ...oldRow, 
       [context.col]: newValue,
-      _isModified: !oldRow._isNew // Only mark as modified if it's not a brand new row
+      _isModified: !oldRow._isNew, // Only mark as modified if it's not a brand new row
+      // Snapshot the pre-edit values so handleSave can build a WHERE clause
+      // that matches the original row, preventing 0-row-affect updates.
+      _original: oldRow._isNew ? undefined : (oldRow._original || oldRow)
     };
     
     onResultsChange(newResults);
@@ -1160,7 +1173,7 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
         <AddRowModal
           isOpen={showAddRowModal}
           onClose={() => setShowAddRowModal(false)}
-          onSave={onAddRow}
+          onSave={(row) => onAddRow!(row, false)}
           columns={tableSchema?.columns || columns.map((name: string) => ({ name, type: "text", nullable: true, default: null }))}
           foreignKeys={tableSchema?.foreignKeys}
           loadFKOptions={loadFKOptions}

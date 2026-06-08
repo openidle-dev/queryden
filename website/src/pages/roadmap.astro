@@ -35,12 +35,6 @@ const HORIZONS: Horizon[] = [
     lede: 'Active focus — the work most likely to land in the next release.',
     items: [
       {
-        title: 'Vault crypto hardening',
-        body: 'Per-vault random salt and explicit Argon2 m_cost / t_cost / p_cost — replacing the hardcoded salt and default parameters in the encrypted credential store.',
-        issue: 14,
-        status: 'in-progress',
-      },
-      {
         title: 'macOS in-app updater',
         body: 'pick_asset misses the .dmg and install_update has no darwin branch — Mac users are stuck on whatever they first installed. Fixing the asset selection and install path.',
         issue: 8,
@@ -90,18 +84,6 @@ const HORIZONS: Horizon[] = [
     label: 'Later',
     lede: 'Direction, not commitment — these are problems we want to solve, not specs we\'ve written.',
     items: [
-      {
-        title: 'Schema-aware row editor',
-        body: 'FK dropdowns, NOT NULL enforcement, and type-aware widgets so editing a row feels like editing a form, not a JSON blob.',
-        issue: 50,
-        status: 'exploring',
-      },
-      {
-        title: 'AI assistant — for real this time',
-        body: 'Today AIAssistantDialog is a setTimeout stub. Wire it to a real provider with proper streaming, prompt scoping, and a user-supplied API key.',
-        issue: 10,
-        status: 'exploring',
-      },
       {
         title: 'Universal macOS build',
         body: 'Ship universal-apple-darwin so the same DMG runs on Intel and Apple Silicon Macs.',

@@ -38,6 +38,7 @@ interface TableDetails {
   foreignKeys: { columns: string[]; refTable: string; refColumns: string[] }[];
   indexes: { name: string; columns: string[]; unique: boolean }[];
   triggers: string[];
+  primaryKeys: string[];
 }
 
 interface DatabaseExplorerProps {
@@ -590,7 +591,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
     setLoadingTableDetails(prev => new Set(prev).add(key));
     
     try {
-      const details: TableDetails = { columns: [], constraints: [], foreignKeys: [], indexes: [], triggers: [] };
+      const details: TableDetails = { columns: [], constraints: [], foreignKeys: [], indexes: [], triggers: [], primaryKeys: [] };
       
       if (["postgres", "supabase", "cockroach"].includes(activeConnection.type)) {
         // Load columns
@@ -606,6 +607,20 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
           nullable: c.is_nullable === 'YES',
           default: c.column_default
         }));
+        
+        // Load primary keys
+        const pks = await currentDb.select(`
+          SELECT kcu.column_name
+          FROM information_schema.table_constraints tc
+          JOIN information_schema.key_column_usage kcu
+            ON tc.constraint_name = kcu.constraint_name
+            AND tc.table_schema = kcu.table_schema
+          WHERE tc.table_schema = $1
+            AND tc.table_name = $2
+            AND tc.constraint_type = 'PRIMARY KEY'
+          ORDER BY kcu.ordinal_position
+        `, [schemaName, tableName]);
+        details.primaryKeys = pks.map((p: any) => p.column_name);
         
         // Load indexes
         const idxs = await currentDb.select(`
@@ -688,6 +703,16 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
           default: c.column_default,
         }));
 
+        const pks = await currentDb.select(`
+          SELECT column_name
+          FROM information_schema.key_column_usage
+          WHERE table_schema = DATABASE()
+            AND table_name = ?
+            AND constraint_name = 'PRIMARY'
+          ORDER BY ordinal_position
+        `, [tableName]);
+        details.primaryKeys = pks.map((p: any) => p.column_name);
+
         const idxs = await currentDb.select(`SHOW INDEX FROM ${quoteIdentifier(tableName, activeConnection.type)}`);
         const idxMap: Record<string, { columns: string[]; unique: boolean }> = {};
         for (const idx of idxs) {
@@ -747,6 +772,11 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
           nullable: c.notnull === 0,
           default: c.dflt_value,
         }));
+        // PRAGMA table_info returns `pk` as the 1-based PK ordinal (0 = not PK)
+        details.primaryKeys = cols
+          .filter((c: any) => c.pk > 0)
+          .sort((a: any, b: any) => a.pk - b.pk)
+          .map((c: any) => c.name);
 
         const idxs = await currentDb.select(`PRAGMA index_list(${quotedTable})`);
         for (const idx of idxs) {

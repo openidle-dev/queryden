@@ -18,7 +18,7 @@ interface AIState {
 export const useAI = create<AIState>()((set) => ({
   provider: "openai",
   apiKey: "",
-  model: "gpt-4o",
+  model: "gpt-5.5",
   endpoint: "",
   enabled: false,
   setProvider: (provider) => set({ provider }),
