@@ -784,12 +784,17 @@ export function MainContent() {
 
     // Resolve which connection/database to target:
     // 1. Explicit params from context-menu events (most reliable)
-    // 2. Currently selected in the sidebar as fallback (via ref to avoid stale closure)
+    // 2. Currently selected in the sidebar (via ref to avoid stale closure)
+    // 3. The connection the active tab is already using — so a new query window
+    //    inherits "the same DB" you're working in even when nothing is selected
+    //    in the sidebar (you're working through tab targets). Matches how
+    //    DataGrip/DBeaver/pgAdmin open a new editor against the current source.
     const activeConn = activeConnRef.current;
     const selectedDb = selectedDbRef.current;
-    const resolvedConnectionId = explicitConnectionId || activeConn?.id;
-    const resolvedConnectionName = explicitConnectionName || activeConn?.name;
-    const resolvedDatabase = explicitDatabase || selectedDb;
+    const currentTabTarget = activeTabRef.current?.target;
+    const resolvedConnectionId = explicitConnectionId || activeConn?.id || currentTabTarget?.connectionId;
+    const resolvedConnectionName = explicitConnectionName || activeConn?.name || currentTabTarget?.connectionName;
+    const resolvedDatabase = explicitDatabase || selectedDb || currentTabTarget?.database;
 
     const newTab: QueryTab = {
       id: crypto.randomUUID(),
