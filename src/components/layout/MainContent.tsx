@@ -1051,6 +1051,17 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       // Pin the running indicator to the tab that launched this run so it
       // doesn't follow tab switches (see executingTabId).
       setExecutingTabId(currentTabId || null);
+      // Mark the statement(s) 'running' up-front — before the connection
+      // handshake and the query itself — so the gutter spinner appears the
+      // instant you Run and is reliably rendered before any await. (Setting it
+      // only just before db.select, far below, meant a fast query or a connect
+      // error could overwrite it with the result before the editor ever
+      // rendered the running state.) Replaced by ✓/✗ on completion.
+      if (currentTabId && statementInfos && statementInfos.length > 0) {
+        updateTabState(currentTabId, {
+          lastExecutedStatement: { lineNumber: statementInfos[0].lineNumber, status: 'running' }
+        });
+      }
 
       // Declare execution state at the top so both libpq and CLI paths can reference them
       let rows: any[] = [];
@@ -1717,20 +1728,9 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
 
       // NOW we start the execution indicators
       setIsExecuting(true);
-      
-      // Set statement-level indicator to 'running' if we have statement info.
-      // The editor turns this into a transient spinner glyph next to the block
-      // (see lastExecutedStatement wiring); it's kept out of the reconciled
-      // ✓/✗ glyph set because that reconcile intentionally freezes mid-run.
-      if (currentTabId && statementInfos && statementInfos.length > 0) {
-        updateTabState(currentTabId, {
-          lastExecutedStatement: {
-            lineNumber: statementInfos[0].lineNumber,
-            status: 'running'
-          }
-        });
-      }
-      
+      // (statement-level 'running' indicator is already set up-front, before the
+      // connection handshake — see the top of the try block.)
+
       // Live timer
       intervalId = setInterval(() => {
         setRunningTimeMs(Date.now() - startTime);
@@ -3585,7 +3585,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                       runningCommand={activeTabIsExecuting ? (runningCmdRef.current || activeTab.query || "") : null}
                       isExecuting={activeTabIsExecuting}
                       executionTime={executionTime}
-                      onRun={(q: string) => executeQuery(q)}
+                      onRun={(q: any, info?: { lineNumber: number; statementText: string }) => executeQuery(q, info)}
                       onClear={() => {
                         clearPsqlOutput();
                         if (activeTabId) {

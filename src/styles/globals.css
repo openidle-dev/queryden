@@ -332,14 +332,17 @@ summary {
 
 /* Monaco statement indicators */
 .statement-glyph-running {
-  /* Amber spinning arc next to the block that is currently executing. */
-  background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="%23f59e0b" stroke-width="2" stroke-linecap="round" stroke-dasharray="22 14"/></svg>') no-repeat center center;
-  background-size: 12px;
-  transform-origin: center center;
-  animation: statement-glyph-spin 0.7s linear infinite;
+  /* Pulsing amber dot next to the block that is currently executing. Uses the
+     same solid-fill SVG technique as the ✓/✗ glyphs (which render reliably in
+     the glyph margin) and animates opacity rather than transform, which Monaco
+     does not honor on glyph-margin elements. */
+  background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="%23f59e0b"/></svg>') no-repeat center center !important;
+  background-size: 12px !important;
+  animation: statement-glyph-pulse 1s ease-in-out infinite;
 }
-@keyframes statement-glyph-spin {
-  to { transform: rotate(360deg); }
+@keyframes statement-glyph-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.2; }
 }
 .statement-glyph-success {
   background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="%2322c55e" opacity="0.9"/><path d="M5 8l2 2 4-4" stroke="white" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>') no-repeat center center;
