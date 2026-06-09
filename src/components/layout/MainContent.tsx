@@ -122,6 +122,13 @@ export function MainContent() {
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [results, setResults] = useState<any[]>([]);
   const [isExecuting, setIsExecuting] = useState(false);
+  // Which tab owns the in-flight query. `isExecuting` is a single global flag
+  // (only one query runs at a time), but the running spinner must point at the
+  // tab that actually launched the query — not whichever tab happens to be
+  // active — otherwise the indicator appears to "follow" you when you switch
+  // tabs. Set when a run starts; cleared when it ends, is cancelled, or is
+  // superseded by a newer run.
+  const [executingTabId, setExecutingTabId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [multiResults, setMultiResults] = useState<MultiResult[]>([]);
@@ -977,6 +984,9 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       // per-path `setIsExecuting(true)` calls below are now redundant no-ops.
       setIsExecuting(true);
       isExecutingRef.current = true;
+      // Pin the running indicator to the tab that launched this run so it
+      // doesn't follow tab switches (see executingTabId).
+      setExecutingTabId(currentTabId || null);
 
       // Declare execution state at the top so both libpq and CLI paths can reference them
       let rows: any[] = [];
@@ -2065,13 +2075,27 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         cancelFlagRef.current = false;
         setIsExecuting(false);
         isExecutingRef.current = false;
+        setExecutingTabId(null);
       }
     }
   }, [activeConnection, selectedDatabase, addQuery, currentDb, vaultCredentials, settings, confirmDialog]);
 
   const cancelQuery = useCallback(() => {
     cancelFlagRef.current = true;
+    // Release the re-entrancy guard NOW. libpq has no real query cancel: the
+    // in-flight `db.select` keeps running server-side and only resets the
+    // executing flags in its `finally` when it eventually returns — which for
+    // a heavy query can be a long time, or effectively never. Until then
+    // `isExecutingRef` would stay true and the guard at the top of
+    // executeQuery silently swallows every new run, so the results bar never
+    // comes up after a cancel. Clearing the flag lets the next query start.
+    // Bumping the generation makes the abandoned run a stale generation, so
+    // its late resolution no-ops at the gen checkpoints/finally instead of
+    // clobbering the state of whatever ran after the cancel.
+    executionGenRef.current++;
+    isExecutingRef.current = false;
     setIsExecuting(false);
+    setExecutingTabId(null);
     setError("Query execution cancelled by user.");
     setExecutionTime(runningTimeMs);
     if (activeTabId) {
@@ -3037,6 +3061,12 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     executeQueryRef.current = executeQuery;
   });
 
+  // True only when the *active* tab is the one running a query. The editor
+  // header, psql window, and results-panel loading state render for the active
+  // tab only, so they use this rather than the global `isExecuting` — otherwise
+  // they'd show a spinner after switching away to a tab that isn't running.
+  const activeTabIsExecuting = isExecuting && executingTabId === activeTabId;
+
   return (
     <div className="flex-1 flex flex-col min-w-0 h-full bg-[var(--surface-base)]">
       {/* Variable Substitution Dialog */}
@@ -3298,8 +3328,10 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               ? tabConnectionName.substring(0, 10) + "..." 
               : tabConnectionName;
             
-            // Determine status for this tab
-            const tabIsExecuting = activeTabId === tab.id && isExecuting;
+            // Determine status for this tab. Executing status is keyed to the
+            // tab that actually launched the query (executingTabId), not the
+            // active tab, so the spinner stays on its own tab when you switch.
+            const tabIsExecuting = isExecuting && executingTabId === tab.id;
             const tabHasError = tab.error && activeTabId === tab.id;
             const tabHasSuccess = tab.success && activeTabId === tab.id && !tab.error;
             
@@ -3481,8 +3513,8 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                     <PsqlWindow
                       entries={activeTab.psqlEntries || []}
                       liveOutput={psqlOutput.length > 0 ? psqlOutput : stashPsqlOutputRef.current}
-                      runningCommand={isExecuting ? (runningCmdRef.current || activeTab.query || "") : null}
-                      isExecuting={isExecuting}
+                      runningCommand={activeTabIsExecuting ? (runningCmdRef.current || activeTab.query || "") : null}
+                      isExecuting={activeTabIsExecuting}
                       executionTime={executionTime}
                       onRun={(q: string) => executeQuery(q)}
                       onClear={() => {
@@ -3519,7 +3551,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                   databaseName={activeTab?.target?.database || selectedDatabase || undefined}
                   tabId={activeTabId!}
                   tabName={activeTab?.name}
-                  isExecuting={isExecuting}
+                  isExecuting={activeTabIsExecuting}
                   hasError={!!error}
                   hasSuccess={!!success}
                   statementResults={activeTab?.statementResults}
@@ -3545,7 +3577,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
             error={error}
             successMessage={success}
             multiResults={multiResults}
-            isLoading={isExecuting}
+            isLoading={activeTabIsExecuting}
             executionTime={executionTime}
             tableName={activeTableName || undefined}
             columnTypes={tableColumnTypes?.types}
