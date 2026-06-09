@@ -12,6 +12,7 @@ import { EmptyStateLauncher } from "./EmptyStateLauncher";
 import { logger } from "../../utils/logger";
 import { getDefaultDatabaseName } from "../../config/app";
 import { splitStatements } from "../../utils/splitStatements";
+import { mapSelectionStatementsToDocumentLines, mergeGlyphResults } from "../../utils/statementGlyphs";
 import { applyQueryLimit } from "../../utils/applyQueryLimit";
 import { VariableSubstitutionDialog, extractVariables, substituteVariables, VariableValues } from "../ui/VariableSubstitutionDialog";
 import { useLocalHistory } from "../../store/localHistoryStore";
@@ -92,6 +93,15 @@ export interface PsqlConsoleEntry {
 }
 
 export interface StatementResult {
+  /**
+   * Stable id assigned when the glyph is accumulated into a tab's results.
+   * The editor keys its sticky Monaco decorations off this so a glyph can
+   * follow edits (and be pruned when its block is destroyed) without being
+   * re-pinned to a frozen line number on every re-render. Optional because
+   * the per-run results built during execution don't have one yet — it's
+   * assigned by `appendGlyphResults`.
+   */
+  id?: string;
   lineNumber: number;
   status: 'running' | 'success' | 'error';
   rowsAffected?: number;
@@ -714,6 +724,28 @@ export function MainContent() {
     setQueryTabs(prev => prev.map(t => t.id === tabId ? { ...t, ...updates } : t));
   }, []);
 
+  // Accumulate run-status gutter glyphs for a tab. Each run's results are
+  // merged into whatever the tab already has (one glyph per block that's been
+  // run; re-running a block replaces its glyph — see mergeGlyphResults), rather
+  // than wiping the lot every execution. Runs through the functional setState so
+  // it always merges into the freshest results, including the editor's own
+  // sticky-position writebacks. Ids are assigned here so the editor can key its
+  // decorations stably.
+  const appendGlyphResults = useCallback((tabId: string, newResults: StatementResult[]) => {
+    if (newResults.length === 0) return;
+    const withIds = newResults.map(r => ({ ...r, id: crypto.randomUUID() }));
+    setQueryTabs(prev => prev.map(t => t.id === tabId
+      ? { ...t, statementResults: mergeGlyphResults(t.statementResults ?? [], withIds) }
+      : t));
+  }, []);
+
+  // Replace the accumulated glyph set wholesale — used by the editor's writeback
+  // when it prunes destroyed glyphs or refreshes their line numbers as the text
+  // is edited.
+  const setGlyphResults = useCallback((tabId: string, results: StatementResult[]) => {
+    setQueryTabs(prev => prev.map(t => t.id === tabId ? { ...t, statementResults: results } : t));
+  }, []);
+
   const addNewTab = useCallback((
     query = "",
     name = "",
@@ -879,11 +911,19 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     // commands into a prepared statement", and the libpq path further down
     // sends one execute() per statement only when isRunAll is set.
     if (!isRunAll && typeof specificQuery === "string") {
-      const parts = splitStatements(queryToRun);
-      if (parts.length > 1) {
+      // Split the *original* selection (not the trimmed queryToRun) and map each
+      // statement back to its document-absolute line. `statementInfo.lineNumber`
+      // is the document line where the selection (char 0 of specificQuery) began,
+      // so a statement reported at relative line N sits on document line
+      // baseLine + (N - 1). Using splitStatements(queryToRun) here was the bug
+      // that put glyphs on the wrong block: those line numbers are relative to
+      // the selection, not the document.
+      const baseLine = statementInfo?.lineNumber ?? 1;
+      const mapped = mapSelectionStatementsToDocumentLines(specificQuery, baseLine);
+      if (mapped.length > 1) {
         isRunAll = true;
-        statementsToRun = parts.map(p => p.text);
-        statementInfos = parts.map(p => ({ lineNumber: p.lineNumber, statementText: p.text }));
+        statementsToRun = mapped.map(p => p.text);
+        statementInfos = mapped.map(p => ({ lineNumber: p.lineNumber, statementText: p.text }));
       }
     }
     runningCmdRef.current = queryToRun;
@@ -959,11 +999,12 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     setMultiResults([]);
     setRunningTimeMs(0);
     cancelFlagRef.current = false;
-    
-    // Clear statement results when starting new execution (glyphs will appear after execution completes)
-    if (currentTabId) {
-      updateTabState(currentTabId, { statementResults: [] });
-    }
+
+    // Note: we intentionally do NOT clear statementResults here. Glyphs now
+    // accumulate (one per block that's been run) and follow the text as it's
+    // edited, so wiping them on every run would defeat the feature. Each run
+    // merges its result into the existing set via appendGlyphResults; re-running
+    // a block replaces just that block's glyph.
     const startTime = Date.now();
     let intervalId: any = null;
     
@@ -1392,7 +1433,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
             error: mr.error,
             executionTime: 0
           })));
-          if (currentTabId) updateTabState(currentTabId, { statementResults });
+          if (currentTabId) appendGlyphResults(currentTabId, statementResults);
           const selectResults = multiResults.filter(r => r.rows && r.rows.length > 0);
           if (selectResults.length > 0) {
             rows = selectResults[0].rows || [];
@@ -1509,8 +1550,8 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               rows = cliRows ?? [];
               rowsAffected = rows.length;
               statementResults.push({ lineNumber: stmtInfo.lineNumber, status: 'success', rowCount: rowsAffected, executionTime: Date.now() - stmtStartTime });
-              // Store columns for the ResultPanel
-              if (currentTabId) updateTabState(currentTabId, { statementResults, columns: cliCols ?? [] });
+              // Store columns for the ResultPanel (glyphs are appended below).
+              if (currentTabId) updateTabState(currentTabId, { columns: cliCols ?? [] });
               setLastColumns(cliCols ?? []);
             } else {
               const { rowsAffected: affected } = await cliExecStmt(queryToRun, false, currentPsqlExpanded, currentCliDatabase || "");
@@ -1518,7 +1559,6 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               setSuccess(`Query executed successfully. ${rowsAffected} rows affected.`);
               rows = [];
               statementResults.push({ lineNumber: stmtInfo.lineNumber, status: 'success', rowsAffected, executionTime: Date.now() - stmtStartTime });
-              if (currentTabId) updateTabState(currentTabId, { statementResults });
             }
           } catch (stmtErr: any) {
             // Show the error in the psql terminal
@@ -1546,7 +1586,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               isExecutingRef.current = false;
               return;
           }
-          if (currentTabId) updateTabState(currentTabId, { statementResults });
+          if (currentTabId) appendGlyphResults(currentTabId, statementResults);
         }
         
         // Skip the libpq block entirely
@@ -1733,9 +1773,9 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           
           // Store statement results for gutter glyphs
           if (currentTabId) {
-            updateTabState(currentTabId, { statementResults });
+            appendGlyphResults(currentTabId, statementResults);
           }
-          
+
           // Combine results - use first SELECT result, or show counts for all
           const selectResults = multiResults.filter(r => r.rows && r.rows.length > 0);
           if (selectResults.length > 0) {
@@ -1775,7 +1815,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           
           // Store statement results for gutter glyphs
           if (currentTabId) {
-            updateTabState(currentTabId, { statementResults });
+            appendGlyphResults(currentTabId, statementResults);
           }
         }
 
@@ -2030,20 +2070,18 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           error: errorMsg,
           executionTime: duration
         };
-        
-        // If we already have partial results from multi-statement execution, update them
-        // Note: statementResults is inside the inner try block, not accessible here.
-        // Start with the error result.
-        const updatedStatementResults: StatementResult[] = [errorStatementResult];
-        
-        updateTabState(currentTabId, { 
-          error: errorMsg, 
-          success: null, 
+
+        // Accumulate the error glyph onto whatever the tab already has (it
+        // replaces any prior glyph on the same line — see mergeGlyphResults).
+        appendGlyphResults(currentTabId, [errorStatementResult]);
+
+        updateTabState(currentTabId, {
+          error: errorMsg,
+          success: null,
           executionTime: duration,
-          statementResults: updatedStatementResults,
-          lastExecutedStatement: { 
-            lineNumber: errorLineNumber, 
-            status: 'error' 
+          lastExecutedStatement: {
+            lineNumber: errorLineNumber,
+            status: 'error'
           }
         });
       }
@@ -3523,6 +3561,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                   hasError={!!error}
                   hasSuccess={!!success}
                   statementResults={activeTab?.statementResults}
+                  onStatementResultsChange={(rs) => activeTabId && setGlyphResults(activeTabId, rs)}
                 />
               </Suspense>
             )
