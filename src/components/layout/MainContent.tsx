@@ -123,10 +123,6 @@ export function MainContent() {
   const { connections, folders, activeConnection, selectedDatabase, currentDb, vaultCredentials, databases: globalDatabases, connectToDatabase, initialLoadDone } = useConnections();
   const { addQuery } = useQueryHistory();
   const settings = useSettings();
-  // Gates the query toolbar, tab strip, and results panel. Until a database
-  // is picked, the main pane shows EmptyStateLauncher instead of disabled
-  // chrome. See #84.
-  const isDatabaseReady = !!activeConnection && !!selectedDatabase;
   const [showServices, setShowServices] = useState(true);
   const [queryTabs, setQueryTabs] = useState<QueryTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
@@ -297,6 +293,22 @@ export function MainContent() {
   }, [connections, vaultCredentials, tabDatabases]);
 
   const activeTab = queryTabs.find((t) => t.id === activeTabId);
+  // Resolve the connection the active tab will actually use: its explicit
+  // `target` (explorer-opened / session-restored tabs) overrides the
+  // sidebar-selected context connection. Mirrors executeQuery's resolution so
+  // toolbar/results visibility and the Run/Save buttons agree with what a run
+  // would actually do.
+  const activeTabConnection = activeTab?.target
+    ? connections.find((c) => c.id === activeTab.target!.connectionId) ?? null
+    : activeConnection;
+  const activeTabDatabase = activeTab?.target?.database ?? selectedDatabase;
+  // The toolbar and results panel show whenever the active tab resolves to a
+  // real connection + database — not only when a DB is picked in the sidebar.
+  // Gating purely on the sidebar selection hid both surfaces for target-scoped
+  // tabs even though the query executes fine via the target, so the Cancel
+  // button and the results bar never appeared.
+  const activeTabRunnable =
+    !!activeTab && !!activeTabConnection && !!activeTabDatabase;
   const prevActiveTabId = useRef<string | null>(null);
 
   // Keep refs in sync with latest values to avoid stale closures
@@ -666,10 +678,16 @@ export function MainContent() {
           return;
         }
         
-        if (!activeConnection) {
+        // Resolve the tab's connection (target overrides the sidebar selection)
+        // so Ctrl+S saves from a target-scoped tab instead of erroring.
+        const saveConn = activeTab?.target
+          ? connections.find((c) => c.id === activeTab.target!.connectionId) ?? null
+          : activeConnection;
+        if (!saveConn) {
           setError("No connection — connect to a database before saving queries.");
           return;
         }
+        const saveDb = activeTab?.target?.database ?? selectedDatabase;
         const queryToSave = activeTab?.query || currentQueryRef.current;
         if (!queryToSave || queryToSave.trim() === "") {
           setError("Query is empty — type a SQL statement before saving.");
@@ -694,14 +712,14 @@ export function MainContent() {
             addSavedQuery({
               name,
               query: queryToSave,
-              database: selectedDatabase || "",
-              connectionId: activeConnection.id
+              database: saveDb || "",
+              connectionId: saveConn.id
             });
           }
           useLocalHistory.getState().addEntry(
             `saved-queries/${name}`,
             queryToSave,
-            `Saved: ${name} — ${activeConnection.name}`
+            `Saved: ${name} — ${saveConn.name}`
           );
           // Mark the active tab as in-sync with persisted state so the
           // unsaved-changes prompt on app exit (#121) won't fire for it.
@@ -725,7 +743,7 @@ export function MainContent() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeConnection, selectedDatabase, activeTab, addSavedQuery, confirmDialog]);
+  }, [activeConnection, selectedDatabase, activeTab, connections, addSavedQuery, confirmDialog]);
 
   const updateTabState = useCallback((tabId: string, updates: Partial<QueryTab>) => {
     setQueryTabs(prev => prev.map(t => t.id === tabId ? { ...t, ...updates } : t));
@@ -3191,10 +3209,11 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         <span className="text-[var(--neutral-11)] whitespace-nowrap">{activeTab?.name || "No Active Tab"}</span>
       </div>
 
-      {/* Combined Tool Window Bar - Top — only when a database is selected.
-          Without a target DB, every action (Run, Format, Explain, Compare,
-          Clone, Activity, AI, Save) is either disabled or pointless. See #84. */}
-      {isDatabaseReady && (
+      {/* Combined Tool Window Bar - Top — shown whenever the active tab can run
+          (sidebar-selected DB OR the tab's own target connection). Previously
+          gated on the sidebar selection alone, which hid Run/Cancel for
+          target-scoped tabs even though they execute fine. See #84. */}
+      {activeTabRunnable && (
       <div className="h-12 flex items-center gap-1 px-2 bg-[var(--surface-panel)] border-b border-[var(--neutral-6)] shrink-0">
         {isExecuting ? (
           <Button variant="destructive" size="sm" onClick={cancelQuery} leftIcon={<Square className="w-3.5 h-3.5" fill="currentColor" />}>
@@ -3208,7 +3227,11 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               // Always use run-query-smart to get the correct line number from cursor position
               window.dispatchEvent(new CustomEvent("run-query-smart"));
             }}
-            disabled={!activeConnection}
+            // Enable when the active tab can run — via the sidebar-selected
+            // connection OR the tab's own target (same condition that shows the
+            // toolbar). Gating on activeConnection alone left Run greyed out for
+            // target-scoped tabs even though Ctrl+Enter ran them fine.
+            disabled={!activeTabRunnable}
             title="Run first statement (Ctrl+Enter in editor for statement at cursor, Ctrl+Shift+Enter for all)"
             leftIcon={<Play className="w-4 h-4" />}
           >
@@ -3280,7 +3303,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         <IconButton
           label="Save Query (Ctrl+S)"
           onClick={async () => {
-            if (!activeConnection) return;
+            if (!activeTabConnection) return;
             const queryToSave = activeTab?.query || currentQueryRef.current;
             if (!queryToSave || queryToSave.trim() === "") return;
             const name = await confirmDialog.dialog({
@@ -3302,14 +3325,14 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                 addSavedQuery({
                   name,
                   query: queryToSave,
-                  database: selectedDatabase || "",
-                  connectionId: activeConnection.id
+                  database: activeTabDatabase || "",
+                  connectionId: activeTabConnection.id
                 });
               }
               useLocalHistory.getState().addEntry(
                 `saved-queries/${name}`,
                 queryToSave,
-                `Saved: ${name} — ${activeConnection.name}`
+                `Saved: ${name} — ${activeTabConnection.name}`
               );
               if (activeTabIdRef.current) {
                 setQueryTabs(prev => prev.map(t => {
@@ -3607,7 +3630,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           )}
         </Panel>
 
-        {isDatabaseReady && showServices && !activeTab?.usePsql && (
+        {activeTabRunnable && showServices && !activeTab?.usePsql && (
           <>
             <PanelResizeHandle className="h-1 bg-[var(--neutral-6)] hover:bg-[var(--accent-9)] transition-colors cursor-row-resize select-none shrink-0 data-[resize-handle-state=drag]:bg-[var(--accent-9)] data-[resize-handle-state=hover]:bg-[var(--accent-9)]/60" />
             <Panel minSize={15} maxSize={85} defaultSize={40}>
