@@ -1718,13 +1718,16 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       // NOW we start the execution indicators
       setIsExecuting(true);
       
-      // Set statement-level indicator to 'running' if we have statement info
+      // Set statement-level indicator to 'running' if we have statement info.
+      // The editor turns this into a transient spinner glyph next to the block
+      // (see lastExecutedStatement wiring); it's kept out of the reconciled
+      // ✓/✗ glyph set because that reconcile intentionally freezes mid-run.
       if (currentTabId && statementInfos && statementInfos.length > 0) {
-        updateTabState(currentTabId, { 
-          lastExecutedStatement: { 
-            lineNumber: statementInfos[0].lineNumber, 
-            status: 'running' 
-          } 
+        updateTabState(currentTabId, {
+          lastExecutedStatement: {
+            lineNumber: statementInfos[0].lineNumber,
+            status: 'running'
+          }
         });
       }
       
@@ -3621,6 +3624,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                   hasError={!!error}
                   hasSuccess={!!success}
                   statementResults={activeTab?.statementResults}
+                  lastExecutedStatement={activeTab?.lastExecutedStatement}
                   onStatementResultsChange={(rs) => activeTabId && setGlyphResults(activeTabId, rs)}
                 />
               </Suspense>

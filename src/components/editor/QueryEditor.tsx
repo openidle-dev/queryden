@@ -2,7 +2,7 @@ import { useRef, useEffect, memo, useCallback, useMemo } from "react";
 import "./monacoSetup";
 import Editor, { OnMount } from "@monaco-editor/react";
 import { defineMonacoThemes, resolveMonacoTheme } from "../../utils/monacoThemes";
-import { Code as CodeIcon, Loader2, CheckCircle, XCircle } from "lucide-react";
+import { Code as CodeIcon, CheckCircle, XCircle } from "lucide-react";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useConnections } from "../../contexts/useConnections";
 import { useSettings } from "../../store/settingsStore";
@@ -292,7 +292,7 @@ export const QueryEditor = memo(function QueryEditor({
   isExecuting,
   hasError,
   hasSuccess,
-  lastExecutedStatement: _lastExecutedStatement,
+  lastExecutedStatement,
   statementResults,
   onStatementResultsChange
 }: QueryEditorProps) {
@@ -349,6 +349,32 @@ export const QueryEditor = memo(function QueryEditor({
   // closure) reads the live value.
   const isExecutingRef = useRef(isExecuting);
   isExecutingRef.current = isExecuting;
+
+  // Transient "running" spinner glyph next to the block being executed. Kept
+  // apart from the reconciled ✓/✗ glyphs because that reconcile freezes
+  // mid-run (it returns early while isExecuting); this one is driven straight
+  // off the running state and is cleared the instant execution ends.
+  const runningGlyphRef = useRef<string[]>([]);
+  useEffect(() => {
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    const model = editor?.getModel();
+    if (!editor || !monaco || !model) return;
+    const line = lastExecutedStatement?.lineNumber;
+    if (isExecuting && lastExecutedStatement?.status === 'running' && line) {
+      const clamped = Math.min(Math.max(line, 1), model.getLineCount());
+      runningGlyphRef.current = model.deltaDecorations(runningGlyphRef.current, [{
+        range: new monaco.Range(clamped, 1, clamped, 1),
+        options: {
+          glyphMarginClassName: 'statement-glyph-running',
+          glyphMarginHoverMessage: { value: 'Query running…' },
+          stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+        },
+      }]);
+    } else {
+      runningGlyphRef.current = model.deltaDecorations(runningGlyphRef.current, []);
+    }
+  }, [isExecuting, lastExecutedStatement?.lineNumber, lastExecutedStatement?.status]);
 
   // Fingerprint that re-triggers reconcile only on meaningful changes. Keyed on
   // id so a re-run (new id at the same line) re-fires, and on line number so a
@@ -1275,9 +1301,9 @@ const isInJoinContext = /(\b|^)(JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|INNER\s+JOIN|CROSS
         <div className="flex items-center gap-3">
           {/* Status Indicator - Left side of query area (DataGrip style) */}
           <div className="flex items-center gap-2 shrink-0">
-            {isExecuting ? (
-              <Loader2 className="w-4 h-4 animate-spin text-[var(--warning-11)]" />
-            ) : hasError ? (
+            {/* Running state is shown in the gutter (spinner next to the block)
+                + the tab glyph + the toolbar Cancel button, not here. */}
+            {hasError ? (
               <XCircle className="w-4 h-4 text-[var(--danger-11)]" />
             ) : hasSuccess ? (
               <CheckCircle className="w-4 h-4 text-[var(--success-11)]" />
