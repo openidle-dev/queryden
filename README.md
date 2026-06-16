@@ -130,6 +130,8 @@ queryden/
 
 </details>
 
+[![GitGem](https://gitgem.org/api/badge/github/openidle-dev/queryden.svg)](https://gitgem.org/github/openidle-dev/queryden)
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
