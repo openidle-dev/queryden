@@ -12,6 +12,7 @@ import { EmptyStateLauncher } from "./EmptyStateLauncher";
 import { logger } from "../../utils/logger";
 import { getDefaultDatabaseName } from "../../config/app";
 import { splitStatements } from "../../utils/splitStatements";
+import { mapSelectionStatementsToDocumentLines, mergeGlyphResults } from "../../utils/statementGlyphs";
 import { applyQueryLimit } from "../../utils/applyQueryLimit";
 import { VariableSubstitutionDialog, extractVariables, substituteVariables, VariableValues } from "../ui/VariableSubstitutionDialog";
 import { useLocalHistory } from "../../store/localHistoryStore";
@@ -92,6 +93,15 @@ export interface PsqlConsoleEntry {
 }
 
 export interface StatementResult {
+  /**
+   * Stable id assigned when the glyph is accumulated into a tab's results.
+   * The editor keys its sticky Monaco decorations off this so a glyph can
+   * follow edits (and be pruned when its block is destroyed) without being
+   * re-pinned to a frozen line number on every re-render. Optional because
+   * the per-run results built during execution don't have one yet — it's
+   * assigned by `appendGlyphResults`.
+   */
+  id?: string;
   lineNumber: number;
   status: 'running' | 'success' | 'error';
   rowsAffected?: number;
@@ -113,15 +123,18 @@ export function MainContent() {
   const { connections, folders, activeConnection, selectedDatabase, currentDb, vaultCredentials, databases: globalDatabases, connectToDatabase, initialLoadDone } = useConnections();
   const { addQuery } = useQueryHistory();
   const settings = useSettings();
-  // Gates the query toolbar, tab strip, and results panel. Until a database
-  // is picked, the main pane shows EmptyStateLauncher instead of disabled
-  // chrome. See #84.
-  const isDatabaseReady = !!activeConnection && !!selectedDatabase;
   const [showServices, setShowServices] = useState(true);
   const [queryTabs, setQueryTabs] = useState<QueryTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [results, setResults] = useState<any[]>([]);
   const [isExecuting, setIsExecuting] = useState(false);
+  // Which tab owns the in-flight query. `isExecuting` is a single global flag
+  // (only one query runs at a time), but the running spinner must point at the
+  // tab that actually launched the query — not whichever tab happens to be
+  // active — otherwise the indicator appears to "follow" you when you switch
+  // tabs. Set when a run starts; cleared when it ends, is cancelled, or is
+  // superseded by a newer run.
+  const [executingTabId, setExecutingTabId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [multiResults, setMultiResults] = useState<MultiResult[]>([]);
@@ -280,6 +293,22 @@ export function MainContent() {
   }, [connections, vaultCredentials, tabDatabases]);
 
   const activeTab = queryTabs.find((t) => t.id === activeTabId);
+  // Resolve the connection the active tab will actually use: its explicit
+  // `target` (explorer-opened / session-restored tabs) overrides the
+  // sidebar-selected context connection. Mirrors executeQuery's resolution so
+  // toolbar/results visibility and the Run/Save buttons agree with what a run
+  // would actually do.
+  const activeTabConnection = activeTab?.target
+    ? connections.find((c) => c.id === activeTab.target!.connectionId) ?? null
+    : activeConnection;
+  const activeTabDatabase = activeTab?.target?.database ?? selectedDatabase;
+  // The toolbar and results panel show whenever the active tab resolves to a
+  // real connection + database — not only when a DB is picked in the sidebar.
+  // Gating purely on the sidebar selection hid both surfaces for target-scoped
+  // tabs even though the query executes fine via the target, so the Cancel
+  // button and the results bar never appeared.
+  const activeTabRunnable =
+    !!activeTab && !!activeTabConnection && !!activeTabDatabase;
   const prevActiveTabId = useRef<string | null>(null);
 
   // Keep refs in sync with latest values to avoid stale closures
@@ -649,10 +678,16 @@ export function MainContent() {
           return;
         }
         
-        if (!activeConnection) {
+        // Resolve the tab's connection (target overrides the sidebar selection)
+        // so Ctrl+S saves from a target-scoped tab instead of erroring.
+        const saveConn = activeTab?.target
+          ? connections.find((c) => c.id === activeTab.target!.connectionId) ?? null
+          : activeConnection;
+        if (!saveConn) {
           setError("No connection — connect to a database before saving queries.");
           return;
         }
+        const saveDb = activeTab?.target?.database ?? selectedDatabase;
         const queryToSave = activeTab?.query || currentQueryRef.current;
         if (!queryToSave || queryToSave.trim() === "") {
           setError("Query is empty — type a SQL statement before saving.");
@@ -677,14 +712,14 @@ export function MainContent() {
             addSavedQuery({
               name,
               query: queryToSave,
-              database: selectedDatabase || "",
-              connectionId: activeConnection.id
+              database: saveDb || "",
+              connectionId: saveConn.id
             });
           }
           useLocalHistory.getState().addEntry(
             `saved-queries/${name}`,
             queryToSave,
-            `Saved: ${name} — ${activeConnection.name}`
+            `Saved: ${name} — ${saveConn.name}`
           );
           // Mark the active tab as in-sync with persisted state so the
           // unsaved-changes prompt on app exit (#121) won't fire for it.
@@ -708,10 +743,32 @@ export function MainContent() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeConnection, selectedDatabase, activeTab, addSavedQuery, confirmDialog]);
+  }, [activeConnection, selectedDatabase, activeTab, connections, addSavedQuery, confirmDialog]);
 
   const updateTabState = useCallback((tabId: string, updates: Partial<QueryTab>) => {
     setQueryTabs(prev => prev.map(t => t.id === tabId ? { ...t, ...updates } : t));
+  }, []);
+
+  // Accumulate run-status gutter glyphs for a tab. Each run's results are
+  // merged into whatever the tab already has (one glyph per block that's been
+  // run; re-running a block replaces its glyph — see mergeGlyphResults), rather
+  // than wiping the lot every execution. Runs through the functional setState so
+  // it always merges into the freshest results, including the editor's own
+  // sticky-position writebacks. Ids are assigned here so the editor can key its
+  // decorations stably.
+  const appendGlyphResults = useCallback((tabId: string, newResults: StatementResult[]) => {
+    if (newResults.length === 0) return;
+    const withIds = newResults.map(r => ({ ...r, id: crypto.randomUUID() }));
+    setQueryTabs(prev => prev.map(t => t.id === tabId
+      ? { ...t, statementResults: mergeGlyphResults(t.statementResults ?? [], withIds) }
+      : t));
+  }, []);
+
+  // Replace the accumulated glyph set wholesale — used by the editor's writeback
+  // when it prunes destroyed glyphs or refreshes their line numbers as the text
+  // is edited.
+  const setGlyphResults = useCallback((tabId: string, results: StatementResult[]) => {
+    setQueryTabs(prev => prev.map(t => t.id === tabId ? { ...t, statementResults: results } : t));
   }, []);
 
   const addNewTab = useCallback((
@@ -727,12 +784,17 @@ export function MainContent() {
 
     // Resolve which connection/database to target:
     // 1. Explicit params from context-menu events (most reliable)
-    // 2. Currently selected in the sidebar as fallback (via ref to avoid stale closure)
+    // 2. Currently selected in the sidebar (via ref to avoid stale closure)
+    // 3. The connection the active tab is already using — so a new query window
+    //    inherits "the same DB" you're working in even when nothing is selected
+    //    in the sidebar (you're working through tab targets). Matches how
+    //    DataGrip/DBeaver/pgAdmin open a new editor against the current source.
     const activeConn = activeConnRef.current;
     const selectedDb = selectedDbRef.current;
-    const resolvedConnectionId = explicitConnectionId || activeConn?.id;
-    const resolvedConnectionName = explicitConnectionName || activeConn?.name;
-    const resolvedDatabase = explicitDatabase || selectedDb;
+    const currentTabTarget = activeTabRef.current?.target;
+    const resolvedConnectionId = explicitConnectionId || activeConn?.id || currentTabTarget?.connectionId;
+    const resolvedConnectionName = explicitConnectionName || activeConn?.name || currentTabTarget?.connectionName;
+    const resolvedDatabase = explicitDatabase || selectedDb || currentTabTarget?.database;
 
     const newTab: QueryTab = {
       id: crypto.randomUUID(),
@@ -879,11 +941,19 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     // commands into a prepared statement", and the libpq path further down
     // sends one execute() per statement only when isRunAll is set.
     if (!isRunAll && typeof specificQuery === "string") {
-      const parts = splitStatements(queryToRun);
-      if (parts.length > 1) {
+      // Split the *original* selection (not the trimmed queryToRun) and map each
+      // statement back to its document-absolute line. `statementInfo.lineNumber`
+      // is the document line where the selection (char 0 of specificQuery) began,
+      // so a statement reported at relative line N sits on document line
+      // baseLine + (N - 1). Using splitStatements(queryToRun) here was the bug
+      // that put glyphs on the wrong block: those line numbers are relative to
+      // the selection, not the document.
+      const baseLine = statementInfo?.lineNumber ?? 1;
+      const mapped = mapSelectionStatementsToDocumentLines(specificQuery, baseLine);
+      if (mapped.length > 1) {
         isRunAll = true;
-        statementsToRun = parts.map(p => p.text);
-        statementInfos = parts.map(p => ({ lineNumber: p.lineNumber, statementText: p.text }));
+        statementsToRun = mapped.map(p => p.text);
+        statementInfos = mapped.map(p => ({ lineNumber: p.lineNumber, statementText: p.text }));
       }
     }
     runningCmdRef.current = queryToRun;
@@ -959,11 +1029,12 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     setMultiResults([]);
     setRunningTimeMs(0);
     cancelFlagRef.current = false;
-    
-    // Clear statement results when starting new execution (glyphs will appear after execution completes)
-    if (currentTabId) {
-      updateTabState(currentTabId, { statementResults: [] });
-    }
+
+    // Note: we intentionally do NOT clear statementResults here. Glyphs now
+    // accumulate (one per block that's been run) and follow the text as it's
+    // edited, so wiping them on every run would defeat the feature. Each run
+    // merges its result into the existing set via appendGlyphResults; re-running
+    // a block replaces just that block's glyph.
     const startTime = Date.now();
     let intervalId: any = null;
     
@@ -977,6 +1048,20 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       // per-path `setIsExecuting(true)` calls below are now redundant no-ops.
       setIsExecuting(true);
       isExecutingRef.current = true;
+      // Pin the running indicator to the tab that launched this run so it
+      // doesn't follow tab switches (see executingTabId).
+      setExecutingTabId(currentTabId || null);
+      // Mark the statement(s) 'running' up-front — before the connection
+      // handshake and the query itself — so the gutter spinner appears the
+      // instant you Run and is reliably rendered before any await. (Setting it
+      // only just before db.select, far below, meant a fast query or a connect
+      // error could overwrite it with the result before the editor ever
+      // rendered the running state.) Replaced by ✓/✗ on completion.
+      if (currentTabId && statementInfos && statementInfos.length > 0) {
+        updateTabState(currentTabId, {
+          lastExecutedStatement: { lineNumber: statementInfos[0].lineNumber, status: 'running' }
+        });
+      }
 
       // Declare execution state at the top so both libpq and CLI paths can reference them
       let rows: any[] = [];
@@ -1392,7 +1477,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
             error: mr.error,
             executionTime: 0
           })));
-          if (currentTabId) updateTabState(currentTabId, { statementResults });
+          if (currentTabId) appendGlyphResults(currentTabId, statementResults);
           const selectResults = multiResults.filter(r => r.rows && r.rows.length > 0);
           if (selectResults.length > 0) {
             rows = selectResults[0].rows || [];
@@ -1509,8 +1594,8 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               rows = cliRows ?? [];
               rowsAffected = rows.length;
               statementResults.push({ lineNumber: stmtInfo.lineNumber, status: 'success', rowCount: rowsAffected, executionTime: Date.now() - stmtStartTime });
-              // Store columns for the ResultPanel
-              if (currentTabId) updateTabState(currentTabId, { statementResults, columns: cliCols ?? [] });
+              // Store columns for the ResultPanel (glyphs are appended below).
+              if (currentTabId) updateTabState(currentTabId, { columns: cliCols ?? [] });
               setLastColumns(cliCols ?? []);
             } else {
               const { rowsAffected: affected } = await cliExecStmt(queryToRun, false, currentPsqlExpanded, currentCliDatabase || "");
@@ -1518,7 +1603,6 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               setSuccess(`Query executed successfully. ${rowsAffected} rows affected.`);
               rows = [];
               statementResults.push({ lineNumber: stmtInfo.lineNumber, status: 'success', rowsAffected, executionTime: Date.now() - stmtStartTime });
-              if (currentTabId) updateTabState(currentTabId, { statementResults });
             }
           } catch (stmtErr: any) {
             // Show the error in the psql terminal
@@ -1546,7 +1630,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               isExecutingRef.current = false;
               return;
           }
-          if (currentTabId) updateTabState(currentTabId, { statementResults });
+          if (currentTabId) appendGlyphResults(currentTabId, statementResults);
         }
         
         // Skip the libpq block entirely
@@ -1644,17 +1728,9 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
 
       // NOW we start the execution indicators
       setIsExecuting(true);
-      
-      // Set statement-level indicator to 'running' if we have statement info
-      if (currentTabId && statementInfos && statementInfos.length > 0) {
-        updateTabState(currentTabId, { 
-          lastExecutedStatement: { 
-            lineNumber: statementInfos[0].lineNumber, 
-            status: 'running' 
-          } 
-        });
-      }
-      
+      // (statement-level 'running' indicator is already set up-front, before the
+      // connection handshake — see the top of the try block.)
+
       // Live timer
       intervalId = setInterval(() => {
         setRunningTimeMs(Date.now() - startTime);
@@ -1733,9 +1809,9 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           
           // Store statement results for gutter glyphs
           if (currentTabId) {
-            updateTabState(currentTabId, { statementResults });
+            appendGlyphResults(currentTabId, statementResults);
           }
-          
+
           // Combine results - use first SELECT result, or show counts for all
           const selectResults = multiResults.filter(r => r.rows && r.rows.length > 0);
           if (selectResults.length > 0) {
@@ -1775,7 +1851,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           
           // Store statement results for gutter glyphs
           if (currentTabId) {
-            updateTabState(currentTabId, { statementResults });
+            appendGlyphResults(currentTabId, statementResults);
           }
         }
 
@@ -2030,20 +2106,18 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           error: errorMsg,
           executionTime: duration
         };
-        
-        // If we already have partial results from multi-statement execution, update them
-        // Note: statementResults is inside the inner try block, not accessible here.
-        // Start with the error result.
-        const updatedStatementResults: StatementResult[] = [errorStatementResult];
-        
-        updateTabState(currentTabId, { 
-          error: errorMsg, 
-          success: null, 
+
+        // Accumulate the error glyph onto whatever the tab already has (it
+        // replaces any prior glyph on the same line — see mergeGlyphResults).
+        appendGlyphResults(currentTabId, [errorStatementResult]);
+
+        updateTabState(currentTabId, {
+          error: errorMsg,
+          success: null,
           executionTime: duration,
-          statementResults: updatedStatementResults,
-          lastExecutedStatement: { 
-            lineNumber: errorLineNumber, 
-            status: 'error' 
+          lastExecutedStatement: {
+            lineNumber: errorLineNumber,
+            status: 'error'
           }
         });
       }
@@ -2065,13 +2139,27 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         cancelFlagRef.current = false;
         setIsExecuting(false);
         isExecutingRef.current = false;
+        setExecutingTabId(null);
       }
     }
   }, [activeConnection, selectedDatabase, addQuery, currentDb, vaultCredentials, settings, confirmDialog]);
 
   const cancelQuery = useCallback(() => {
     cancelFlagRef.current = true;
+    // Release the re-entrancy guard NOW. libpq has no real query cancel: the
+    // in-flight `db.select` keeps running server-side and only resets the
+    // executing flags in its `finally` when it eventually returns — which for
+    // a heavy query can be a long time, or effectively never. Until then
+    // `isExecutingRef` would stay true and the guard at the top of
+    // executeQuery silently swallows every new run, so the results bar never
+    // comes up after a cancel. Clearing the flag lets the next query start.
+    // Bumping the generation makes the abandoned run a stale generation, so
+    // its late resolution no-ops at the gen checkpoints/finally instead of
+    // clobbering the state of whatever ran after the cancel.
+    executionGenRef.current++;
+    isExecutingRef.current = false;
     setIsExecuting(false);
+    setExecutingTabId(null);
     setError("Query execution cancelled by user.");
     setExecutionTime(runningTimeMs);
     if (activeTabId) {
@@ -3037,6 +3125,12 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     executeQueryRef.current = executeQuery;
   });
 
+  // True only when the *active* tab is the one running a query. The editor
+  // header, psql window, and results-panel loading state render for the active
+  // tab only, so they use this rather than the global `isExecuting` — otherwise
+  // they'd show a spinner after switching away to a tab that isn't running.
+  const activeTabIsExecuting = isExecuting && executingTabId === activeTabId;
+
   return (
     <div className="flex-1 flex flex-col min-w-0 h-full bg-[var(--surface-base)]">
       {/* Variable Substitution Dialog */}
@@ -3123,10 +3217,11 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         <span className="text-[var(--neutral-11)] whitespace-nowrap">{activeTab?.name || "No Active Tab"}</span>
       </div>
 
-      {/* Combined Tool Window Bar - Top — only when a database is selected.
-          Without a target DB, every action (Run, Format, Explain, Compare,
-          Clone, Activity, AI, Save) is either disabled or pointless. See #84. */}
-      {isDatabaseReady && (
+      {/* Combined Tool Window Bar - Top — shown whenever the active tab can run
+          (sidebar-selected DB OR the tab's own target connection). Previously
+          gated on the sidebar selection alone, which hid Run/Cancel for
+          target-scoped tabs even though they execute fine. See #84. */}
+      {activeTabRunnable && (
       <div className="h-12 flex items-center gap-1 px-2 bg-[var(--surface-panel)] border-b border-[var(--neutral-6)] shrink-0">
         {isExecuting ? (
           <Button variant="destructive" size="sm" onClick={cancelQuery} leftIcon={<Square className="w-3.5 h-3.5" fill="currentColor" />}>
@@ -3140,7 +3235,11 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               // Always use run-query-smart to get the correct line number from cursor position
               window.dispatchEvent(new CustomEvent("run-query-smart"));
             }}
-            disabled={!activeConnection}
+            // Enable when the active tab can run — via the sidebar-selected
+            // connection OR the tab's own target (same condition that shows the
+            // toolbar). Gating on activeConnection alone left Run greyed out for
+            // target-scoped tabs even though Ctrl+Enter ran them fine.
+            disabled={!activeTabRunnable}
             title="Run first statement (Ctrl+Enter in editor for statement at cursor, Ctrl+Shift+Enter for all)"
             leftIcon={<Play className="w-4 h-4" />}
           >
@@ -3212,7 +3311,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         <IconButton
           label="Save Query (Ctrl+S)"
           onClick={async () => {
-            if (!activeConnection) return;
+            if (!activeTabConnection) return;
             const queryToSave = activeTab?.query || currentQueryRef.current;
             if (!queryToSave || queryToSave.trim() === "") return;
             const name = await confirmDialog.dialog({
@@ -3234,14 +3333,14 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                 addSavedQuery({
                   name,
                   query: queryToSave,
-                  database: selectedDatabase || "",
-                  connectionId: activeConnection.id
+                  database: activeTabDatabase || "",
+                  connectionId: activeTabConnection.id
                 });
               }
               useLocalHistory.getState().addEntry(
                 `saved-queries/${name}`,
                 queryToSave,
-                `Saved: ${name} — ${activeConnection.name}`
+                `Saved: ${name} — ${activeTabConnection.name}`
               );
               if (activeTabIdRef.current) {
                 setQueryTabs(prev => prev.map(t => {
@@ -3298,8 +3397,10 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               ? tabConnectionName.substring(0, 10) + "..." 
               : tabConnectionName;
             
-            // Determine status for this tab
-            const tabIsExecuting = activeTabId === tab.id && isExecuting;
+            // Determine status for this tab. Executing status is keyed to the
+            // tab that actually launched the query (executingTabId), not the
+            // active tab, so the spinner stays on its own tab when you switch.
+            const tabIsExecuting = isExecuting && executingTabId === tab.id;
             const tabHasError = tab.error && activeTabId === tab.id;
             const tabHasSuccess = tab.success && activeTabId === tab.id && !tab.error;
             
@@ -3481,10 +3582,10 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                     <PsqlWindow
                       entries={activeTab.psqlEntries || []}
                       liveOutput={psqlOutput.length > 0 ? psqlOutput : stashPsqlOutputRef.current}
-                      runningCommand={isExecuting ? (runningCmdRef.current || activeTab.query || "") : null}
-                      isExecuting={isExecuting}
+                      runningCommand={activeTabIsExecuting ? (runningCmdRef.current || activeTab.query || "") : null}
+                      isExecuting={activeTabIsExecuting}
                       executionTime={executionTime}
-                      onRun={(q: string) => executeQuery(q)}
+                      onRun={(q: any, info?: { lineNumber: number; statementText: string }) => executeQuery(q, info)}
                       onClear={() => {
                         clearPsqlOutput();
                         if (activeTabId) {
@@ -3519,10 +3620,12 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                   databaseName={activeTab?.target?.database || selectedDatabase || undefined}
                   tabId={activeTabId!}
                   tabName={activeTab?.name}
-                  isExecuting={isExecuting}
+                  isExecuting={activeTabIsExecuting}
                   hasError={!!error}
                   hasSuccess={!!success}
                   statementResults={activeTab?.statementResults}
+                  lastExecutedStatement={activeTab?.lastExecutedStatement}
+                  onStatementResultsChange={(rs) => activeTabId && setGlyphResults(activeTabId, rs)}
                 />
               </Suspense>
             )
@@ -3536,7 +3639,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           )}
         </Panel>
 
-        {isDatabaseReady && showServices && !activeTab?.usePsql && (
+        {activeTabRunnable && showServices && !activeTab?.usePsql && (
           <>
             <PanelResizeHandle className="h-1 bg-[var(--neutral-6)] hover:bg-[var(--accent-9)] transition-colors cursor-row-resize select-none shrink-0 data-[resize-handle-state=drag]:bg-[var(--accent-9)] data-[resize-handle-state=hover]:bg-[var(--accent-9)]/60" />
             <Panel minSize={15} maxSize={85} defaultSize={40}>
@@ -3545,7 +3648,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
             error={error}
             successMessage={success}
             multiResults={multiResults}
-            isLoading={isExecuting}
+            isLoading={activeTabIsExecuting}
             executionTime={executionTime}
             tableName={activeTableName || undefined}
             columnTypes={tableColumnTypes?.types}
