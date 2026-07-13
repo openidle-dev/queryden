@@ -110,15 +110,63 @@ interface QueryEditorProps {
     status: 'running' | 'success' | 'error';
   };
   statementResults?: StatementResult[];
+  /**
+   * Writeback for the run-status glyphs. The editor owns the *positions* of the
+   * glyphs once they exist (they're sticky Monaco decorations that follow
+   * edits), so when it prunes a glyph whose block was destroyed or refreshes a
+   * glyph's line number after an edit, it reports the new accumulated set back
+   * up so the tab state stays in sync (and survives a tab switch / remount).
+   */
+  onStatementResultsChange?: (results: StatementResult[]) => void;
 }
 
 export interface StatementResult {
+  /** Stable id used to key the sticky gutter decoration to this result. */
+  id?: string;
   lineNumber: number;
   status: 'running' | 'success' | 'error';
   rowsAffected?: number;
   rowCount?: number;
   error?: string | null;
   executionTime?: number;
+}
+
+// Build the Monaco glyph-margin decoration options for a run result.
+// `NeverGrowsWhenTypingAtEdges` keeps the zero-width glyph range from absorbing
+// text typed right at the line start, so the glyph tracks the line cleanly.
+function buildGlyphDecoration(monaco: any, result: StatementResult, lineNumber: number) {
+  const { status, rowCount, rowsAffected, error, executionTime } = result;
+
+  let glyphClassName = 'statement-glyph-running';
+  let hoverMessage = 'Query running...';
+  let tooltip = '';
+
+  if (status === 'success') {
+    glyphClassName = 'statement-glyph-success';
+    hoverMessage = 'Query succeeded';
+    if (rowCount !== undefined) {
+      tooltip = `${rowCount} row${rowCount !== 1 ? 's' : ''} retrieved`;
+    } else if (rowsAffected !== undefined) {
+      tooltip = `${rowsAffected} row${rowsAffected !== 1 ? 's' : ''} affected`;
+    }
+    if (executionTime !== undefined && executionTime > 0) {
+      tooltip += tooltip ? ` in ${executionTime}ms` : `${executionTime}ms`;
+    }
+  } else if (status === 'error') {
+    glyphClassName = 'statement-glyph-error';
+    hoverMessage = 'Query failed';
+    tooltip = error || 'Error executing query';
+  }
+
+  return {
+    range: new monaco.Range(lineNumber, 1, lineNumber, 1),
+    options: {
+      isWholeLine: false,
+      glyphMarginClassName: glyphClassName,
+      glyphMarginHoverMessage: { value: tooltip || hoverMessage },
+      stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+    },
+  };
 }
 
 // Show intention actions popup (Alt+Enter)
@@ -245,18 +293,33 @@ export const QueryEditor = memo(function QueryEditor({
   hasError,
   hasSuccess,
   lastExecutedStatement: _lastExecutedStatement,
-  statementResults
+  statementResults,
+  onStatementResultsChange
 }: QueryEditorProps) {
   const { theme } = useTheme();
   const settings = useSettings();
   const editorRef = useRef<any>(null);
   const monacoRef = useRef<any>(null);
-  const decorationsRef = useRef<any[]>([]);
   const onRunRef = useRef<any>(null);
   const lastSnapshotRef = useRef<string>("");
   const snapshotTimerRef = useRef<any>(null);
   const { schemaItems } = useConnections();
-  
+
+  // ─── Run-status gutter glyphs (green/red checkmarks per executed block) ─────
+  // These are sticky Monaco decorations: once created they follow edits (insert
+  // a line above a block and its glyph moves down with it) and are pruned when
+  // their block is destroyed. We key them by the StatementResult id so a glyph
+  // is never re-pinned to a frozen line number on re-render — the only source
+  // of truth for a glyph's *position* is Monaco itself.
+  const glyphDecoRef = useRef<Map<string, string>>(new Map());   // result id -> monaco decoration id
+  const glyphAnchorRef = useRef<Map<string, string>>(new Map());  // result id -> trimmed text of its anchor line
+  // Latest props captured into refs so the mount-time content-change handler
+  // (a stable closure) can read them without stale values.
+  const statementResultsRef = useRef<StatementResult[] | undefined>(statementResults);
+  const onStatementResultsChangeRef = useRef(onStatementResultsChange);
+  statementResultsRef.current = statementResults;
+  onStatementResultsChangeRef.current = onStatementResultsChange;
+
   onRunRef.current = onRun;
 
   // Auto-snapshot: debounce editor changes and save to local history
@@ -282,97 +345,163 @@ export const QueryEditor = memo(function QueryEditor({
     lastSchemaHash = "";      // Force cache miss
   }, [schemaItems]);
 
-  // Create a stable fingerprint of statementResults so the effect fires reliably
-  // even when React batches state updates and the array reference doesn't change.
+  // Keep isExecuting in a ref so reconcileGlyphs (called from the mount-time
+  // closure) reads the live value.
+  const isExecutingRef = useRef(isExecuting);
+  isExecutingRef.current = isExecuting;
+
+  // Fingerprint that re-triggers reconcile only on meaningful changes. Keyed on
+  // id so a re-run (new id at the same line) re-fires, and on line number so a
+  // writeback that refreshes positions re-fires; executionTime is excluded so
+  // identical reruns don't thrash.
   const statementResultsFingerprint = useMemo(() => {
     if (!statementResults || statementResults.length === 0) return '';
-    return statementResults.map(r => `${r.lineNumber}:${r.status}:${r.executionTime || 0}`).join(',');
+    return statementResults.map(r => `${r.id ?? '?'}:${r.status}:${r.lineNumber}`).join(',');
   }, [statementResults]);
 
-  // Effect to update Monaco decorations when statementResults changes (DataGrip-style gutter glyphs)
-  useEffect(() => {
-    if (!editorRef.current || !monacoRef.current) return;
-    
+  // Reconcile the sticky glyph decorations to match statementResults, keyed by
+  // id. Surviving glyphs are left exactly where Monaco has tracked them to (so
+  // they keep following edits); only newly-added ids get a decoration created,
+  // and removed ids get theirs cleared. This never re-pins a surviving glyph to
+  // a stale line number — that was the core "checkmark on the wrong block" bug.
+  const reconcileGlyphs = useCallback(() => {
     const editor = editorRef.current;
     const monaco = monacoRef.current;
-    
-    // Always clear existing decorations first
-    if (decorationsRef.current.length > 0) {
-      decorationsRef.current = editor.deltaDecorations(decorationsRef.current, []);
-    }
-    
-    // During execution, show no glyph — wait for results
-    if (isExecuting) return;
-    
-    // Only create gutter glyphs when statementResults has data (after execution completes)
-    if (!statementResults || statementResults.length === 0) {
-      return;
-    }
-    
-    // Create decorations for all statement results (DataGrip-style)
-    const decorations: any[] = [];
-    
-    statementResults.forEach((result) => {
-      const { lineNumber, status, rowCount, rowsAffected, error, executionTime } = result;
-      
-      let glyphClassName = 'statement-glyph-running';
-      let hoverMessage = 'Query running...';
-      let tooltip = '';
-      
-      if (status === 'success') {
-        glyphClassName = 'statement-glyph-success';
-        hoverMessage = 'Query succeeded';
-        if (rowCount !== undefined) {
-          tooltip = `${rowCount} row${rowCount !== 1 ? 's' : ''} retrieved`;
-        } else if (rowsAffected !== undefined) {
-          tooltip = `${rowsAffected} row${rowsAffected !== 1 ? 's' : ''} affected`;
-        }
-        if (executionTime !== undefined && executionTime > 0) {
-          tooltip += tooltip ? ` in ${executionTime}ms` : `${executionTime}ms`;
-        }
-      } else if (status === 'error') {
-        glyphClassName = 'statement-glyph-error';
-        hoverMessage = 'Query failed';
-        tooltip = error || 'Error executing query';
+    if (!editor || !monaco) return;
+    const model = editor.getModel();
+    if (!model) return;
+    // Mid-execution we leave whatever is on screen; results land after it ends.
+    if (isExecutingRef.current) return;
+
+    const results = statementResultsRef.current ?? [];
+    const known = glyphDecoRef.current;
+    const presentIds = new Set(results.map(r => r.id).filter(Boolean) as string[]);
+
+    // Remove decorations whose result is gone (e.g. a re-run replaced the entry).
+    for (const [id, decoId] of [...known]) {
+      if (!presentIds.has(id)) {
+        model.deltaDecorations([decoId], []);
+        known.delete(id);
+        glyphAnchorRef.current.delete(id);
       }
-      
-      // Add gutter glyph decoration
-      decorations.push({
-        range: new monaco.Range(lineNumber, 1, lineNumber, 1),
-        options: {
-          isWholeLine: false,
-          glyphMarginClassName: glyphClassName,
-          glyphMarginHoverMessage: { value: tooltip || hoverMessage },
+    }
+
+    // Create decorations for results that don't have one yet (fresh runs +
+    // remount seeding). Surviving ids are skipped so Monaco keeps their live
+    // positions instead of being yanked back to a stored line number.
+    const lineCount = model.getLineCount();
+    const newErrorLines: number[] = [];
+    for (const res of results) {
+      if (!res.id || known.has(res.id)) continue;
+      const line = Math.min(Math.max(res.lineNumber, 1), lineCount);
+      const [decoId] = model.deltaDecorations([], [buildGlyphDecoration(monaco, res, line)]);
+      known.set(res.id, decoId);
+      glyphAnchorRef.current.set(res.id, (model.getLineContent(line) || '').trim());
+      if (res.status === 'error') newErrorLines.push(line);
+    }
+
+    // Reveal a freshly-failed statement — but only for newly-created error
+    // glyphs, so an edit-driven writeback never yanks the viewport around.
+    if (newErrorLines.length > 0) {
+      editor.revealLineInCenter(newErrorLines[newErrorLines.length - 1]);
+    }
+  }, []);
+
+  // Prune/refresh glyphs as the text changes: drop a glyph whose anchor line no
+  // longer reads as the block that produced it (edited or cut away) and keep the
+  // survivors' line numbers fresh. The new set is reported up so tab state —
+  // which must survive a tab switch / remount — stays in sync.
+  const pruneGlyphs = useCallback(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const model = editor.getModel();
+    if (!model) return;
+
+    const known = glyphDecoRef.current;
+    if (known.size === 0) return;
+
+    const removed = new Set<string>();
+    const lineById = new Map<string, number>();
+
+    for (const [id, decoId] of [...known]) {
+      const range = model.getDecorationRange(decoId);
+      if (!range) {
+        known.delete(id);
+        glyphAnchorRef.current.delete(id);
+        removed.add(id);
+        continue;
+      }
+      const line = range.startLineNumber;
+      const lineText = (model.getLineContent(line) || '').trim();
+      const anchor = glyphAnchorRef.current.get(id);
+      // Destroyed if the anchor line is now blank or its text changed (the block
+      // was edited or cut). Following in place — inserting/deleting *other* lines
+      // — leaves this line's text identical, so the glyph survives and shifts.
+      if (!lineText || (anchor !== undefined && lineText !== anchor)) {
+        model.deltaDecorations([decoId], []);
+        known.delete(id);
+        glyphAnchorRef.current.delete(id);
+        removed.add(id);
+      } else {
+        lineById.set(id, line);
+      }
+    }
+
+    if (removed.size === 0 && lineById.size === 0) return;
+
+    const current = statementResultsRef.current ?? [];
+    let changed = removed.size > 0;
+    const next = current
+      .filter(r => !(r.id && removed.has(r.id)))
+      .map(r => {
+        const newLine = r.id ? lineById.get(r.id) : undefined;
+        if (newLine !== undefined && newLine !== r.lineNumber) {
+          changed = true;
+          return { ...r, lineNumber: newLine };
         }
+        return r;
       });
-    });
-    
-    // Apply all decorations
-    if (decorations.length > 0) {
-      decorationsRef.current = editor.deltaDecorations([], decorations);
-    }
-    
-    // Scroll the last statement into view if there are errors
-    const hasErrors = statementResults.some(r => r.status === 'error');
-    if (hasErrors) {
-      const lastError = [...statementResults].reverse().find(r => r.status === 'error');
-      if (lastError) {
-        editor.revealLineInCenter(lastError.lineNumber);
-      }
-    }
-    
-  }, [statementResultsFingerprint, isExecuting]);
+
+    if (changed) onStatementResultsChangeRef.current?.(next);
+  }, []);
+
+  // Drive reconcile from React state changes (new runs, writebacks). Mount-time
+  // seeding is also kicked from handleEditorMount in case onMount fires after
+  // this effect's first pass.
+  useEffect(() => {
+    reconcileGlyphs();
+  }, [statementResultsFingerprint, isExecuting, reconcileGlyphs]);
 
   const handleEditorMount: OnMount = (editor, monaco) => {
     monacoRef.current = monaco;
     editorRef.current = editor;
-    
+
+    // Seed any persisted run-status glyphs now that the editor exists. The
+    // statementResults effect may have run its first pass before onMount fired
+    // (editorRef was still null then), so a tab reopened with prior glyphs would
+    // otherwise show none until the next run.
+    reconcileGlyphs();
+
+    // Prune/refresh the sticky glyphs as the text changes (throttled so large
+    // files stay responsive). Glyphs follow edits via Monaco's own tracking;
+    // this only removes ones whose block was destroyed and keeps line numbers
+    // fresh in tab state.
+    let glyphPruneThrottle: ReturnType<typeof setTimeout> | null = null;
+    const throttledGlyphPrune = () => {
+      if (glyphPruneThrottle !== null) return;
+      glyphPruneThrottle = setTimeout(() => {
+        glyphPruneThrottle = null;
+        pruneGlyphs();
+      }, 200);
+    };
+    const glyphPruneDisposable = editor.onDidChangeModelContent(() => throttledGlyphPrune());
+
     // Focus after a short delay to ensure UI is ready
     setTimeout(() => editor.focus(), 100);
 
     const focusHandler = () => editor.focus();
     const formatHandler = () => editor.getAction('editor.action.formatDocument')?.run();
-    
+
     window.addEventListener("focus-editor", focusHandler);
     window.addEventListener("format-sql", formatHandler);
 
@@ -667,12 +796,14 @@ export const QueryEditor = memo(function QueryEditor({
       contentChangeDisposable?.dispose();
       cursorMoveDisposable?.dispose();
       cursorContentDisposable?.dispose();
+      glyphPruneDisposable?.dispose();
       window.removeEventListener("focus-editor", focusHandler);
       window.removeEventListener("format-sql", formatHandler);
       window.removeEventListener("run-query-smart", handleRunSmart);
       window.removeEventListener("run-query-all", handleRunAll);
       if (domNode) domNode.removeEventListener("contextmenu", handleContextMenu);
       if (varDecoThrottle !== null) clearTimeout(varDecoThrottle);
+      if (glyphPruneThrottle !== null) clearTimeout(glyphPruneThrottle);
     });
 
     // NOTE: Ctrl+Shift+F is intentionally NOT bound to formatDocument here.
