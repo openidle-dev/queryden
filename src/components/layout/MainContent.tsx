@@ -517,7 +517,6 @@ export function MainContent() {
   useEffect(() => {
     if (!initialLoadDone) return;
     if (sessionRestoredRef.current) return;
-    sessionRestoredRef.current = true;
     (async () => {
       try {
         const { invokeCmd } = await import("../../lib/ipc");
@@ -542,6 +541,8 @@ export function MainContent() {
         logger.debug(`Restored ${restored.length} tabs from session`);
       } catch (e) {
         logger.debug("No saved session to restore:", e);
+      } finally {
+        sessionRestoredRef.current = true;
       }
     })();
   }, [initialLoadDone]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -549,6 +550,11 @@ export function MainContent() {
   // ── Session persistence: save tabs whenever they change ──────────────────
   const sessionSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
+    // Don't save until the restore attempt above has completed — otherwise
+    // this fires on mount with the initial empty `queryTabs` and can win
+    // the race against the (async) restore, wiping sessions.json with an
+    // empty tab list before it's ever read back.
+    if (!sessionRestoredRef.current) return;
     if (sessionSaveTimerRef.current) clearTimeout(sessionSaveTimerRef.current);
     sessionSaveTimerRef.current = setTimeout(async () => {
       try {
@@ -995,13 +1001,15 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       // Compute query type immediately (needed by both libpq and CLI paths)
       const upperQuery = queryToRun.toUpperCase();
       const cleanUpper = queryToRun.replace(/--.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "").trim().toUpperCase();
+      const isDoBlock = /^DO\s+[$']/.test(cleanUpper);
       const isSelect =
-        cleanUpper.startsWith("SELECT") ||
+        (cleanUpper.startsWith("SELECT") ||
         cleanUpper.includes("RETURNING") ||
         cleanUpper.startsWith("WITH") ||
         cleanUpper.startsWith("SHOW") ||
         cleanUpper.startsWith("EXPLAIN") ||
-        cleanUpper.includes("(SELECT");
+        cleanUpper.includes("(SELECT")) &&
+        !isDoBlock;
       const isTruncate = upperQuery.includes("TRUNCATE");
       const isDelete = upperQuery.includes("DELETE");
       const hasWhere = upperQuery.includes("WHERE");
@@ -1353,13 +1361,16 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
             const stmtInfo = statementInfos[i];
             const lineNumber = stmtInfo?.lineNumber || 1;
             const stmtUpper = stmt.toUpperCase().trim();
+            const cleanStmt = stmt.replace(/--.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "").trim().toUpperCase();
+            const isDoBlock = /^DO\s+[$']/.test(cleanStmt);
             const isStmtSelect =
-              stmtUpper.startsWith("SELECT") ||
+              (stmtUpper.startsWith("SELECT") ||
               stmtUpper.includes("RETURNING") ||
               stmtUpper.startsWith("WITH") ||
               stmtUpper.startsWith("SHOW") ||
               stmtUpper.startsWith("EXPLAIN") ||
-              stmtUpper.includes("(SELECT");
+              stmtUpper.includes("(SELECT")) &&
+              !isDoBlock;
             try {
               const stmtStartTime = Date.now();
               if (isStmtSelect) {
@@ -1515,7 +1526,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
             } else {
               const { rowsAffected: affected } = await cliExecStmt(queryToRun, false, currentPsqlExpanded, currentCliDatabase || "");
               rowsAffected = affected ?? 0;
-              setSuccess(`Query executed successfully. ${rowsAffected} rows affected.`);
+              setSuccess(isDoBlock ? "DO" : `Query executed successfully. ${rowsAffected} rows affected.`);
               rows = [];
               statementResults.push({ lineNumber: stmtInfo.lineNumber, status: 'success', rowsAffected, executionTime: Date.now() - stmtStartTime });
               if (currentTabId) updateTabState(currentTabId, { statementResults });
@@ -1671,13 +1682,16 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
             const lineNumber = stmtInfo?.lineNumber || 1;
             
             const stmtUpper = stmt.toUpperCase().trim();
+            const cleanStmt = stmt.replace(/--.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "").trim().toUpperCase();
+            const isDoBlock = /^DO\s+[$']/.test(cleanStmt);
             const isStmtSelect = 
-              stmtUpper.startsWith("SELECT") || 
+              (stmtUpper.startsWith("SELECT") || 
               stmtUpper.includes("RETURNING") || 
               stmtUpper.startsWith("WITH") ||  // CTE queries
               stmtUpper.startsWith("SHOW") || 
               stmtUpper.startsWith("EXPLAIN") ||
-              stmtUpper.includes("(SELECT");  // Subqueries
+              stmtUpper.includes("(SELECT")) &&  // Subqueries
+              !isDoBlock;
             
             try {
               const stmtStartTime = Date.now();
@@ -1763,7 +1777,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           } else {
             const result = await db.execute(queryToRun);
             rowsAffected = typeof result.rowsAffected === 'number' ? result.rowsAffected : 0;
-            setSuccess(`Query executed successfully. ${rowsAffected} rows affected.`);
+            setSuccess(isDoBlock ? "DO" : `Query executed successfully. ${rowsAffected} rows affected.`);
             rows = [];
             statementResults.push({
               lineNumber: stmtInfo.lineNumber,
@@ -2065,12 +2079,25 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         cancelFlagRef.current = false;
         setIsExecuting(false);
         isExecutingRef.current = false;
+      } else {
+        // Stale (cancelled) run: free the execution gate so new runs can
+        // start, but leave cancelFlagRef alone — a newer run already
+        // cleared it (or will set its own).
+        isExecutingRef.current = false;
       }
     }
   }, [activeConnection, selectedDatabase, addQuery, currentDb, vaultCredentials, settings, confirmDialog]);
 
   const cancelQuery = useCallback(() => {
     cancelFlagRef.current = true;
+    // Don't clear isExecutingRef here — doing so would let a new run start
+    // before the cancelled run's async loop settles. The new run resets
+    // cancelFlagRef (line 966), which would let the stale run continue
+    // executing SQL after the cancel (side effects!).
+    //
+    // Bump generation so the abandoned run's finally block no-ops
+    // instead of clobbering state from a newer run.
+    executionGenRef.current++;
     setIsExecuting(false);
     setError("Query execution cancelled by user.");
     setExecutionTime(runningTimeMs);

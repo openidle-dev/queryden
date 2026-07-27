@@ -33,6 +33,20 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+/// Suppress the flashing console window Windows spawns for each subprocess.
+/// No-op on other platforms.
+fn no_console_window(cmd: &mut Command) -> &mut Command {
+    #[cfg(target_os = "windows")]
+    {
+        use tokio::process::CommandExt;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 // ─── Tool kind ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -148,11 +162,13 @@ fn download_spec(kind: ToolKind, _major_version: Option<u32>) -> Option<Download
             }
         }
         ToolKind::MySql => {
-            // MySQL compressed tarballs on dev.mysql.com
+            // MySQL compressed archives on dev.mysql.com
             let url = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
                 "https://dev.mysql.com/get/Downloads/mysql-9.0.0-macos14-arm64.tar.gz"
             } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
                 "https://dev.mysql.com/get/Downloads/mysql-9.0.0-macos14-x86_64.tar.gz"
+            } else if cfg!(target_os = "windows") {
+                "https://dev.mysql.com/get/Downloads/mysql-9.0.0-winx64.zip"
             } else {
                 return None;
             };
@@ -360,6 +376,8 @@ impl CliManager {
         let bin_dir = extracted_dir.join("bin");
         std::fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
 
+        let ext = if cfg!(target_os = "windows") { ".exe" } else { "" };
+
         // Scan extracted_dir for the actual binaries (they're in a versioned subdir)
         let entries = std::fs::read_dir(extracted_dir).map_err(|e| e.to_string())?;
         let top_level_dirs: Vec<PathBuf> = entries
@@ -369,17 +387,22 @@ impl CliManager {
             .collect();
 
         // Find the subdirectory that contains our binaries
-        // PostgreSQL: postgresql-16.8/bin/psql exists
+        // PostgreSQL: postgresql-16.8/bin/psql(.exe) exists
         let subdir = top_level_dirs.iter().find(|d| {
             let bin = d.join("bin");
-            bin.join(kind.primary_binary()).exists()
+            bin.join(format!("{}{}", kind.primary_binary(), ext)).exists()
         });
 
-        if let Some(src_dir) = subdir {
-            for binary in kind.all_binaries() {
-                let src = src_dir.join("bin").join(binary);
-                if src.exists() {
-                    let dst = bin_dir.join(binary);
+        // Some archives (e.g. mongosh, mysql on Windows) extract binaries straight
+        // into extracted_dir/bin rather than a nested versioned subdir.
+        let search_dir = subdir.cloned().unwrap_or_else(|| extracted_dir.clone());
+
+        for binary in kind.all_binaries() {
+            let name = format!("{}{}", binary, ext);
+            let src = search_dir.join("bin").join(&name);
+            if src.exists() {
+                let dst = bin_dir.join(&name);
+                if dst != src {
                     if dst.exists() {
                         std::fs::remove_file(&dst).ok();
                     }
@@ -465,6 +488,33 @@ pub struct CachedTool {
     pub major_version: u32,
     pub binaries: Vec<String>,
     pub path: String,
+    pub size_bytes: u64,
+}
+
+/// Recursively sum file sizes under `path`.
+fn dir_size(path: &std::path::Path) -> u64 {
+    let mut total = 0u64;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                total += dir_size(&p);
+            } else if let Ok(meta) = entry.metadata() {
+                total += meta.len();
+            }
+        }
+    }
+    total
+}
+
+fn parse_tool_kind(tool_kind: &str) -> Result<ToolKind, String> {
+    match tool_kind {
+        "postgresql" => Ok(ToolKind::Psql),
+        "mysql" => Ok(ToolKind::MySql),
+        "mongodb" => Ok(ToolKind::Mongo),
+        "redis" => Ok(ToolKind::Redis),
+        _ => Err(format!("Unknown tool: {}", tool_kind)),
+    }
 }
 
 /// Check all tools — system and bundled — and return their status.
@@ -541,10 +591,27 @@ pub async fn cli_list_cached(
             major_version,
             binaries,
             path: entry.path().to_string_lossy().to_string(),
+            size_bytes: dir_size(&entry.path()),
         });
     }
 
     Ok(cached)
+}
+
+/// Remove a cached (downloaded) CLI tool version from disk to free space.
+/// Does not touch system-installed binaries — only the versioned cache dir.
+#[tauri::command]
+pub async fn cli_remove_cached(
+    tool_kind: String,
+    major_version: u32,
+    manager: State<'_, CliManager>,
+) -> Result<(), String> {
+    let kind = parse_tool_kind(&tool_kind)?;
+    let dir = manager.versioned_dir(kind, major_version);
+    if !dir.exists() {
+        return Ok(());
+    }
+    std::fs::remove_dir_all(&dir).map_err(|e| format!("Failed to remove cached tool: {}", e))
 }
 
 /// Download a specific version of a CLI tool.
@@ -734,11 +801,10 @@ pub async fn cli_get_version(
         ToolKind::Mongo | ToolKind::Redis => "--version",
     };
 
-    let output = Command::new(&binary)
-        .arg(flag)
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut cmd = Command::new(&binary);
+    cmd.arg(flag);
+    no_console_window(&mut cmd);
+    let output = cmd.output().await.map_err(|e| e.to_string())?;
 
     if !output.status.success() {
         return Err("Version check failed".to_string());
@@ -765,8 +831,8 @@ pub async fn cli_detect_pg_version(
         .await
         .ok_or_else(|| ToolKind::Psql.system_install_hint().to_string())?;
 
-    let output = Command::new(&binary)
-        .env("PGPASSWORD", &password)
+    let mut cmd = Command::new(&binary);
+    cmd.env("PGPASSWORD", &password)
         .arg("-h")
         .arg(&host)
         .arg("-p")
@@ -779,10 +845,9 @@ pub async fn cli_detect_pg_version(
         .arg("-A") // unaligned
         .arg("-w") // never prompt
         .arg("-c")
-        .arg("SELECT version()")
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
+        .arg("SELECT version()");
+    no_console_window(&mut cmd);
+    let output = cmd.output().await.map_err(|e| e.to_string())?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -876,6 +941,7 @@ pub async fn cli_test_connection(
         }
     }
 
+    no_console_window(&mut cmd);
     let output = cmd.output().await.map_err(|e| e.to_string())?;
 
     if !output.status.success() {
@@ -965,6 +1031,7 @@ pub async fn cli_execute_query(
 
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
+    no_console_window(&mut cmd);
 
     let start = std::time::Instant::now();
     let mut child = cmd.spawn().map_err(|e| format!("Spawn failed: {}", e))?;
@@ -1060,6 +1127,7 @@ pub async fn cli_list_databases(
         _ => unreachable!(),
     }
 
+    no_console_window(&mut cmd);
     let output = cmd.output().await.map_err(|e| e.to_string())?;
 
     if !output.status.success() {

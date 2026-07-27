@@ -41,7 +41,8 @@ const loadFromFile = async (): Promise<SavedQuery[]> => {
       connectionId: q.connection_id,
       createdAt: q.created_at,
     }));
-  } catch {
+  } catch (e) {
+    logger.error("Failed to load saved queries:", e);
     return [];
   }
 };

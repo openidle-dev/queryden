@@ -134,6 +134,20 @@ fn get_machine_id() -> String {
         return cached.clone();
     }
 
+    // Windows machine-id detection shells out to PowerShell/WMI, which can be
+    // slow or transiently unavailable (AV/EDR hooks, WMI service not yet up
+    // on a fresh boot). A different result across app launches silently
+    // rotates the encryption key, so once we detect a real ID we persist it
+    // in the OS keyring and prefer that value over live re-detection.
+    if let Ok(entry) = Entry::new("queryden", "machine_id_cache") {
+        if let Ok(id) = entry.get_password() {
+            if !id.is_empty() {
+                let _ = MACHINE_ID_CACHE.set(id.clone());
+                return id;
+            }
+        }
+    }
+
     let id = detect_machine_id();
 
     // Only memoize real IDs. A transient detection failure (e.g. PowerShell
@@ -141,6 +155,11 @@ fn get_machine_id() -> String {
     // fallback sentinel — that would silently weaken every subsequent key.
     if id != FALLBACK_MACHINE_ID {
         let _ = MACHINE_ID_CACHE.set(id.clone());
+        if let Ok(entry) = Entry::new("queryden", "machine_id_cache") {
+            if let Err(e) = entry.set_password(&id) {
+                warn!("Failed to persist machine ID to OS keyring: {e}");
+            }
+        }
     }
 
     id
@@ -1276,11 +1295,15 @@ pub fn load_saved_queries(app: tauri::AppHandle) -> Result<Vec<SavedQueryItem>, 
     match serde_json::from_str::<SavedQueryData>(&json) {
         Ok(data) => {
             if data.machine_fingerprint != get_machine_fingerprint() {
+                warn!("saved-queries.json machine fingerprint mismatch — refusing to load (file was created on a different machine, or machine ID detection is unstable on this one)");
                 return Ok(vec![]);
             }
             Ok(data.queries)
         },
-        Err(_) => Ok(vec![])
+        Err(e) => {
+            warn!("saved-queries.json failed to decrypt/parse — treating as empty: {e}");
+            Ok(vec![])
+        }
     }
 }
 

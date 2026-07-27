@@ -1646,15 +1646,22 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                 try {
                   let iconType = node.icon;
                   let targetName = node.name;
-                  const idParts = node.id.split("-");
-                  if (idParts.length >= 2) {
-                    const fullPath = idParts.slice(1).join("-");
-                    if (fullPath.includes(".")) {
-                      targetName = fullPath;
-                      if (node.icon === "column") {
-                        const pathParts = fullPath.split("-");
-                        targetName = pathParts[0];
-                        iconType = "table";
+                  // Triggers are looked up by plain tgname (pg_trigger has no
+                  // schema-qualified name), so skip the schema.name path
+                  // reconstruction below — for a table-nested trigger, node.id
+                  // is `trig-schema.table-triggerName`, and reconstructing the
+                  // path would wrongly fold the table name into the trigger name.
+                  if (node.icon !== "trigger") {
+                    const idParts = node.id.split("-");
+                    if (idParts.length >= 2) {
+                      const fullPath = idParts.slice(1).join("-");
+                      if (fullPath.includes(".")) {
+                        targetName = fullPath;
+                        if (node.icon === "column") {
+                          const pathParts = fullPath.split("-");
+                          targetName = pathParts[0];
+                          iconType = "table";
+                        }
                       }
                     }
                   }

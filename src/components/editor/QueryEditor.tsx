@@ -14,6 +14,7 @@ import {
   matchesQualifiedOrBareName,
 } from "./completionContext";
 import { resolveStatementAtOffset } from "../../utils/statementAtCursor";
+import { splitStatements } from "../../utils/splitStatements";
 
 // Global tracking to prevent duplicate provider registration across component mounts
 let sqlProviderDisposable: any = null;
@@ -611,36 +612,18 @@ export const QueryEditor = memo(function QueryEditor({
       const model = editor.getModel();
       if (!model) return;
       
-      const text = model.getValue().trim();
+      const rawText = model.getValue();
+      const text = rawText.trim();
       if (!text) {
         onRunRef.current?.();
         return;
       }
       
       // Collect all statements with their line numbers
-      const allStatements: { text: string; lineNumber: number }[] = [];
-      let searchFrom = 0;
-      
-      while (searchFrom < text.length) {
-        const semiPos = text.indexOf(';', searchFrom);
-        let endPos = semiPos === -1 ? text.length : semiPos;
-        
-        // Skip leading whitespace for this statement
-        let startPos = searchFrom;
-        while (startPos < endPos && /\s/.test(text[startPos])) {
-          startPos++;
-        }
-        
-        // Extract statement
-        const statement = text.substring(startPos, endPos).trim();
-        if (statement) {
-          const statementStartPos = model.getPositionAt(startPos);
-          allStatements.push({ text: statement, lineNumber: statementStartPos.lineNumber });
-        }
-        
-        if (semiPos === -1) break;
-        searchFrom = semiPos + 1;
-      }
+      // Use the untrimmed text so splitStatements' line number computation
+      // matches Monaco's 1-based line numbering (trim loses leading blanks).
+      const parsed = splitStatements(rawText);
+      const allStatements = parsed.map(s => ({ text: s.text, lineNumber: s.lineNumber }));
       
       // Run all statements - pass special flag to executeQuery
       if (allStatements.length > 0) {

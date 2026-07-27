@@ -137,6 +137,7 @@ export interface CachedToolDto {
   major_version: number;
   binaries: string[];
   path: string;
+  size_bytes: number;
 }
 
 /** Shape returned by `cli_check_tool` (built via `serde_json::json!`, camelCase). */
@@ -318,6 +319,10 @@ export interface IpcCommands {
   // cli
   cli_check_tools: { args: void; result: CliToolInfoDto[] };
   cli_list_cached: { args: void; result: CachedToolDto[] };
+  cli_remove_cached: {
+    args: { toolKind: string; majorVersion: number };
+    result: void;
+  };
   cli_check_tool: {
     args: { toolKind: string; majorVersion: number };
     result: CheckToolResult;
