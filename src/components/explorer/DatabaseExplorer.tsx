@@ -1649,10 +1649,18 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                   let triggerSchema: string | undefined;
                   let triggerTable: string | undefined;
 
-                  // For triggers, extract schema and table from node.id to disambiguate
-                  // lookups when the same trigger name exists on different tables.
-                  // Table-nested trigger: node.id = `trig-schema.table-triggerName`
-                  // Schema-level trigger: node.id = `trig-schema.triggerName`
+                  // Tree node IDs encode the schema context needed for unambiguous
+                  // DDL lookup. Two formats:
+                  //   Table-nested: `trig-<schema>.<table>-<triggerName>`
+                  //     (built at line 308 via `trig-${tableId}-${t}`,
+                  //      where tableId = "<schema>.<table>" contains no `-`)
+                  //   Schema-level: `trig-<schema>.<triggerName>`
+                  //     (built at line 355 via `trig-${schemaName}.${t}`)
+                  // Splitting by `-` gives exactly 3 parts for table-nested
+                  // and 2 for schema-level, unless a quoted identifier contains
+                  // `-` (extremely rare in PostgreSQL). Unmatched formats fall
+                  // back to a name-only lookup which is correct for schema-level
+                  // triggers and avoids wrong results for table-nested ones.
                   if (node.icon === "trigger") {
                     const idParts = node.id.split("-");
                     if (idParts.length === 3) {
@@ -1669,9 +1677,10 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                       if (pathPart.includes(".")) {
                         const dotParts = pathPart.split(".");
                         triggerSchema = dotParts[0];
-                        // No table for schema-level triggers
                       }
                     }
+                    // Fallthrough: unexpected part count → use node.name only
+                    // (triggerSchema/triggerTable stay undefined → name-only lookup)
                   } else {
                     const idParts = node.id.split("-");
                     if (idParts.length >= 2) {

@@ -2103,14 +2103,14 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
   }, [activeConnection, selectedDatabase, addQuery, currentDb, vaultCredentials, settings, confirmDialog]);
 
   const cancelQuery = useCallback(() => {
-    // Set the current run's per-run cancel token. This prevents the cancelled
-    // run from continuing to execute statements in its run-all loop, while
-    // NOT affecting any future runs (they get their own fresh tokens).
+    // Signal per-run cancel token so the libpq run-all loop stops early.
+    // Each execution creates its own token, so this only affects the current
+    // run — a later run gets a fresh uncancelled token.
     if (currentRunCancelRef.current) {
       currentRunCancelRef.current.current = true;
     }
-    // Legacy global flag kept for backwards compatibility with any code
-    // that still checks it (though the per-run token is the source of truth).
+    // Also set the global flag, which the CLI psql path (run-all, \watch,
+    // post-exec bail, catch block) still checks as its cancel signal.
     cancelFlagRef.current = true;
     // Don't clear isExecutingRef here — doing so would let a new run start
     // before the cancelled run's async loop settles. The execution gate
