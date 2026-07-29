@@ -77,6 +77,7 @@ pub fn run() {
             get_build_info,
             cli::cli_check_tools,
             cli::cli_list_cached,
+            cli::cli_remove_cached,
             cli::cli_check_tool,
             cli::cli_check_system_tool,
             cli::cli_ensure,

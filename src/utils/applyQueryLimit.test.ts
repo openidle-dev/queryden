@@ -83,5 +83,35 @@ describe("applyQueryLimit", () => {
       const union = "SELECT 1 UNION SELECT 2";
       expect(applyQueryLimit(union, 1000)).toBe(union);
     });
+
+    it("leaves DO blocks with RETURNING unchanged", () => {
+      const doBlock = `DO $$
+    DECLARE
+        old_type_id INTEGER;
+    BEGIN
+        SELECT id INTO old_type_id FROM t;
+        UPDATE t SET name = 'foo' WHERE id = old_type_id RETURNING id INTO old_type_id;
+    END;
+$$;`;
+      expect(applyQueryLimit(doBlock, 1000)).toBe(doBlock);
+    });
+
+    it("leaves DO blocks with named dollar-quoting unchanged", () => {
+      const doBlock = `DO $body$
+    BEGIN
+        INSERT INTO t (name) VALUES ('x') RETURNING id;
+    END;
+$body$;`;
+      expect(applyQueryLimit(doBlock, 1000)).toBe(doBlock);
+    });
+
+    it("leaves DO LANGUAGE plpgsql blocks unchanged", () => {
+      const doBlock = `DO LANGUAGE plpgsql $$
+    BEGIN
+        INSERT INTO t (name) VALUES ('x') RETURNING id;
+    END;
+$$;`;
+      expect(applyQueryLimit(doBlock, 1000)).toBe(doBlock);
+    });
   });
 });

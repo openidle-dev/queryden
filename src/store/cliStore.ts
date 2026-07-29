@@ -21,6 +21,7 @@ export interface CachedTool {
   majorVersion: number;
   binaries: string[];
   path: string;
+  sizeBytes: number;
 }
 
 // Re-export for back-compat with components that import the type from this module.
@@ -33,6 +34,7 @@ interface CliStore {
   error: string | null;
   fetchTools: () => Promise<void>;
   listCached: () => Promise<CachedTool[]>;
+  removeCached: (kind: string, majorVersion: number) => Promise<void>;
   checkTool: (kind: string, majorVersion: number) => Promise<CheckToolResult>;
   checkSystemTool: (kind: string) => Promise<CheckSystemToolResult>;
   ensureTool: (kind: string, majorVersion?: number) => Promise<string>;
@@ -92,6 +94,7 @@ function toCachedTool(t: CachedToolDto): CachedTool {
     majorVersion: t.major_version,
     binaries: t.binaries,
     path: t.path,
+    sizeBytes: t.size_bytes,
   };
 }
 
@@ -116,6 +119,12 @@ export const useCliStore = create<CliStore>((set, get) => ({
     const tools = cached.map(toCachedTool);
     set({ cachedTools: tools });
     return tools;
+  },
+
+  removeCached: async (kind, majorVersion) => {
+    await invokeCmd("cli_remove_cached", { toolKind: kind, majorVersion });
+    await get().listCached();
+    await get().fetchTools();
   },
 
   checkTool: (kind, majorVersion) =>

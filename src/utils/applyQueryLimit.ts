@@ -18,6 +18,11 @@ export function applyQueryLimit(query: string, maxRows: number): string {
     .trim()
     .toUpperCase();
 
+  // Skip PL/pgSQL anonymous blocks (DO $$ ... $$; or DO LANGUAGE plpgsql $$ ... $$;)
+  if (/^DO(\s+LANGUAGE\s+\w+)?\s+[$']/.test(cleanQuery)) {
+    return query;
+  }
+
   if (
     !cleanQuery.startsWith("SELECT") &&
     !cleanQuery.includes("RETURNING") &&
