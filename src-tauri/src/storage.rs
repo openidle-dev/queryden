@@ -84,6 +84,11 @@ const FALLBACK_MACHINE_ID: &str = "default-machine-id";
 // result so the cost is paid once per process.
 static MACHINE_ID_CACHE: OnceLock<String> = OnceLock::new();
 
+// Lock guarding machine ID initialization to prevent concurrent cache-miss
+// races (issue: concurrent threads could all miss the cache, run detection,
+// and then race to persist different values to the keyring).
+static MACHINE_ID_INIT_LOCK: Mutex<()> = Mutex::new(());
+
 // Process-wide cache for the *derived* 32-byte encryption key.
 //
 // `get_encryption_key()` runs Argon2id on every call. With OWASP defaults
@@ -130,6 +135,18 @@ fn vault_password_fingerprint(pwd: &str) -> [u8; 32] {
 // Use `try_get_machine_id()` for new encryption — it errors instead of weakening
 // the key with a globally-known sentinel.
 fn get_machine_id() -> String {
+    // Fast path: if cache is already populated, return immediately.
+    if let Some(cached) = MACHINE_ID_CACHE.get() {
+        return cached.clone();
+    }
+
+    // Acquire the init lock to serialize cache-miss initialization (double-
+    // checked locking pattern). Only one thread will perform detection and
+    // persist to the keyring; others will wait and then recheck the cache.
+    let _guard = MACHINE_ID_INIT_LOCK.lock().unwrap();
+
+    // Recheck the cache after acquiring the lock — a concurrent thread may
+    // have already populated it while we were waiting.
     if let Some(cached) = MACHINE_ID_CACHE.get() {
         return cached.clone();
     }
@@ -154,6 +171,9 @@ fn get_machine_id() -> String {
     // missing from PATH momentarily) must not lock the process into the
     // fallback sentinel — that would silently weaken every subsequent key.
     if id != FALLBACK_MACHINE_ID {
+        // The lock is still held, so only the winning thread persists to both
+        // the cache and the keyring. Concurrent losers get nothing — they'll
+        // read the winner's cached value on their cache recheck above.
         let _ = MACHINE_ID_CACHE.set(id.clone());
         if let Ok(entry) = Entry::new("queryden", "machine_id_cache") {
             if let Err(e) = entry.set_password(&id) {

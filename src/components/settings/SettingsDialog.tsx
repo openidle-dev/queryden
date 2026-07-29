@@ -1531,8 +1531,13 @@ function CliToolsSettings() {
     setRemovingKey(key);
     try {
       await cli.removeCached(kind, majorVersion);
+      await cli.listCached(); // Refresh the cached tools list after successful removal
     } catch (e) {
-      console.error("Failed to remove cached CLI tool:", e);
+      // Surface the error to the user using the same downloadError state
+      // mechanism used by handleDownload. The error banner is already
+      // wired to display at the top of the CLI Tools settings section.
+      const errMsg = e instanceof Error ? e.message : String(e);
+      setDownloadError(`Failed to remove ${kind} v${majorVersion}: ${errMsg}`);
     } finally {
       setRemovingKey(null);
     }

@@ -164,6 +164,10 @@ export function MainContent() {
   const isExecutingRef = useRef(false);
   const runningCmdRef = useRef<string>("");
   const executionGenRef = useRef(0);
+  // Per-run cancel token: holds a mutable flag for the currently-executing
+  // run. When a new run starts it creates a fresh token; when the user
+  // cancels, we set the current token to true (but leave old tokens alone).
+  const currentRunCancelRef = useRef<{ current: boolean } | null>(null);
   // Ref for latest activeTab to avoid stale closures in executeQuery
   const activeTabRef = useRef<QueryTab | undefined>(undefined);
   const activeTabIdRef = useRef<string | undefined>(undefined);
@@ -964,8 +968,14 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     setSuccess(null);
     setMultiResults([]);
     setRunningTimeMs(0);
-    cancelFlagRef.current = false;
-    
+
+    // Per-run cancellation: each run gets its own cancel token. When a new
+    // run starts it does NOT clear the global cancelFlagRef immediately —
+    // that would let a previously-cancelled run continue executing. Instead
+    // we create a fresh local cancel flag and only check that one.
+    const runCancelled = { current: false };
+    currentRunCancelRef.current = runCancelled;
+
     // Clear statement results when starting new execution (glyphs will appear after execution completes)
     if (currentTabId) {
       updateTabState(currentTabId, { statementResults: [] });
@@ -1675,7 +1685,9 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         // Handle multiple statements (Ctrl+Shift+Enter)
         if (isRunAll && statementsToRun.length > 0) {
           for (let i = 0; i < statementsToRun.length; i++) {
-            if (cancelFlagRef.current) break;
+            // Check the per-run cancel token, not the global one. This
+            // prevents a cancelled run from continuing after a new run starts.
+            if (runCancelled.current) break;
             
             const stmt = statementsToRun[i];
             const stmtInfo = statementInfos[i];
@@ -1805,7 +1817,9 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         if (intervalId) clearInterval(intervalId);
         intervalId = null;
       }
-      if (cancelFlagRef.current || gen !== executionGenRef.current) return;
+      // Check the per-run cancel token (not the global one) to decide
+      // whether to bail early. A stale generation also bails.
+      if (runCancelled.current || gen !== executionGenRef.current) return;
 
       const duration = Date.now() - startTime;
       
@@ -2089,14 +2103,24 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
   }, [activeConnection, selectedDatabase, addQuery, currentDb, vaultCredentials, settings, confirmDialog]);
 
   const cancelQuery = useCallback(() => {
+    // Set the current run's per-run cancel token. This prevents the cancelled
+    // run from continuing to execute statements in its run-all loop, while
+    // NOT affecting any future runs (they get their own fresh tokens).
+    if (currentRunCancelRef.current) {
+      currentRunCancelRef.current.current = true;
+    }
+    // Legacy global flag kept for backwards compatibility with any code
+    // that still checks it (though the per-run token is the source of truth).
     cancelFlagRef.current = true;
     // Don't clear isExecutingRef here — doing so would let a new run start
-    // before the cancelled run's async loop settles. The new run resets
-    // cancelFlagRef (line 966), which would let the stale run continue
-    // executing SQL after the cancel (side effects!).
+    // before the cancelled run's async loop settles. The execution gate
+    // stays held until the cancelled run's finally block runs (which checks
+    // the generation and only clears isExecutingRef for stale runs).
     //
-    // Bump generation so the abandoned run's finally block no-ops
-    // instead of clobbering state from a newer run.
+    // Bump generation so the abandoned run's finally block no-ops UI state
+    // updates (it won't clear cancelFlagRef or setIsExecuting, but WILL
+    // clear isExecutingRef so new runs can start once the stale async
+    // work settles).
     executionGenRef.current++;
     setIsExecuting(false);
     setError("Query execution cancelled by user.");
