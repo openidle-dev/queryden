@@ -1646,12 +1646,33 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                 try {
                   let iconType = node.icon;
                   let targetName = node.name;
-                  // Triggers are looked up by plain tgname (pg_trigger has no
-                  // schema-qualified name), so skip the schema.name path
-                  // reconstruction below — for a table-nested trigger, node.id
-                  // is `trig-schema.table-triggerName`, and reconstructing the
-                  // path would wrongly fold the table name into the trigger name.
-                  if (node.icon !== "trigger") {
+                  let triggerSchema: string | undefined;
+                  let triggerTable: string | undefined;
+
+                  // For triggers, extract schema and table from node.id to disambiguate
+                  // lookups when the same trigger name exists on different tables.
+                  // Table-nested trigger: node.id = `trig-schema.table-triggerName`
+                  // Schema-level trigger: node.id = `trig-schema.triggerName`
+                  if (node.icon === "trigger") {
+                    const idParts = node.id.split("-");
+                    if (idParts.length === 3) {
+                      // Table-nested: ["trig", "schema.table", "triggerName"]
+                      const pathPart = idParts[1];
+                      if (pathPart.includes(".")) {
+                        const dotParts = pathPart.split(".");
+                        triggerSchema = dotParts[0];
+                        triggerTable = dotParts.slice(1).join(".");
+                      }
+                    } else if (idParts.length === 2) {
+                      // Schema-level: ["trig", "schema.triggerName"]
+                      const pathPart = idParts[1];
+                      if (pathPart.includes(".")) {
+                        const dotParts = pathPart.split(".");
+                        triggerSchema = dotParts[0];
+                        // No table for schema-level triggers
+                      }
+                    }
+                  } else {
                     const idParts = node.id.split("-");
                     if (idParts.length >= 2) {
                       const fullPath = idParts.slice(1).join("-");
@@ -1665,7 +1686,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                       }
                     }
                   }
-                  const ddl = await getDDL(iconType, targetName);
+                  const ddl = await getDDL(iconType, targetName, triggerSchema, triggerTable);
                   if (ddl) {
                     window.dispatchEvent(new CustomEvent("open-query-with-text", {
                       detail: { query: ddl, name: `DDL ${targetName}` }

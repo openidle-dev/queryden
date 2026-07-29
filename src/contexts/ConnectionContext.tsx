@@ -139,7 +139,7 @@ interface ConnectionContextType {
   connectToDatabase: (connId: string, databaseName?: string, overrideVaultCredential?: VaultCredential) => Promise<void>;
   disconnectFromDatabase: () => Promise<void>;
   loadSchema: (database: string, overrideSchemas?: string[]) => Promise<void>;
-  getDDL: (type: string, name: string) => Promise<string>;
+  getDDL: (type: string, name: string, schema?: string, table?: string) => Promise<string>;
   generateStatement: (type: "select" | "insert" | "update" | "delete", tableName: string) => Promise<string>;
   exportConnections: (path: string, includePasswords: boolean) => Promise<void>;
   importConnections: (path: string) => Promise<number>;
@@ -1096,11 +1096,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     return ddl;
   };
 
-  const getDDL = async (type: string, name: string): Promise<string> => {
+  const getDDL = async (type: string, name: string, schema?: string, table?: string): Promise<string> => {
     if (!activeConnection || !currentDb) return "";
-    
+
     // Parse name - could be "table" or "schema.table"
-    let schemaPart = 'public';
+    let schemaPart = schema || 'public';
     let tablePart = name;
     
     // Handle case like "ansible.job" or "public.job"
@@ -1330,7 +1330,21 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           }
         } else if (type === "trigger") {
           try {
-            const result = await currentDb.select("SELECT pg_get_triggerdef(oid) FROM pg_trigger WHERE tgname = $1", [name]);
+            let result;
+            // If schema and table are provided, constrain lookup to avoid ambiguity
+            // when the same trigger name exists on different tables
+            if (schema && table) {
+              result = await currentDb.select(`
+                SELECT pg_get_triggerdef(t.oid)
+                FROM pg_trigger t
+                JOIN pg_class c ON t.tgrelid = c.oid
+                JOIN pg_namespace n ON c.relnamespace = n.oid
+                WHERE t.tgname = $1 AND n.nspname = $2 AND c.relname = $3
+              `, [name, schema, table]);
+            } else {
+              // Fallback: look up by trigger name alone (may be ambiguous)
+              result = await currentDb.select("SELECT pg_get_triggerdef(oid) FROM pg_trigger WHERE tgname = $1", [name]);
+            }
             if (result && result.length > 0) {
               const def = Object.values(result[0])[0];
               return typeof def === 'string' ? def : `-- Trigger definition found but is not a string`;
