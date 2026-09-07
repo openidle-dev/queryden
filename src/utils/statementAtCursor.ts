@@ -15,11 +15,13 @@
  *   - if the caret is past the last statement, the last statement wins,
  *   - otherwise fall back to the first statement.
  *
- * Note: this uses a plain `;` scan rather than the lexer-aware
- * {@link ./splitStatements} so it stays byte-for-byte compatible with the
- * existing run-at-cursor selection. Switching both paths to the lexer-aware
- * splitter is a deliberate follow-up, not part of this change.
+ * Note: this is lexer-aware via {@link ./splitStatements} so a semicolon
+ * inside a string literal, dollar-quoted `DO $$ ... $$` body, backtick
+ * identifier or comment never splits a statement. Previously this used a
+ * plain `;` scan which broke Ctrl+Enter on exactly those inputs.
  */
+import { splitStatements } from "./splitStatements";
+
 export interface CursorStatement {
   /** 0-based offset of the statement's first non-whitespace character. */
   start: number;
@@ -33,37 +35,16 @@ export interface CursorStatement {
 
 /** Split `text` into the same statement spans the run-at-cursor path uses. */
 function collectStatements(text: string): CursorStatement[] {
-  const statements: CursorStatement[] = [];
-  let searchFrom = 0;
-
-  const lineAt = (pos: number): number => {
-    let line = 1;
-    for (let k = 0; k < pos; k++) {
-      if (text.charCodeAt(k) === 10 /* \n */) line++;
-    }
-    return line;
-  };
-
-  while (searchFrom < text.length) {
-    const semiPos = text.indexOf(";", searchFrom);
-    const endPos = semiPos === -1 ? text.length : semiPos;
-
-    // Skip leading whitespace so `start`/`lineNumber` anchor to real content.
-    let startPos = searchFrom;
-    while (startPos < endPos && /\s/.test(text[startPos])) {
-      startPos++;
-    }
-
-    const statement = text.substring(startPos, endPos).trim();
-    if (statement) {
-      statements.push({ start: startPos, end: endPos, text: statement, lineNumber: lineAt(startPos) });
-    }
-
-    if (semiPos === -1) break;
-    searchFrom = semiPos + 1;
-  }
-
-  return statements;
+  // Reuse the lexer-aware splitter so Ctrl+Enter, the highlight, and
+  // Ctrl+Shift+Enter all agree on statement boundaries (DO $$, strings,
+  // comments, backticks, DELIMITER). splitStatements.end is the terminator
+  // position (or end of input), matching CursorStatement.end semantics.
+  return splitStatements(text).map((s) => ({
+    start: s.start,
+    end: s.end,
+    text: s.text,
+    lineNumber: s.lineNumber,
+  }));
 }
 
 /**

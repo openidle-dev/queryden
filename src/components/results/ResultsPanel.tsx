@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, memo, useRef, useDeferredValue } from "react";
+import { useState, useMemo, useEffect, memo, useRef, useDeferredValue } from "react";
 import { 
   AlertCircle, Table2, Hash, Type, Calendar, Binary, Code as CodeIcon, 
   Filter, Shield, Download, FileJson, XCircle, Search, Copy, 
@@ -241,6 +241,7 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
       if (gridRef.current && detail?.index !== undefined) {
         setTimeout(() => {
           gridRef.current?.scrollToRow(detail.index);
+          if (detail?.focus) gridRef.current?.focus();
         }, 100);
       }
     };
@@ -461,9 +462,9 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
     return <Type className="w-2.5 h-2.5 opacity-40" />;
   };
 
-  const handleContextMenu = (e: React.MouseEvent, row: any, col?: string) => {
-    e.preventDefault();
-    setContextMenu({ x: e.pageX, y: e.pageY, row, col });
+  const handleContextMenu = (pos: { clientX: number; clientY: number }, row: any, col?: string) => {
+    // Viewport coords — the Menu renders `position: fixed`.
+    setContextMenu({ x: pos.clientX, y: pos.clientY, row, col });
   };
 
   const generateSqlForSelected = (type: "INSERT" | "UPDATE" | "DELETE") => {

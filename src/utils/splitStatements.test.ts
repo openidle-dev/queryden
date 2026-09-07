@@ -113,3 +113,60 @@ CREATE OR REPLACE FUNCTION b() RETURNS void AS $$ BEGIN PERFORM 2; END; $$ LANGU
     expect(out[1].text.includes("FUNCTION b()")).toBe(true);
   });
 });
+
+describe("splitStatements — engines and corner cases", () => {
+  it("keeps normal multi-statement scripts split", () => {
+    const out = splitStatements("SELECT 1; SELECT 2; SELECT 3;");
+    expect(out.map(s => s.text)).toEqual(["SELECT 1", "SELECT 2", "SELECT 3"]);
+  });
+
+  it("keeps CTEs as one statement", () => {
+    const sql = "WITH x AS (SELECT 1) SELECT * FROM x; SELECT 2";
+    const out = splitStatements(sql);
+    expect(out).toHaveLength(2);
+    expect(out[0].text).toBe("WITH x AS (SELECT 1) SELECT * FROM x");
+  });
+
+  it("keeps anonymous DO blocks whole, all variants", () => {
+    const variants = [
+      "DO $$ BEGIN PERFORM 1; PERFORM 2; END; $$;",
+      "DO $body$ BEGIN PERFORM 1; END; $body$;",
+      "DO LANGUAGE plpgsql $$ BEGIN PERFORM 1; END; $$;",
+      "DO 'BEGIN PERFORM 1; END;'",
+    ];
+    for (const v of variants) {
+      const separator = v.trimEnd().endsWith(";") ? " " : "; ";
+      const out = splitStatements(`${v}${separator}SELECT 1`);
+      expect(out).toHaveLength(2);
+      expect(out[1].text).toBe("SELECT 1");
+    }
+  });
+
+  it("does NOT split inside MySQL backtick identifiers", () => {
+    const out = splitStatements("CREATE TABLE `a;b` (id int); SELECT 1");
+    expect(out.map(s => s.text)).toEqual(["CREATE TABLE `a;b` (id int)", "SELECT 1"]);
+  });
+
+  it("handles backslash escapes in strings (MySQL / E-strings)", () => {
+    const out = splitStatements("SELECT 'a\\';b'; SELECT 2");
+    expect(out.map(s => s.text)).toEqual(["SELECT 'a\\';b'", "SELECT 2"]);
+  });
+
+  it("handles MySQL DELIMITER blocks as one statement", () => {
+    const sql = `DELIMITER $$
+CREATE PROCEDURE p() BEGIN SELECT 1; SELECT 2; END$$
+DELIMITER ;
+SELECT 1`;
+    const out = splitStatements(sql);
+    expect(out).toHaveLength(2);
+    expect(out[0].text).toContain("CREATE PROCEDURE");
+    expect(out[0].text).toContain("SELECT 1; SELECT 2;");
+    expect(out[1].text).toBe("SELECT 1");
+  });
+
+  it("normal statements still split after a DELIMITER reset", () => {
+    const out = splitStatements("DELIMITER $$ SELECT 1$$ DELIMITER ; SELECT 2; SELECT 3");
+    expect(out.map(s => s.text)).toContain("SELECT 2");
+    expect(out.map(s => s.text)).toContain("SELECT 3");
+  });
+});

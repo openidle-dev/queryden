@@ -37,4 +37,13 @@ describe("quoteIdentifier", () => {
     expect(quoteIdentifier("users", "PostgreSQL")).toBe('"users"');
     expect(quoteIdentifier("users", "MYSQL")).toBe("`users`");
   });
+
+  it("escapes embedded quotes instead of deleting them", () => {
+    expect(quoteIdentifier('a"b', "postgres")).toBe('"a""b"');
+    expect(quoteIdentifier("a`b", "mysql")).toBe("`a``b`");
+  });
+
+  it("keeps quoted dotted identifiers as two parts", () => {
+    expect(quoteIdentifier('"my.schema"."my.table"', "postgres")).toBe('"my.schema"."my.table"');
+  });
 });

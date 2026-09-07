@@ -9,6 +9,8 @@ import { DatabaseConnection } from "../../contexts/ConnectionContext";
 import { GridView, GridViewRef } from "../ui/GridView";
 import { CompactSelection } from "@glideapps/glide-data-grid";
 import { Dialog } from "../ui/Dialog";
+import { splitStatements } from "../../utils/splitStatements";
+import { getDefaultPort, isSelectLike } from "../../utils/sqlDialect";
 import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
 import { Select } from "../ui/Select";
@@ -146,7 +148,7 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
       let username = conn.username || "", password = conn.password || "";
       if (conn.vaultCredentialId) { const vaultCred = vaultCredentials.find(vc => vc.id === conn.vaultCredentialId); if (vaultCred) { username = vaultCred.username || ""; password = vaultCred.password || ""; } }
       const Database = (await import("@tauri-apps/plugin-sql")).default;
-      const port = conn.port || (conn.type === "mysql" || conn.type === "mariadb" ? 3306 : 5432);
+      const port = conn.port || getDefaultPort(conn.type);
       const connectionString = conn.type === "sqlite" ? `sqlite:${conn.filepath || "dbman.sqlite"}` :
         ["postgres", "supabase", "cockroach"].includes(conn.type) ? `postgres://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${conn.host}:${port}/postgres` :
         `mysql://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${conn.host}:${port}/mysql`;
@@ -176,8 +178,8 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
     } else {
       queryToRun = typeof queryText === 'string' ? queryText : query;
       if (!queryToRun.trim()) { setError("Empty query"); return; }
-      // Split by semicolon, being mindful that this is a simple split
-      statementsToRun = queryToRun.split(';').map(s => s.trim()).filter(s => s.length > 0);
+      // Lexer-aware split so DO $$ bodies, strings and comments survive.
+      statementsToRun = splitStatements(queryToRun).map(s => s.text);
     }
 
     if (statementsToRun.length === 0) return;
@@ -208,11 +210,7 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
     setResults(initialResults);
     setActiveTab(0);
 
-    const isSelectQuery = (stmt: string) => {
-      const s = stmt.toUpperCase().trim();
-      return s.startsWith("SELECT") || s.startsWith("WITH") || s.startsWith("SHOW") ||
-             s.startsWith("DESCRIBE") || s.startsWith("EXPLAIN") || s.includes("RETURNING");
-    };
+    const isSelectQuery = (stmt: string) => isSelectLike(stmt);
 
     for (const target of selectedTargets) {
       const conn = connections.find(c => c.id === target.connectionId);
@@ -224,7 +222,7 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
         if (conn.vaultCredentialId) { const vaultCred = vaultCredentials.find(vc => vc.id === conn.vaultCredentialId); if (vaultCred) { username = vaultCred.username || ""; password = vaultCred.password || ""; } }
 
         const Database = (await import("@tauri-apps/plugin-sql")).default;
-        const port = conn.port || (conn.type === "mysql" || conn.type === "mariadb" ? 3306 : 5432);
+        const port = conn.port || getDefaultPort(conn.type);
         const connectionString = conn.type === "sqlite" ? `sqlite:${conn.filepath || "dbman.sqlite"}` :
           ["postgres", "supabase", "cockroach"].includes(conn.type) ? `postgres://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${conn.host}:${port}/${target.database}` :
           `mysql://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${conn.host}:${port}/${target.database}`;
@@ -802,9 +800,8 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
                           if (sortCol === c) setSortDir(sortDir === "asc" ? "desc" : sortDir === "desc" ? null : "asc");
                           else { setSortCol(c); setSortDir("asc"); }
                         }}
-                        onCellContextMenu={(rowIdx, colIdx, e) => {
-                          e.preventDefault();
-                          setContextMenu({ x: e.pageX, y: e.pageY, row: sortedRows[rowIdx], col: columns[colIdx] });
+                        onCellContextMenu={(rowIdx, colIdx, pos) => {
+                          setContextMenu({ x: pos.clientX, y: pos.clientY, row: sortedRows[rowIdx], col: columns[colIdx] });
                         }}
                         columnWidths={columnWidths}
                         onColumnResized={(c, w) => setColumnWidths(prev => ({ ...prev, [c]: w }))}

@@ -34,7 +34,7 @@ const categories: { id: SettingsCategory; label: string; icon: any; keywords: st
   { id: "vault", label: "Credential Vault", icon: Shield, keywords: ["vault", "security", "credentials", "password", "username", "encryption", "master", "profiles"] },
   { id: "updates", label: "Updates", icon: Download, keywords: ["update", "updates", "beta", "channel", "stable", "release", "version", "auto-update", "prerelease"] },
   { id: "autoSave", label: "Auto Save", icon: HardDrive, keywords: ["auto-save", "autosave", "save", "interval", "recovery", "backup", "persist", "crash"] },
-  { id: "cliTools", label: "CLI Tools", icon: Terminal, keywords: ["cli", "psql", "mysql", "mongo", "mongosh", "redis", "download", "tools", "binary", "cache"] },
+  { id: "cliTools", label: "CLI Tools", icon: Terminal, keywords: ["cli", "psql", "mysql", "mongo", "mongosh", "download", "tools", "binary", "cache"] },
 ];
 
 export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
@@ -1470,7 +1470,6 @@ const CLI_TOOL_KINDS: { kind: string; label: string; binary: string; defaultVers
   { kind: "postgresql", label: "PostgreSQL", binary: "psql", defaultVersion: 16 },
   { kind: "mysql", label: "MySQL", binary: "mysql", defaultVersion: 9 },
   { kind: "mongodb", label: "MongoDB", binary: "mongosh", defaultVersion: 2 },
-  { kind: "redis", label: "Redis", binary: "redis-cli", defaultVersion: 7 },
 ];
 
 function formatBytes(bytes: number): string {
@@ -1488,11 +1487,26 @@ function CliToolsSettings() {
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [removingKey, setRemovingKey] = useState<string | null>(null);
   const [versionInputs, setVersionInputs] = useState<Record<string, string>>({});
+  // Per-kind download availability on this platform (`needsDownload`) plus
+  // the system-install hint for tools with no download (psql everywhere,
+  // mysql on Linux). Keyed by tool kind.
+  const [toolSupport, setToolSupport] = useState<Record<string, { needsDownload: boolean; installHint?: string | null }>>({});
 
   const refresh = async () => {
     setRefreshing(true);
     try {
       await Promise.all([cli.fetchTools(), cli.listCached()]);
+      const support = await Promise.all(
+        CLI_TOOL_KINDS.map(async ({ kind, defaultVersion }) => {
+          try {
+            const status = await cli.checkTool(kind, defaultVersion);
+            return [kind, { needsDownload: status.needsDownload, installHint: status.installHint ?? null }] as const;
+          } catch {
+            return [kind, { needsDownload: true }] as const;
+          }
+        })
+      );
+      setToolSupport(Object.fromEntries(support));
     } finally {
       setRefreshing(false);
     }
@@ -1631,23 +1645,33 @@ function CliToolsSettings() {
               )}
 
               <div className="mt-2 flex items-center gap-2">
-                <input
-                  type="number"
-                  min={1}
-                  placeholder={String(defaultVersion)}
-                  value={versionInputs[kind] ?? ""}
-                  onChange={(e) => setVersionInputs((prev) => ({ ...prev, [kind]: e.target.value }))}
-                  className="w-20 px-2 py-1 text-xs rounded bg-[var(--surface-base)] border border-[var(--neutral-6)] outline-none focus:border-[var(--accent-8)] text-[var(--neutral-12)]"
-                />
-                <Button
-                  variant="secondary"
-                  size="xs"
-                  leftIcon={<Download className="w-3 h-3" />}
-                  loading={isDownloading}
-                  onClick={() => handleDownload(kind, defaultVersion)}
-                >
-                  Download version
-                </Button>
+                {toolSupport[kind]?.needsDownload !== false || systemInfo?.available ? (
+                  <>
+                    <input
+                      type="number"
+                      min={1}
+                      placeholder={String(defaultVersion)}
+                      value={versionInputs[kind] ?? ""}
+                      onChange={(e) => setVersionInputs((prev) => ({ ...prev, [kind]: e.target.value }))}
+                      className="w-20 px-2 py-1 text-xs rounded bg-[var(--surface-base)] border border-[var(--neutral-6)] outline-none focus:border-[var(--accent-8)] text-[var(--neutral-12)]"
+                    />
+                    <Button
+                      variant="secondary"
+                      size="xs"
+                      leftIcon={<Download className="w-3 h-3" />}
+                      loading={isDownloading}
+                      onClick={() => handleDownload(kind, defaultVersion)}
+                    >
+                      Download version
+                    </Button>
+                  </>
+                ) : (
+                  toolSupport[kind]?.installHint && (
+                    <p className="text-[11px] text-[var(--neutral-11)] leading-relaxed whitespace-pre-wrap">
+                      No auto-download on this platform — {toolSupport[kind]?.installHint}
+                    </p>
+                  )
+                )}
               </div>
             </div>
           );

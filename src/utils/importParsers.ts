@@ -1,4 +1,5 @@
 import { StoredConnectionDto, VaultCredentialDto } from "../lib/ipc";
+import { getDefaultPort } from "./sqlDialect";
 
 export interface ParseResult {
   source: string;
@@ -137,7 +138,7 @@ function parseDBeaverDataSources(content: string): ParseResult | null {
 
       const dbType = mapProvider(entry.provider);
       if (!port) {
-        port = dbType === "mysql" || dbType === "mariadb" ? 3306 : 5432;
+        port = getDefaultPort(dbType);
       }
 
       host = host || "localhost";
@@ -211,7 +212,7 @@ function parseDBeaverCredentialsConfig(content: string): ParseResult | null {
 
       const provider = key.includes("postgres") ? "postgres" : key.includes("mysql") ? "mysql" : "postgres";
       if (!port) {
-        port = provider === "mysql" ? 3306 : 5432;
+        port = getDefaultPort(provider);
       }
 
       host = host || "localhost";
@@ -299,7 +300,7 @@ function parseDataGripXML(content: string): ParseResult | null {
       }
 
       if (!port) {
-        port = dbType === "mysql" || dbType === "mariadb" ? 3306 : 5432;
+        port = getDefaultPort(dbType);
       }
 
       if (driver && !url) {
@@ -424,7 +425,7 @@ function parseTablePlus(content: string): ParseResult | null {
 
       const dbType = mapProvider(driver || (group.includes("mysql") ? "mysql" : ""));
 
-      const finalPort = port ?? (dbType === "mysql" || dbType === "mariadb" ? 3306 : 5432);
+      const finalPort = port ?? getDefaultPort(dbType);
       const name = entry.name || entry.Name || `${user}@${host}`;
 
       if (user) {

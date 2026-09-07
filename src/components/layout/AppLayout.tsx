@@ -13,6 +13,7 @@ import { useAppInfo } from "../../hooks/useAppInfo";
 import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
 import { cn } from "../../lib/cn";
+import { getDefaultPort } from "../../utils/sqlDialect";
 
 // Active state for the header's tool-window toggles (Database Explorer, Files,
 // Search). Uses Button's ghost variant as the base and tints it with the
@@ -435,7 +436,7 @@ export function AppLayout() {
               {activeConnection.host && (
                 <>
                   <span className="opacity-40">·</span>
-                  <span className="font-mono">{activeConnection.host}:{activeConnection.port || (activeConnection.type === "mysql" ? 3306 : 5432)}</span>
+                  <span className="font-mono">{activeConnection.host}:{activeConnection.port || getDefaultPort(activeConnection.type)}</span>
                 </>
               )}
             </>

@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { isDateTimeType } from "./columnTypes";
+import {
+  getTypeHeaderPrefix,
+  inferColumnType,
+  isBoolType,
+  isDateTimeType,
+  isJsonType,
+  isNumericType,
+} from "./columnTypes";
 
 describe("isDateTimeType (issue #51)", () => {
   describe("with a known SQL type — authoritative path", () => {
@@ -90,5 +97,116 @@ describe("isDateTimeType (issue #51)", () => {
       // on its own. We treat truly unknown types as 'not a date type'.
       expect(isDateTimeType("MY_CUSTOM_TYPE", "effective_from")).toBe(false);
     });
+  });
+});
+
+describe("isBoolType", () => {
+  it("matches boolean SQL types case-insensitively", () => {
+    expect(isBoolType("BOOLEAN", "anything")).toBe(true);
+    expect(isBoolType("boolean", "anything")).toBe(true);
+    expect(isBoolType("bool", "anything")).toBe(true);
+    expect(isBoolType("BIT", "anything")).toBe(true);
+  });
+
+  it("rejects non-boolean types even with suggestive names", () => {
+    expect(isBoolType("INTEGER", "is_active")).toBe(false);
+    expect(isBoolType("TEXT", "active")).toBe(false);
+    expect(isBoolType("tinyint", "active")).toBe(false);
+  });
+
+  it("falls back to the name heuristic without a type", () => {
+    expect(isBoolType(undefined, "active")).toBe(true);
+    expect(isBoolType(undefined, "is_deleted")).toBe(true);
+    expect(isBoolType("", "has_access")).toBe(true);
+    expect(isBoolType(undefined, "name")).toBe(false);
+    expect(isBoolType(undefined, "amount")).toBe(false);
+  });
+});
+
+describe("isNumericType / isJsonType", () => {
+  it("matches numeric SQL types across engines", () => {
+    for (const t of [
+      "integer", "int", "int4", "int8", "bigint", "smallint",
+      "float", "float8", "real", "double precision", "numeric",
+      "numeric(10,2)", "decimal", "serial", "bigserial",
+      "tinyint", "tinyint(1)", "mediumint",
+    ]) {
+      expect(isNumericType(t, "anything")).toBe(true);
+    }
+  });
+
+  it("rejects lookalikes and non-numeric types", () => {
+    expect(isNumericType("point", "anything")).toBe(false);
+    expect(isNumericType("interval", "anything")).toBe(false);
+    expect(isNumericType("timestamp", "anything")).toBe(false);
+    expect(isNumericType("text", "amount")).toBe(false);
+    expect(isNumericType("boolean", "count")).toBe(false);
+  });
+
+  it("matches json types and rejects others", () => {
+    expect(isJsonType("json", "x")).toBe(true);
+    expect(isJsonType("jsonb", "x")).toBe(true);
+    expect(isJsonType("text", "payload")).toBe(false);
+    expect(isJsonType("varchar", "data")).toBe(false);
+  });
+
+  it("falls back to name heuristics without a type", () => {
+    expect(isNumericType(undefined, "unit_price")).toBe(true);
+    expect(isNumericType(undefined, "user_id")).toBe(true);
+    expect(isNumericType(undefined, "name")).toBe(false);
+    expect(isJsonType(undefined, "metadata")).toBe(true);
+    expect(isJsonType(undefined, "name")).toBe(false);
+  });
+});
+
+describe("getTypeHeaderPrefix", () => {
+  const cases: Array<[string, string]> = [
+    ["integer", "123 "],
+    ["int", "123 "],
+    ["bigint", "123 "],
+    ["number", "123 "],
+    ["numeric(10,2)", "123 "],
+    ["decimal", "123 "],
+    ["serial", "123 "],
+    ["bigserial", "123 "],
+    ["float", "123 "],
+    ["double precision", "123 "],
+    ["jsonb", "{} "],
+    ["json", "{} "],
+    ["timestamp", "🕑 "],
+    ["timestamptz", "🕑 "],
+    ["timestamp with time zone", "🕑 "],
+    ["date", "🕑 "],
+    ["datetime", "🕑 "],
+    ["time", "🕑 "],
+    ["char", "A·Z "],
+    ["varchar", "A·Z "],
+    ["character varying", "A·Z "],
+    ["text", "A·Z "],
+    ["uuid", "A·Z "],
+    ["boolean", "bool "],
+    ["bool", "bool "],
+    ["bytea", "01 "],
+    ["blob", "01 "],
+  ];
+  for (const [type, expected] of cases) {
+    it(`badges ${type} as ${expected.trim()}`, () => {
+      expect(getTypeHeaderPrefix(type, false, "col")).toBe(expected);
+    });
+  }
+
+  it("adds key/FK markers", () => {
+    expect(getTypeHeaderPrefix("integer", false, "id")).toBe("123🔑 ");
+    expect(getTypeHeaderPrefix("integer", true, "user_id")).toBe("123🔗 ");
+  });
+});
+
+describe("inferColumnType", () => {
+  it("infers from values with all-null fallback to names", () => {
+    expect(inferColumnType([{ a: 1 }, { a: 2 }], "a")).toBe("int");
+    expect(inferColumnType([{ a: 1.5 }], "a")).toBe("float");
+    expect(inferColumnType([{ a: true }], "a")).toBe("bool");
+    expect(inferColumnType([{ a: null }], "active")).toBe("bool");
+    expect(inferColumnType([], "amount")).toBe("float");
   });
 });

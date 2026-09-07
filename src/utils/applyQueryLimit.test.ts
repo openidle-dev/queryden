@@ -113,5 +113,26 @@ $body$;`;
 $$;`;
       expect(applyQueryLimit(doBlock, 1000)).toBe(doBlock);
     });
+
+    it("does not mistake literals/comments for LIMIT or RETURNING", () => {
+      // 'LIMIT 10' inside a string is not a real LIMIT.
+      expect(applyQueryLimit("SELECT 'LIMIT 10'", 1000)).toBe("SELECT 'LIMIT 10' LIMIT 1000");
+      // RETURNING inside a string must not force a LIMIT path change for non-selects.
+      expect(applyQueryLimit("UPDATE t SET x = 'RETURNING'", 1000)).toBe("UPDATE t SET x = 'RETURNING'");
+    });
+
+    it("never truncates a literal tail containing comment markers", () => {
+      expect(applyQueryLimit("SELECT 'a -- b'", 1000)).toBe("SELECT 'a -- b' LIMIT 1000");
+    });
+
+    it("does NOT append LIMIT to SHOW/EXPLAIN (syntax error)", () => {
+      expect(applyQueryLimit("SHOW TABLES", 1000)).toBe("SHOW TABLES");
+      expect(applyQueryLimit("EXPLAIN SELECT 1", 1000)).toBe("EXPLAIN SELECT 1");
+    });
+
+    it("does NOT append LIMIT to DML with RETURNING (syntax error)", () => {
+      const q = "INSERT INTO t (a) VALUES (1) RETURNING id";
+      expect(applyQueryLimit(q, 1000)).toBe(q);
+    });
   });
 });

@@ -15,6 +15,11 @@ import {
 } from "./completionContext";
 import { resolveStatementAtOffset } from "../../utils/statementAtCursor";
 import { splitStatements } from "../../utils/splitStatements";
+import {
+  clearSignatureHelpCache,
+  registerSignatureHelp,
+  type SignatureConnCtx,
+} from "./signatureHelp";
 
 // Global tracking to prevent duplicate provider registration across component mounts
 let sqlProviderDisposable: any = null;
@@ -23,6 +28,9 @@ let sqlHoverProviderDisposable: any = null;
 let globalSchemaItems: any = null;
 let cachedSuggestions: any[] = [];
 let lastSchemaHash: string = "";
+// Latest live-connection snapshot for the signature-help provider (which is
+// registered once globally and therefore can't close over component state).
+let globalConnCtx: SignatureConnCtx = { db: null, connectionId: null, dbType: "", database: "" };
 
 /**
  * Drop the module-level schema cache. Call when disconnecting from a database
@@ -33,6 +41,8 @@ export function resetEditorSchemaCache(): void {
   globalSchemaItems = null;
   cachedSuggestions = [];
   lastSchemaHash = "";
+  globalConnCtx = { db: null, connectionId: null, dbType: "", database: "" };
+  clearSignatureHelpCache();
 }
 
 // Listen for connection-disconnected at module scope so the cache is released
@@ -256,7 +266,7 @@ export const QueryEditor = memo(function QueryEditor({
   const onRunRef = useRef<any>(null);
   const lastSnapshotRef = useRef<string>("");
   const snapshotTimerRef = useRef<any>(null);
-  const { schemaItems } = useConnections();
+  const { schemaItems, currentDb, activeConnection, selectedDatabase } = useConnections();
   
   onRunRef.current = onRun;
 
@@ -282,6 +292,16 @@ export const QueryEditor = memo(function QueryEditor({
     cachedSuggestions = [];  // Clear cached suggestions
     lastSchemaHash = "";      // Force cache miss
   }, [schemaItems]);
+
+  // Keep the signature-help provider's connection snapshot current.
+  useEffect(() => {
+    globalConnCtx = {
+      db: currentDb || null,
+      connectionId: activeConnection?.id || null,
+      dbType: activeConnection?.type || "",
+      database: selectedDatabase || activeConnection?.database || "",
+    };
+  }, [currentDb, activeConnection, selectedDatabase]);
 
   // Create a stable fingerprint of statementResults so the effect fires reliably
   // even when React batches state updates and the array reference doesn't change.
@@ -713,6 +733,11 @@ export const QueryEditor = memo(function QueryEditor({
         }
       });
     }
+
+    // DataGrip-style parameter hints: `my_func(` shows `my_func(a int, b text)`
+    // with the active argument highlighted. Registered once globally; the
+    // provider reads the live connection from `globalConnCtx`.
+    registerSignatureHelp(monaco, () => globalConnCtx);
 
     editor.onMouseDown((e) => {
       if ((e.event.ctrlKey || e.event.metaKey) && e.target.position) {
