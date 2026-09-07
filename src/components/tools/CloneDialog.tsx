@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { Copy, AlertCircle, Info } from "lucide-react";
 import { useConnections } from "../../contexts/useConnections";
+import { quoteIdentifier } from "../../utils/sqlSecurity";
+import { escapeSqlStringLiteral } from "../../utils/sqlDialect";
 import { ToolGuideWizard } from "./ToolGuideWizard";
 import { useConfirmDialog } from "../ui/ConfirmDialog";
 import { logger } from "../../utils/logger";
@@ -73,7 +75,10 @@ export function CloneDialog({ isOpen, onClose }: CloneDialogProps) {
          throw new Error("Cloning is only supported for PostgreSQL databases.");
       }
 
-      let cloneQuery = `CREATE DATABASE "${targetDB}" TEMPLATE "${sourceDB}"`;
+      const dbType = activeConnection.type || "postgres";
+      const quotedTarget = quoteIdentifier(targetDB, dbType);
+      const quotedSource = quoteIdentifier(sourceDB, dbType);
+      let cloneQuery = `CREATE DATABASE ${quotedTarget} TEMPLATE ${quotedSource}`;
       if (useInstantClone) {
         cloneQuery += " STRATEGY FILE_COPY";
       }
@@ -84,7 +89,7 @@ export function CloneDialog({ isOpen, onClose }: CloneDialogProps) {
 
 -- Step 2: Terminate active connections to the source database
 SELECT pg_terminate_backend(pid) FROM pg_stat_activity
-WHERE datname = '${sourceDB}' AND pid <> pg_backend_pid();
+WHERE datname = ${escapeSqlStringLiteral(sourceDB)} AND pid <> pg_backend_pid();
 
 -- Step 3: Clone database
 ${cloneQuery};`;
@@ -105,7 +110,7 @@ ${cloneQuery};`;
       try {
         if (selectedDatabase === sourceDB) {
           const Database = (await import("@tauri-apps/plugin-sql")).default;
-          const connectionString = `postgres://${activeConnection.username}:${activeConnection.password}@${activeConnection.host}:${activeConnection.port}/postgres`;
+          const connectionString = `postgres://${encodeURIComponent(activeConnection.username || "")}:${encodeURIComponent(activeConnection.password || "")}@${activeConnection.host}:${activeConnection.port || 5432}/postgres`;
           executionDb = await Database.load(connectionString);
         }
       } catch (err) {
@@ -117,33 +122,27 @@ ${cloneQuery};`;
         // We do not exclude our own pid if we successfully connected to 'postgres',
         // which kills any dangling connections the UI left open in the background.
         const terminateQuery = selectedDatabase === sourceDB
-          ? `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${sourceDB}';`
-          : `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${sourceDB}' AND pid <> pg_backend_pid();`;
+          ? `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${escapeSqlStringLiteral(sourceDB)};`
+          : `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${escapeSqlStringLiteral(sourceDB)} AND pid <> pg_backend_pid();`;
 
-        await executionDb.select(terminateQuery);
+        await executionDb.execute(terminateQuery);
       } catch (err: any) {
         logger.warn("Failed to terminate connections:", err);
       }
 
       // Step 2: Execute Clone
       try {
-        // Use select instead of execute to bypass Tauri sql:allow-execute block
-        await executionDb.select(cloneQuery);
+        await executionDb.execute(cloneQuery);
         if (useInstantClone) setStrategyUsed("FILE_COPY");
         else setStrategyUsed("TEMPLATE");
       } catch (err: any) {
         // If FILE_COPY is unsupported, fallback to normal clone
         if (useInstantClone && (err.message?.includes("syntax error") || err.message?.includes("STRATEGY"))) {
           logger.debug("Instant clone failed, falling back to normal clone...");
-          await executionDb.select(`CREATE DATABASE "${targetDB}" TEMPLATE "${sourceDB}"`);
+          await executionDb.execute(`CREATE DATABASE ${quotedTarget} TEMPLATE ${quotedSource}`);
           setStrategyUsed("TEMPLATE");
-        } else if (!err.message?.includes("No records") && !err.message?.includes("not return any rows")) {
-          // select might throw "does not return any rows" for CREATE DATABASE, which is actually a success
-          throw err;
         } else {
-          // Success case for select-on-DDL
-          if (useInstantClone) setStrategyUsed("FILE_COPY");
-          else setStrategyUsed("TEMPLATE");
+          throw err;
         }
       }
 

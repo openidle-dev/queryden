@@ -13,7 +13,6 @@
 //! - **MySQL**: https://dev.mysql.com/get/Downloads/
 //!   - Archives: mysql-{version}-macos{arch}.tar.gz, etc.
 //! - **MongoDB**: GitHub releases (mongosh)
-//! - **Redis**: GitHub releases (redis-cli)
 //!
 //! ## On-demand flow
 //!
@@ -30,7 +29,6 @@ use std::path::PathBuf;
 use std::path::Path;
 use std::process::Stdio;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 #[cfg(target_os = "windows")]
@@ -54,7 +52,6 @@ pub enum ToolKind {
     Psql,
     MySql,
     Mongo,
-    Redis,
 }
 
 impl ToolKind {
@@ -63,7 +60,6 @@ impl ToolKind {
             ToolKind::Psql => "postgresql",
             ToolKind::MySql => "mysql",
             ToolKind::Mongo => "mongodb",
-            ToolKind::Redis => "redis",
         }
     }
 
@@ -72,7 +68,6 @@ impl ToolKind {
             ToolKind::Psql => "psql",
             ToolKind::MySql => "mysql",
             ToolKind::Mongo => "mongosh",
-            ToolKind::Redis => "redis-cli",
         }
     }
 
@@ -81,7 +76,6 @@ impl ToolKind {
             ToolKind::Psql => &["psql"],
             ToolKind::MySql => &["mysql", "mysqldump"],
             ToolKind::Mongo => &["mongosh"],
-            ToolKind::Redis => &["redis-cli"],
         }
     }
 
@@ -105,9 +99,6 @@ impl ToolKind {
                 Windows:              Download from dev.mysql.com",
             ToolKind::Mongo => "mongosh not found.\n\n\
                 Install from mongosh.org",
-            ToolKind::Redis => "redis-cli not found.\n\n\
-                Linux: sudo apt install redis-tools\n\
-                macOS: brew install redis",
         }
     }
 }
@@ -131,7 +122,7 @@ struct DownloadSpec {
 /// Returns a download spec for a tool at a specific major version.
 /// PostgreSQL auto-download has been removed — users must install psql via their
 /// system package manager or the official installer.
-/// For MongoDB/Redis: uses hardcoded GitHub URLs.
+/// For MongoDB: uses hardcoded GitHub URLs.
 /// For MySQL: uses hardcoded URLs.
 fn download_spec(kind: ToolKind, _major_version: Option<u32>) -> Option<DownloadSpec> {
     match kind {
@@ -150,16 +141,6 @@ fn download_spec(kind: ToolKind, _major_version: Option<u32>) -> Option<Download
                 return None;
             };
             Some(DownloadSpec { url: url.to_string(), is_archive: true })
-        }
-        ToolKind::Redis => {
-            if cfg!(target_os = "linux") {
-                Some(DownloadSpec {
-                    url: "https://github.com/redis/redis/raw/7.4.0/src/redis-cli".to_string(),
-                    is_archive: false,
-                })
-            } else {
-                None
-            }
         }
         ToolKind::MySql => {
             // MySQL compressed archives on dev.mysql.com
@@ -210,30 +191,79 @@ impl CliManager {
 
     /// On Windows, check common PostgreSQL installation paths that aren't always
     /// on PATH (EDB/BigSQL installers put psql.exe in Program Files without
-    /// adding it to the system PATH).
+    /// adding it to the system PATH). Scans version subdirectories so new
+    /// major versions (18, 19, …) are found without code changes, and also
+    /// covers Scoop installs. Returns the newest match.
     #[cfg(target_os = "windows")]
     fn find_windows_psql_path(&self) -> Option<PathBuf> {
-        let prog_files = std::env::var("ProgramFiles")
-            .or_else(|_| std::env::var("ProgramW6432"))
-            .unwrap_or_else(|_| r"C:\Program Files".to_string());
-        let prog_files_x86 = std::env::var("ProgramFiles(x86)")
-            .unwrap_or_else(|_| r"C:\Program Files (x86)".to_string());
-        let versions = [
-            "17", "16", "15", "14", "13", "12", "11", "10", "9.6",
-        ];
-        for root in [&prog_files, &prog_files_x86] {
-            for ver in &versions {
-                let p = Path::new(root)
-                    .join("PostgreSQL")
-                    .join(ver)
-                    .join("bin")
-                    .join("psql.exe");
-                if p.exists() {
-                    return Some(p);
+        let mut roots: Vec<String> = Vec::new();
+        for var in ["ProgramFiles", "ProgramW6432"] {
+            if let Ok(v) = std::env::var(var) {
+                if !roots.contains(&v) {
+                    roots.push(v);
                 }
             }
         }
-        None
+        if roots.is_empty() {
+            roots.push(r"C:\Program Files".to_string());
+        }
+        if let Ok(x86) = std::env::var("ProgramFiles(x86)") {
+            if !roots.contains(&x86) {
+                roots.push(x86);
+            }
+        }
+
+        fn major_of(name: &str) -> Option<u32> {
+            name.split(|c: char| !c.is_ascii_digit())
+                .find(|s| !s.is_empty())
+                .and_then(|s| s.parse().ok())
+        }
+
+        let mut best: Option<(u32, PathBuf)> = None;
+        let mut consider = |major: u32, path: PathBuf| {
+            let better = best.as_ref().map(|(m, _)| major > *m).unwrap_or(true);
+            if better {
+                best = Some((major, path));
+            }
+        };
+
+        for root in &roots {
+            // EDB-style: <root>\PostgreSQL\<version>\bin\psql.exe
+            let pg_root = Path::new(root).join("PostgreSQL");
+            if let Ok(entries) = std::fs::read_dir(&pg_root) {
+                for entry in entries.flatten() {
+                    if !entry.path().is_dir() {
+                        continue;
+                    }
+                    let candidate = entry.path().join("bin").join("psql.exe");
+                    if candidate.exists() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        consider(major_of(&name).unwrap_or(0), candidate);
+                    }
+                }
+            }
+            // Scoop-style: <root>\PostgreSQL\bin\psql.exe (no version dir)
+            let direct = pg_root.join("bin").join("psql.exe");
+            if direct.exists() {
+                consider(0, direct);
+            }
+        }
+
+        // Scoop user installs: %USERPROFILE%\scoop\apps\postgresql\current\bin
+        if let Ok(home) = std::env::var("USERPROFILE") {
+            let scoop = Path::new(&home)
+                .join("scoop")
+                .join("apps")
+                .join("postgresql")
+                .join("current")
+                .join("bin")
+                .join("psql.exe");
+            if scoop.exists() {
+                consider(0, scoop);
+            }
+        }
+
+        best.map(|(_, path)| path)
     }
 
     /// Try system PATH, then Windows fallback paths, then bundled binaries.
@@ -276,12 +306,20 @@ impl CliManager {
         None
     }
 
-    /// Check system PATH only (no bundled/auto-download).
-    /// Returns (path, version) if a system binary is found.
+    /// Check system PATH only (no bundled/auto-download) plus, on Windows,
+    /// the common Program Files install paths (psql.exe is usually NOT on
+    /// PATH there). Returns (path, version) if a system binary is found.
     async fn find_system(&self, kind: ToolKind) -> Option<(PathBuf, u32)> {
         for binary in kind.all_binaries() {
             if which::which(binary).is_ok() {
                 return which::which(binary).ok().map(|p| (p, 0));
+            }
+        }
+        // Windows: EDB/Scoop installs are often missing from PATH entirely.
+        #[cfg(target_os = "windows")]
+        if kind == ToolKind::Psql {
+            if let Some(path) = self.find_windows_psql_path() {
+                return Some((path, 0));
             }
         }
         None
@@ -428,33 +466,30 @@ impl CliManager {
 // ─── Output parser ─────────────────────────────────────────────────────────────
 
 /// Parse raw psql stdout into structured columns + rows.
-/// psql with `-A -F|` outputs:
-///   header_line (e.g. "id|name|email")
-///   data_line_1  (e.g. "1|Alice|alice@example.com")
-///   ...more data...
-///   footer_line  (e.g. "(4 rows)")
-/// Meta-commands like \d, \dt, \l produce different output that we just return as-is.
+///
+/// The execute path runs psql unaligned (`-A -F|`) WITH the header row and
+/// the footer suppressed (`-P footer=off`), so `lines[0]` is always the
+/// header — including single-column results like `SELECT 1` (`?column?`).
+/// (The old code passed `-t`, which drops the header, so the first data
+/// row was misread as the header and single-column results vanished.)
+/// Meta-command output (`\d`, `\dt`, …) has no single header line: when the
+/// first line has no pipes and no data row matches, we return empty and the
+/// frontend renders the raw stdout instead.
 fn parse_psql_output(lines: &[String]) -> (Vec<String>, Vec<Vec<String>>) {
     if lines.is_empty() {
         return (Vec::new(), Vec::new());
     }
 
-    // Heuristic: SELECT output has pipe-separated header AND at least one pipe-separated data line
-    let first_line = &lines[0];
-    let has_pipes = first_line.contains('|');
-
-    if !has_pipes {
-        // Meta-command output or empty result — no structured data
+    let header: Vec<String> = lines[0].split('|').map(|s| s.trim().to_string()).collect();
+    if header.iter().all(|h| h.is_empty()) {
         return (Vec::new(), Vec::new());
     }
-
-    let header: Vec<String> = first_line.split('|').map(|s| s.trim().to_string()).collect();
 
     let mut data_rows: Vec<Vec<String>> = Vec::new();
 
     for line in lines.iter().skip(1) {
         let trimmed = line.trim();
-        // Skip footer lines like "(4 rows)" or "(0 rows)"
+        // Footer safety net (suppressed via `-P footer=off`, but keep it).
         if trimmed.starts_with('(') && trimmed.ends_with("rows)") {
             continue;
         }
@@ -466,6 +501,13 @@ fn parse_psql_output(lines: &[String]) -> (Vec<String>, Vec<Vec<String>>) {
         if values.len() == header.len() {
             data_rows.push(values);
         }
+    }
+
+    // Single header-looking line with zero matching rows is meta-command
+    // output (e.g. `\dt`'s "List of relations"), not a result set — let the
+    // frontend show the raw text instead of a bogus one-column grid.
+    if header.len() == 1 && data_rows.is_empty() {
+        return (Vec::new(), Vec::new());
     }
 
     (header, data_rows)
@@ -512,7 +554,6 @@ fn parse_tool_kind(tool_kind: &str) -> Result<ToolKind, String> {
         "postgresql" => Ok(ToolKind::Psql),
         "mysql" => Ok(ToolKind::MySql),
         "mongodb" => Ok(ToolKind::Mongo),
-        "redis" => Ok(ToolKind::Redis),
         _ => Err(format!("Unknown tool: {}", tool_kind)),
     }
 }
@@ -524,7 +565,7 @@ pub async fn cli_check_tools(
 ) -> Result<Vec<ToolInfo>, String> {
     let mut infos = Vec::new();
 
-    for kind in [ToolKind::Psql, ToolKind::MySql, ToolKind::Mongo, ToolKind::Redis] {
+    for kind in [ToolKind::Psql, ToolKind::MySql, ToolKind::Mongo] {
         let (available, path, version) = match manager.find_available(kind).await {
             Some((p, v)) => (true, Some(p.to_string_lossy().to_string()), Some(v)),
             None => (false, None, None),
@@ -565,7 +606,6 @@ pub async fn cli_list_cached(
             "postgresql" => ToolKind::Psql,
             "mysql" => ToolKind::MySql,
             "mongodb" => ToolKind::Mongo,
-            "redis" => ToolKind::Redis,
             _ => continue,
         };
 
@@ -626,7 +666,6 @@ pub async fn cli_download_version(
         "postgresql" => ToolKind::Psql,
         "mysql" => ToolKind::MySql,
         "mongodb" => ToolKind::Mongo,
-        "redis" => ToolKind::Redis,
         _ => return Err(format!("Unknown tool: {}", tool_kind)),
     };
 
@@ -677,7 +716,6 @@ pub async fn cli_check_tool(
         "postgresql" => ToolKind::Psql,
         "mysql" => ToolKind::MySql,
         "mongodb" => ToolKind::Mongo,
-        "redis" => ToolKind::Redis,
         _ => return Err(format!("Unknown tool: {}", tool_kind)),
     };
 
@@ -730,7 +768,6 @@ pub async fn cli_check_system_tool(
         "postgresql" => ToolKind::Psql,
         "mysql" => ToolKind::MySql,
         "mongodb" => ToolKind::Mongo,
-        "redis" => ToolKind::Redis,
         _ => return Err(format!("Unknown tool: {}", tool_kind)),
     };
 
@@ -759,7 +796,6 @@ pub async fn cli_ensure(
         "postgresql" => ToolKind::Psql,
         "mysql" => ToolKind::MySql,
         "mongodb" => ToolKind::Mongo,
-        "redis" => ToolKind::Redis,
         _ => return Err(format!("Unknown tool: {}", tool_kind)),
     };
 
@@ -789,7 +825,6 @@ pub async fn cli_get_version(
         "postgresql" => ToolKind::Psql,
         "mysql" => ToolKind::MySql,
         "mongodb" => ToolKind::Mongo,
-        "redis" => ToolKind::Redis,
         _ => return Err(format!("Unknown tool: {}", tool_kind)),
     };
 
@@ -798,7 +833,7 @@ pub async fn cli_get_version(
 
     let flag = match kind {
         ToolKind::Psql | ToolKind::MySql => "--version",
-        ToolKind::Mongo | ToolKind::Redis => "--version",
+        ToolKind::Mongo => "--version",
     };
 
     let mut cmd = Command::new(&binary);
@@ -833,6 +868,7 @@ pub async fn cli_detect_pg_version(
 
     let mut cmd = Command::new(&binary);
     cmd.env("PGPASSWORD", &password)
+        .env("PGCLIENTENCODING", "UTF8")
         .arg("-h")
         .arg(&host)
         .arg("-p")
@@ -891,7 +927,6 @@ pub async fn cli_test_connection(
         "postgresql" => ToolKind::Psql,
         "mysql" => ToolKind::MySql,
         "mongodb" => ToolKind::Mongo,
-        "redis" => ToolKind::Redis,
         _ => return Err(format!("Unknown tool: {}", tool_kind)),
     };
 
@@ -903,13 +938,13 @@ pub async fn cli_test_connection(
         ToolKind::Psql => "SELECT 1",
         ToolKind::MySql => "SELECT 1",
         ToolKind::Mongo => "db.runCommand({ ping: 1 })",
-        ToolKind::Redis => "PING",
     };
 
     let mut cmd = Command::new(&binary);
     match kind {
         ToolKind::Psql => {
             cmd.env("PGPASSWORD", &password);
+            cmd.env("PGCLIENTENCODING", "UTF8");
             cmd.arg("-h").arg(&host);
             cmd.arg("-p").arg(port.to_string());
             cmd.arg("-d").arg(&database);
@@ -931,13 +966,6 @@ pub async fn cli_test_connection(
             cmd.arg("--quiet").arg("--eval").arg(test_query);
             cmd.arg(format!("mongodb://{}:{}@{}:{}/{}",
                 username, password, host, port, database));
-        }
-        ToolKind::Redis => {
-            cmd.arg("-h").arg(&host).arg("-p").arg(port.to_string());
-            if !password.is_empty() {
-                cmd.arg("-a").arg(&password);
-            }
-            cmd.arg(test_query);
         }
     }
 
@@ -970,7 +998,6 @@ pub async fn cli_execute_query(
         "postgresql" => ToolKind::Psql,
         "mysql" => ToolKind::MySql,
         "mongodb" => ToolKind::Mongo,
-        "redis" => ToolKind::Redis,
         _ => return Err(format!("Unknown tool: {}", tool_kind)),
     };
 
@@ -988,6 +1015,9 @@ pub async fn cli_execute_query(
     match kind {
         ToolKind::Psql => {
             cmd.env("PGPASSWORD", &password);
+            // Force UTF-8 regardless of the Windows console code page —
+            // otherwise non-ASCII output is undecodable/mangled.
+            cmd.env("PGCLIENTENCODING", "UTF8");
             cmd.arg("-h").arg(&host);
             cmd.arg("-p").arg(port.to_string());
             cmd.arg("-d").arg(&database);
@@ -996,9 +1026,12 @@ pub async fn cli_execute_query(
             if expanded_display {
                 cmd.arg("-x");       // expanded display — frontend renders raw stdout
             } else {
-                cmd.arg("-t");       // tuples only (no header/footer)
+                // Unaligned pipe-separated output WITH header row and no
+                // footer. (Never `-t`: tuples-only mode drops the header,
+                // making the first data row indistinguishable from it.)
                 cmd.arg("-A");       // unaligned
                 cmd.arg("-F").arg("|");
+                cmd.arg("-P").arg("footer=off");
             }
             cmd.arg("-c").arg(&query);
         }
@@ -1020,44 +1053,28 @@ pub async fn cli_execute_query(
             cmd.arg(format!("mongodb://{}:{}@{}:{}/{}",
                 username, password, host, port, database));
         }
-        ToolKind::Redis => {
-            cmd.arg("-h").arg(&host).arg("-p").arg(port.to_string());
-            if !password.is_empty() {
-                cmd.arg("-a").arg(&password);
-            }
-            cmd.arg("--no-auth-warning").arg(&query);
-        }
     }
 
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     no_console_window(&mut cmd);
 
+    // Read stdout AND stderr via a single `output()` call. The previous
+    // spawn + manual stdout-drain + `wait()` + stderr-after-wait pattern
+    // could deadlock when stderr filled its pipe buffer while the parent
+    // was blocked reading stdout, and it discarded stderr content.
     let start = std::time::Instant::now();
-    let mut child = cmd.spawn().map_err(|e| format!("Spawn failed: {}", e))?;
-
-    let stdout = child.stdout.take().ok_or("No stdout")?;
-    let mut reader = BufReader::new(stdout).lines();
-
-    let mut stdout_lines: Vec<String> = Vec::new();
-
-    while let Ok(Some(line)) = reader.next_line().await {
-        stdout_lines.push(line);
-    }
-
-    let status = child.wait().await.map_err(|e| e.to_string())?;
+    let output = cmd.output().await.map_err(|e| format!("Spawn failed: {}", e))?;
     let ms = start.elapsed().as_millis() as u64;
 
-    if !status.success() {
-        let stderr = if let Some(mut s) = child.stderr.take() {
-            let mut b = String::new();
-            tokio::io::AsyncReadExt::read_to_string(&mut s, &mut b).await.ok();
-            b
-        } else {
-            String::new()
-        };
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("CLI error: {}", stderr.trim()));
     }
+
+    // `str::lines` handles both `\n` and Windows `\r\n` endings.
+    let stdout_text = String::from_utf8_lossy(&output.stdout);
+    let stdout_lines: Vec<String> = stdout_text.lines().map(|l| l.to_string()).collect();
 
     // Parse stdout into columns + rows if this looks like a SELECT result
     let (columns, rows): (Vec<String>, Vec<Vec<String>>) = if expanded_display {
@@ -1108,6 +1125,7 @@ pub async fn cli_list_databases(
     match kind {
         ToolKind::Psql => {
             cmd.env("PGPASSWORD", &password);
+            cmd.env("PGCLIENTENCODING", "UTF8");
             cmd.arg("-h").arg(&host);
             cmd.arg("-p").arg(port.to_string());
             cmd.arg("-d").arg(&database);
@@ -1139,3 +1157,53 @@ pub async fn cli_list_databases(
 }
 
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lines(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn parses_multi_column_select_with_header() {
+        let (cols, rows) = parse_psql_output(&lines(&["id|name", "1|Alice", "2|Bob"]));
+        assert_eq!(cols, vec!["id", "name"]);
+        assert_eq!(rows, vec![vec!["1".to_string(), "Alice".to_string()], vec!["2".to_string(), "Bob".to_string()]]);
+    }
+
+    #[test]
+    fn parses_single_column_select() {
+        // `SELECT 1` yields header `?column?` + one data line (no pipes).
+        let (cols, rows) = parse_psql_output(&lines(&["?column?", "1"]));
+        assert_eq!(cols, vec!["?column?"]);
+        assert_eq!(rows, vec![vec!["1".to_string()]]);
+    }
+
+    #[test]
+    fn meta_command_output_falls_back_to_raw() {
+        // \dt-style output: first line has no pipes and nothing matches a
+        // single-column shape, so the frontend renders raw stdout instead.
+        let (cols, rows) = parse_psql_output(&lines(&[
+            "List of relations",
+            "Schema|Name|Type|Owner",
+            "public|foo|table|user",
+        ]));
+        assert!(cols.is_empty() && rows.is_empty());
+    }
+
+    #[test]
+    fn empty_and_header_only_input() {
+        assert_eq!(parse_psql_output(&[]), (Vec::new(), Vec::new()));
+        let (cols, rows) = parse_psql_output(&lines(&["id|name"]));
+        assert_eq!(cols, vec!["id", "name"]);
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn parses_pg_version_strings() {
+        assert_eq!(parse_pg_version("PostgreSQL 16.5 on x86_64-pc-linux-gnu").unwrap(), 16);
+        assert_eq!(parse_pg_version("PostgreSQL 18.1").unwrap(), 18);
+    }
+}

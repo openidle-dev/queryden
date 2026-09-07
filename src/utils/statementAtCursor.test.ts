@@ -61,4 +61,19 @@ describe("resolveStatementAtOffset", () => {
     // start skips the leading whitespace/newline before the second statement
     expect(sql[stmt!.start]).toBe("S");
   });
+
+  it("does NOT split DO $$ bodies on Ctrl+Enter", () => {
+    const sql = "DO $$ BEGIN PERFORM 1; PERFORM 2; END; $$; SELECT 1";
+    const inside = at(sql, "PERFORM 2");
+    expect(resolveStatementAtOffset(sql, inside)?.text).toContain("DO $$");
+    expect(resolveStatementAtOffset(sql, inside)?.text).toContain("PERFORM 1;");
+    expect(resolveStatementAtOffset(sql, at(sql, "SELECT 1"))?.text).toBe("SELECT 1");
+  });
+
+  it("does NOT split strings or backticks on Ctrl+Enter", () => {
+    const sql = "SELECT 'a;b'; SELECT 2";
+    expect(resolveStatementAtOffset(sql, at(sql, "a"))?.text).toBe("SELECT 'a;b'");
+    const mysql = "CREATE TABLE `a;b` (id int); SELECT 1";
+    expect(resolveStatementAtOffset(mysql, at(mysql, "a"))?.text).toContain("CREATE TABLE");
+  });
 });

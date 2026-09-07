@@ -1,4 +1,4 @@
-import { ButtonHTMLAttributes, forwardRef, HTMLAttributes, ReactNode } from "react";
+import { ButtonHTMLAttributes, forwardRef, HTMLAttributes, ReactNode, useLayoutEffect, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "../../lib/cn";
 
@@ -35,18 +35,42 @@ export interface MenuProps extends HTMLAttributes<HTMLDivElement> {
 }
 
 /**
- * Fixed-position menu container. Pass `x`/`y` to anchor at the cursor; the
- * consumer is responsible for closing it (outside click / Escape). Stops click
- * propagation so clicks inside the menu don't trigger the outside-click close.
+ * Fixed-position menu container. Pass `x`/`y` (viewport coords, e.g.
+ * `clientX`/`clientY` from a contextmenu event) to anchor at the cursor; the
+ * position is clamped into the viewport so the menu never renders off-screen.
+ * The consumer is responsible for closing it (outside click / Escape). Stops
+ * click propagation so clicks inside the menu don't trigger the outside-click
+ * close.
  */
 export const Menu = forwardRef<HTMLDivElement, MenuProps>(function Menu(
   { x, y, className, style, onClick, children, ...rest },
   ref
 ) {
   const positioned = x !== undefined || y !== undefined;
+  const innerRef = useRef<HTMLDivElement>(null);
+  const [clamped, setClamped] = useState<{ left: number; top: number } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!positioned) {
+      setClamped(null);
+      return;
+    }
+    const el = innerRef.current;
+    const w = el?.offsetWidth ?? 224;
+    const h = el?.offsetHeight ?? 320;
+    setClamped({
+      left: Math.max(4, Math.min(x ?? 4, window.innerWidth - w - 4)),
+      top: Math.max(4, Math.min(y ?? 4, window.innerHeight - h - 4)),
+    });
+  }, [x, y, children, positioned]);
+
   return (
     <div
-      ref={ref}
+      ref={(node) => {
+        (innerRef as React.MutableRefObject<HTMLDivElement | null>).current = node;
+        if (typeof ref === "function") ref(node);
+        else if (ref) (ref as React.MutableRefObject<HTMLDivElement | null>).current = node;
+      }}
       className={cn(
         positioned && "fixed z-[100]",
         "w-56",
@@ -54,7 +78,7 @@ export const Menu = forwardRef<HTMLDivElement, MenuProps>(function Menu(
         "animate-in zoom-in-95 duration-100",
         className
       )}
-      style={positioned ? { top: y, left: x, ...style } : style}
+      style={positioned ? { top: clamped?.top ?? y, left: clamped?.left ?? x, ...style } : style}
       onClick={(e) => {
         e.stopPropagation();
         onClick?.(e);

@@ -58,3 +58,220 @@ export function isDateTimeType(
   const low = columnName.toLowerCase();
   return low.includes("date") || low.includes("time");
 }
+
+/**
+ * Returns true if the column should render with the boolean checkbox editor.
+ *
+ * Same strategy as {@link isDateTimeType}: authoritative SQL-type match first
+ * (`boolean`, `bool`, `bit`), name heuristic (`active`, `is_*`, …) when the
+ * type is unknown. Used for NULL cells on new rows, where there is no value
+ * to infer the widget from — a new boolean starts unchecked but stays NULL
+ * until the user toggles it.
+ */
+export function isBoolType(
+  sqlType: string | undefined,
+  columnName: string,
+): boolean {
+  if (sqlType && sqlType.trim() !== "") {
+    const normalized = sqlType.trim().toUpperCase();
+    const head = normalized.split(/[(\s]/, 1)[0];
+    return head === "BOOL" || head === "BOOLEAN" || head === "BIT";
+  }
+  const low = columnName.toLowerCase();
+  return (
+    low === "active" ||
+    low === "enabled" ||
+    low === "deleted" ||
+    low.includes("is_") ||
+    low.includes("has_")
+  );
+}
+
+/**
+ * Numeric type tokens across PostgreSQL, MySQL/MariaDB, SQLite, and
+ * CockroachDB (head keyword, upper-cased). Matched on the leading type
+ * keyword so `double precision` and `numeric(10,2)` resolve correctly while
+ * lookalikes like `point` or `interval` do not.
+ */
+const NUMERIC_TYPES = new Set<string>([
+  "INT",
+  "INTEGER",
+  "INT2",
+  "INT4",
+  "INT8",
+  "SMALLINT",
+  "MEDIUMINT",
+  "BIGINT",
+  "TINYINT",
+  "FLOAT",
+  "FLOAT4",
+  "FLOAT8",
+  "REAL",
+  "DOUBLE",
+  "NUMERIC",
+  "DECIMAL",
+  "DEC",
+  "SERIAL",
+  "SERIAL4",
+  "SERIAL8",
+  "SMALLSERIAL",
+  "BIGSERIAL",
+  "MONEY",
+]);
+
+/**
+ * Returns true if the column holds numbers. Same strategy as
+ * {@link isDateTimeType}: authoritative SQL-type match first, name heuristic
+ * (matching {@link inferFromColumnName}'s numeric branches) when unknown.
+ */
+export function isNumericType(
+  sqlType: string | undefined,
+  columnName: string,
+): boolean {
+  if (sqlType && sqlType.trim() !== "") {
+    const head = sqlType.trim().toUpperCase().split(/[(\s]/, 1)[0];
+    return NUMERIC_TYPES.has(head);
+  }
+  const low = columnName.toLowerCase();
+  return (
+    low === "id" ||
+    low.endsWith("_id") ||
+    ["price", "amount", "cost", "total", "salary", "balance"].some((k) => low.includes(k)) ||
+    ["age", "count", "quantity", "score", "year"].some((k) => low.includes(k))
+  );
+}
+
+/**
+ * Returns true for `json` / `jsonb` columns. Same strategy as above; the
+ * name heuristic mirrors {@link inferFromColumnName}.
+ */
+export function isJsonType(
+  sqlType: string | undefined,
+  columnName: string,
+): boolean {
+  if (sqlType && sqlType.trim() !== "") {
+    const head = sqlType.trim().toUpperCase().split(/[(\s]/, 1)[0];
+    return head === "JSON" || head === "JSONB";
+  }
+  const low = columnName.toLowerCase();
+  return ["json", "data", "metadata", "properties", "attributes"].some((k) => low.includes(k));
+}
+
+/**
+ * Name-based type guess used when neither schema nor values are available.
+ * Relocated from GridView (behaviour unchanged).
+ */
+export function inferFromColumnName(col: string): string {
+  const colLower = col.toLowerCase();
+  if (colLower === "id" || colLower.endsWith("_id")) return "int";
+  if (colLower.includes("date") || colLower.includes("time") || colLower === "created_at" || colLower === "updated_at" || colLower.includes("timestamp")) return "timestamp";
+  if (colLower.includes("name") || colLower.includes("title") || colLower.includes("email") || colLower.includes("phone") || colLower.includes("address") || colLower.includes("username")) return "varchar";
+  if (colLower.includes("description") || colLower.includes("comment") || colLower.includes("note") || colLower.includes("content") || colLower.includes("message") || colLower.includes("body")) return "text";
+  if (colLower.includes("price") || colLower.includes("amount") || colLower.includes("cost") || colLower.includes("total") || colLower.includes("salary") || colLower.includes("balance")) return "float";
+  if (colLower.includes("age") || colLower.includes("count") || colLower.includes("quantity") || colLower.includes("score") || colLower.includes("year")) return "int";
+  if (colLower.includes("active") || colLower.includes("enabled") || colLower.includes("is_") || colLower.includes("has_") || colLower === "deleted") return "bool";
+  if (colLower.includes("json") || colLower.includes("data") || colLower.includes("metadata") || colLower.includes("properties") || colLower.includes("attributes")) return "jsonb";
+  if (colLower.includes("image") || colLower.includes("photo") || colLower.includes("avatar") || colLower.includes("file") || colLower.includes("binary") || colLower.includes("blob")) return "bytea";
+  if (colLower.includes("uuid") || colLower.includes("guid")) return "uuid";
+  return "varchar";
+}
+
+/**
+ * Infer a display type from sampled row values. Relocated from GridView
+ * (behaviour unchanged).
+ */
+export function inferColumnType(data: any[], col: string): string | undefined {
+  if (!col) return undefined;
+  let samples = 0;
+  const MAX_SAMPLES = 100;
+  let hasNumber = false;
+  let allNumbers = true;
+  let allInt = true;
+  let seenBoolString = false;
+  let seenNonBoolString = false;
+  let hasDateString = false;
+
+  for (const row of data) {
+    if (!row) continue;
+    const val = row[col];
+    if (val === null || val === undefined) continue;
+
+    samples++;
+    const isNumber = typeof val === "number";
+    const isBool = typeof val === "boolean";
+    const isDateObj = val instanceof Date;
+    const isJson = typeof val === "object" && !isDateObj;
+
+    if (isNumber) {
+      hasNumber = true;
+      if (!Number.isInteger(val)) allInt = false;
+    } else if (isBool) {
+      seenBoolString = true;
+      allNumbers = false;
+    } else if (isJson) {
+      return "json";
+    } else {
+      const str = String(val).trim();
+      if (!str) continue;
+
+      if (isDateObj || (str.length >= 8 && !isNaN(Date.parse(str)) && /[\-T\/:\s]/.test(str))) {
+        hasDateString = true;
+        allNumbers = false;
+      } else if (/^-?\d+(\.\d+)?$/.test(str)) {
+        if (str.includes(".")) allInt = false;
+      } else if (["true", "false", "t", "f", "yes", "no", "y", "n"].includes(str.toLowerCase())) {
+        seenBoolString = true;
+        allNumbers = false;
+      } else {
+        seenNonBoolString = true;
+        allNumbers = false;
+        allInt = false;
+      }
+    }
+
+    if (samples >= MAX_SAMPLES) break;
+  }
+
+  if (samples === 0) return inferFromColumnName(col);
+
+  if (hasNumber && allNumbers) return allInt ? "int" : "float";
+  if (hasDateString) return "timestamp";
+  if (seenBoolString && !seenNonBoolString && !hasNumber) return "bool";
+  if (allNumbers) return allInt ? "int" : "float";
+  return "varchar";
+}
+
+/**
+ * Header type badge for a column. Relocated from GridView (behaviour
+ * unchanged): `123` numeric, `bool`, date/time glyph, `A·Z` text, `{}`
+ * JSON, `01` binary — plus key/FK markers.
+ */
+export function getTypeHeaderPrefix(type: string, isFk: boolean, colName: string): string {
+  const t = type.toLowerCase().trim();
+  let base = "";
+
+  if (t === "jsonb" || t === "json") {
+    base = "{}";
+  } else if (t.includes("char") || t.includes("text") || t.includes("uuid") || t.includes("string") || t.includes("clob")) {
+    base = "A·Z";
+  } else if (t.includes("time") || t.includes("date") || t.includes("timestamp") || t.includes("interval")) {
+    base = "🕑";
+  } else if (t.includes("int") || t.includes("num") || t.includes("dec") || t.includes("float") || t.includes("double") || t.includes("real") || t === "serial" || t === "bigserial") {
+    base = "123";
+  } else if (t.includes("bool")) {
+    base = "bool";
+  } else if (t.includes("blob") || t.includes("bytea") || t.includes("bin")) {
+    base = "01";
+  } else {
+    base = "A·Z"; // Default fallback
+  }
+
+  // Key/FK indicators
+  if (isFk) {
+    return `${base}🔗 `;
+  } else if (colName === "id" || colName.endsWith("_id")) {
+    return `${base}🔑 `;
+  }
+
+  return `${base} `;
+}

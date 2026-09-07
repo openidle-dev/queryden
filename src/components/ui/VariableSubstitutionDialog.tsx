@@ -58,10 +58,16 @@ function findVariableMatches(query: string): VariableMatch[] {
   while (i < query.length) {
     const c = query[i];
 
-    // Single-quoted string literal; `''` is the SQL escape for a literal `'`.
+    // Single-quoted string literal; doubled quote is the SQL escape.
+    // Backslash escapes (MySQL, E-strings) are honoured so :var inside
+    // 'it\'s :not_a_var' can't leak out.
     if (c === "'") {
       i++;
       while (i < query.length) {
+        if (query[i] === "\\" && i + 1 < query.length) {
+          i += 2;
+          continue;
+        }
         if (query[i] === "'") {
           if (query[i + 1] === "'") { i += 2; continue; }
           i++;
@@ -72,12 +78,30 @@ function findVariableMatches(query: string): VariableMatch[] {
       continue;
     }
 
-    // Double-quoted identifier; same `""` escape pattern as `''`.
+    // Double-quoted identifier; same doubled-quote escape pattern.
     if (c === '"') {
       i++;
       while (i < query.length) {
         if (query[i] === '"') {
           if (query[i + 1] === '"') { i += 2; continue; }
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+
+    // Backtick identifier (MySQL); a :var inside must not match.
+    if (c === "`") {
+      i++;
+      while (i < query.length) {
+        if (query[i] === "\\" && i + 1 < query.length) {
+          i += 2;
+          continue;
+        }
+        if (query[i] === "`") {
+          if (query[i + 1] === "`") { i += 2; continue; }
           i++;
           break;
         }

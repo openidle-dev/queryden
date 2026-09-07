@@ -4,6 +4,7 @@ import { wouldCreateCycle } from "../utils/folderTree";
 import { useSettings } from "../store/settingsStore";
 import { getDefaultDatabaseName } from "../config/app";
 import { quoteIdentifier } from "../utils/sqlSecurity";
+import { escapeSqlStringLiteral, getDefaultPort } from "../utils/sqlDialect";
 import { logger } from "../utils/logger";
 
 export interface DatabaseConnection {
@@ -609,7 +610,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       const encodedPass = encodeURIComponent(password);
 
       let actualHost = conn.host || "localhost";
-      let actualPort = conn.port || (conn.type === "mysql" ? 3306 : 5432);
+      let actualPort = conn.port || getDefaultPort(conn.type);
 
       // Create SSH tunnel if enabled
       if (conn.sshEnabled && conn.sshHost && conn.sshUsername && conn.type !== "sqlite") {
@@ -740,10 +741,10 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       ? overrideSchemas 
       : getSelectedSchemas(activeConnection.id, _database);
     const schemaFilter = selectedSchemas.length > 0 
-      ? `AND table_schema IN (${selectedSchemas.map(s => `'${s}'`).join(',')})`
+      ? `AND table_schema IN (${selectedSchemas.map(s => escapeSqlStringLiteral(s)).join(',')})`
       : '';
     const schemaFilterFk = selectedSchemas.length > 0
-      ? `AND c.connamespace::regnamespace::text IN (${selectedSchemas.map(s => `'${s}'`).join(',')})`
+      ? `AND c.connamespace::regnamespace::text IN (${selectedSchemas.map(s => escapeSqlStringLiteral(s)).join(',')})`
       : '';
     
     try {

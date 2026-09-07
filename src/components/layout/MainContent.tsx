@@ -13,6 +13,7 @@ import { logger } from "../../utils/logger";
 import { getDefaultDatabaseName } from "../../config/app";
 import { splitStatements } from "../../utils/splitStatements";
 import { applyQueryLimit } from "../../utils/applyQueryLimit";
+import { classifyDestructive, formatSqlLiteral, getDefaultPort, isDoBlock as isDoBlockHelper, isSelectLike, splitDottedIdentifier, stripSqlToCode } from "../../utils/sqlDialect";
 import { VariableSubstitutionDialog, extractVariables, substituteVariables, VariableValues } from "../ui/VariableSubstitutionDialog";
 import { useLocalHistory } from "../../store/localHistoryStore";
 import { Button } from "../ui/Button";
@@ -270,7 +271,7 @@ export function MainContent() {
       let username = conn.username || "", password = conn.password || "";
       if (conn.vaultCredentialId) { const vaultCred = vaultCredentials.find(vc => vc.id === conn.vaultCredentialId); if (vaultCred) { username = vaultCred.username || ""; password = vaultCred.password || ""; } }
       const Database = (await import("@tauri-apps/plugin-sql")).default;
-      const port = conn.port || (conn.type === "mysql" || conn.type === "mariadb" ? 3306 : 5432);
+      const port = conn.port || getDefaultPort(conn.type);
       const connectionString = conn.type === "sqlite" ? `sqlite:${conn.filepath || getDefaultDatabaseName()}` :
         ["postgres", "supabase", "cockroach"].includes(conn.type) ? `postgres://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${conn.host}:${port}/postgres` :
         `mysql://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${conn.host}:${port}/mysql`;
@@ -945,8 +946,21 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     //   - Quoted identifiers: "MyTable", "my_schema"."MyTable"
     //   - Schema-qualified: schema.table
     //   - Excludes CTE aliases and subqueries
+    // Runs on lexer-stripped SQL so FROM inside 'strings' or DO $$ bodies
+    // can't produce a bogus table name.
     let extractTableName: string | null = null;
-    const tableNameMatch = queryToRun.match(/(?:FROM|JOIN|UPDATE|INTO)\s+(?:"([^"]+)"(?:\."([^"]+)")?|([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)?))\b/i);
+    // Match on the original text but reject matches blanked out by the
+    // lexer (FROM/JOIN inside 'strings', quoted identifiers, DO bodies,
+    // or comments). Stripped SQL preserves length so indices align.
+    const strippedForTable = stripSqlToCode(queryToRun);
+    const tableRe = /(?:FROM|JOIN|UPDATE|INTO)\s+(?:"([^"]+)"(?:\."([^"]+)")?|([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)?))\b/gi;
+    let tableNameMatch: RegExpMatchArray | null = null;
+    for (let m = tableRe.exec(queryToRun); m !== null; m = tableRe.exec(queryToRun)) {
+      const probe = strippedForTable.slice(m.index, m.index + m[0].length);
+      if (!/(FROM|JOIN|UPDATE|INTO)/i.test(probe)) continue;
+      tableNameMatch = m;
+      break;
+    }
     if (tableNameMatch) {
       let detectedTable = "";
       if (tableNameMatch[1]) {
@@ -1008,22 +1022,12 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       const isPgConnection = ["postgres", "supabase", "cockroach"].includes(actualConnection?.type || "");
       const useCliPath = actualConnection?.type === "psql" || (isPgConnection && currentTab?.usePsql);
 
-      // Compute query type immediately (needed by both libpq and CLI paths)
-      const upperQuery = queryToRun.toUpperCase();
-      const cleanUpper = queryToRun.replace(/--.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "").trim().toUpperCase();
-      const isDoBlock = /^DO\s+[$']/.test(cleanUpper);
-      const isSelect =
-        (cleanUpper.startsWith("SELECT") ||
-        cleanUpper.includes("RETURNING") ||
-        cleanUpper.startsWith("WITH") ||
-        cleanUpper.startsWith("SHOW") ||
-        cleanUpper.startsWith("EXPLAIN") ||
-        cleanUpper.includes("(SELECT")) &&
-        !isDoBlock;
-      const isTruncate = upperQuery.includes("TRUNCATE");
-      const isDelete = upperQuery.includes("DELETE");
-      const hasWhere = upperQuery.includes("WHERE");
-      const isDestructive = isTruncate || (isDelete && !hasWhere) || upperQuery.includes("DROP");
+      // Compute query type immediately (needed by both libpq and CLI paths).
+      // Lexer-aware: keywords inside strings/dollar bodies/comments are
+      // invisible, and DO LANGUAGE variants count as DO blocks.
+      const isDoBlock = isDoBlockHelper(queryToRun);
+      const isSelect = isSelectLike(queryToRun);
+      const { isTruncate, isDelete, hasWhere, isDestructive } = classifyDestructive(queryToRun);
 
       // Resolve credentials (shared between libpq and CLI paths)
       let username = actualConnection.username || "";
@@ -1035,7 +1039,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           password = vaultCred.password || "";
         }
       }
-      const port = actualConnection.port || (actualConnection.type === "mysql" || actualConnection.type === "mariadb" ? 3306 : 5432);
+      const port = actualConnection.port || getDefaultPort(actualConnection.type);
       
       // ── CLI path for psql type ──────────────────────────────────────────────
       if (useCliPath) {
@@ -1110,7 +1114,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         logger.debug("[CLI Path] Tool status (checkTool):", toolStatus);
 
         if (toolStatus.needsDownload) {
-          // Auto-download is available (MySQL, Mongo, Redis) — prompt user
+          // Auto-download is available (MySQL, Mongo) — prompt user
           const filename = toolStatus.downloadFilename || `psql-${majorVersion}.tar.gz`;
           const confirmed = await confirmDialog.confirm({
             title: "Download CLI Tool",
@@ -1370,17 +1374,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
 
             const stmtInfo = statementInfos[i];
             const lineNumber = stmtInfo?.lineNumber || 1;
-            const stmtUpper = stmt.toUpperCase().trim();
-            const cleanStmt = stmt.replace(/--.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "").trim().toUpperCase();
-            const isDoBlock = /^DO\s+[$']/.test(cleanStmt);
-            const isStmtSelect =
-              (stmtUpper.startsWith("SELECT") ||
-              stmtUpper.includes("RETURNING") ||
-              stmtUpper.startsWith("WITH") ||
-              stmtUpper.startsWith("SHOW") ||
-              stmtUpper.startsWith("EXPLAIN") ||
-              stmtUpper.includes("(SELECT")) &&
-              !isDoBlock;
+            const isStmtSelect = isSelectLike(stmt);
             try {
               const stmtStartTime = Date.now();
               if (isStmtSelect) {
@@ -1692,18 +1686,8 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
             const stmt = statementsToRun[i];
             const stmtInfo = statementInfos[i];
             const lineNumber = stmtInfo?.lineNumber || 1;
-            
-            const stmtUpper = stmt.toUpperCase().trim();
-            const cleanStmt = stmt.replace(/--.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "").trim().toUpperCase();
-            const isDoBlock = /^DO\s+[$']/.test(cleanStmt);
-            const isStmtSelect = 
-              (stmtUpper.startsWith("SELECT") || 
-              stmtUpper.includes("RETURNING") || 
-              stmtUpper.startsWith("WITH") ||  // CTE queries
-              stmtUpper.startsWith("SHOW") || 
-              stmtUpper.startsWith("EXPLAIN") ||
-              stmtUpper.includes("(SELECT")) &&  // Subqueries
-              !isDoBlock;
+
+            const isStmtSelect = isSelectLike(stmt);
             
             try {
               const stmtStartTime = Date.now();
@@ -2202,7 +2186,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         }
         const encodedUser = encodeURIComponent(username);
         const encodedPass = encodeURIComponent(password);
-        const port = activeConnection.port || (activeConnection.type === "mysql" || activeConnection.type === "mariadb" ? 3306 : 5432);
+        const port = activeConnection.port || getDefaultPort(activeConnection.type);
 
           let db: any;
 
@@ -2431,13 +2415,6 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     return () => window.removeEventListener("beforeunload", handler);
   }, []);
 
-  const formatSqlValue = (val: any): string => {
-    if (val === null || val === undefined) return "NULL";
-    if (typeof val === "number") return String(val);
-    if (typeof val === "boolean") return val ? "TRUE" : "FALSE";
-    return `'${String(val).replace(/'/g, "''")}'`;
-  };
-
   const getPrimaryKey = useCallback((columns: string[]): string | undefined => {
     // Only a SINGLE-column primary key can be expressed through this
     // one-column path. For a composite key, returning just one of its columns
@@ -2474,19 +2451,19 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     
     for (const col of columns) {
       if (String(oldRow[col]) !== String(newRow[col])) {
-        setClauses.push(`${qid(col)} = ${formatSqlValue(newRow[col])}`);
+        setClauses.push(`${qid(col)} = ${formatSqlLiteral(newRow[col])}`);
       }
     }
     
     if (setClauses.length === 0) return;
     
     if (pk && oldRow[pk] !== undefined && oldRow[pk] !== null) {
-      whereClauses.push(`${qid(pk)} = ${formatSqlValue(oldRow[pk])}`);
+      whereClauses.push(`${qid(pk)} = ${formatSqlLiteral(oldRow[pk])}`);
     } else {
       for (const col of columns) {
         const val = oldRow[col];
         if (val === null) whereClauses.push(`${qid(col)} IS NULL`);
-        else whereClauses.push(`${qid(col)} = ${formatSqlValue(val)}`);
+        else whereClauses.push(`${qid(col)} = ${formatSqlLiteral(val)}`);
       }
     }
     
@@ -2541,12 +2518,12 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     const whereClauses: string[] = [];
     
     if (pk && cleanRow[pk] !== undefined && cleanRow[pk] !== null) {
-      whereClauses.push(`${qid(pk)} = ${formatSqlValue(cleanRow[pk])}`);
+      whereClauses.push(`${qid(pk)} = ${formatSqlLiteral(cleanRow[pk])}`);
     } else {
       for (const col of columns) {
         const val = cleanRow[col];
         if (val === null) whereClauses.push(`${qid(col)} IS NULL`);
-        else whereClauses.push(`${qid(col)} = ${formatSqlValue(val)}`);
+        else whereClauses.push(`${qid(col)} = ${formatSqlLiteral(val)}`);
       }
     }
     
@@ -2610,7 +2587,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       }
       const encodedUser = encodeURIComponent(username);
       const encodedPass = encodeURIComponent(password);
-      const port = conn.port || (conn.type === "mysql" || conn.type === "mariadb" ? 3306 : 5432);
+      const port = conn.port || getDefaultPort(conn.type);
       const Database = (await import("@tauri-apps/plugin-sql")).default;
       let connectionString = "";
       let db: any;
@@ -2623,9 +2600,23 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       }
       db = await Database.load(connectionString);
 
-      const tableParts = activeTableName.split(".");
-      const schemaName = tableParts.length > 1 ? tableParts[0] : "public";
-      const tableName = tableParts.length > 1 ? tableParts.slice(1).join(".") : activeTableName;
+      // Quote with the SAVE connection's dialect, not the globally active
+      // one — a tab can target a different engine (e.g. MySQL needs
+      // backticks where PostgreSQL needs double quotes).
+      const saveType = conn.type || "postgres";
+      const sqid = (name: string) => quoteIdentifier(name, saveType as DatabaseType);
+      const isPgLikeSave = ["postgres", "supabase", "cockroach"].includes(saveType);
+      const isMySqlLikeSave = saveType === "mysql" || saveType === "mariadb";
+
+      // Split schema-qualified names respecting quotes so
+      // `"my.schema"."my.table"` stays two parts, not four.
+      const unquoteName = (s: string) =>
+        s.trim().replace(/^"(.*)"$/s, "$1").replace(/^`(.*)`$/s, "$1").replace(/""/g, '"');
+      const nameParts = splitDottedIdentifier(activeTableName).map(unquoteName);
+      const schemaName = nameParts.length > 1
+        ? nameParts.slice(0, -1).join(".")
+        : (isMySqlLikeSave ? saveDbName : "public");
+      const tableName = nameParts[nameParts.length - 1];
 
       // ─── Step 2: Validate NOT NULL + FK constraints (all providers) ───
       const rowsWithMissing: { rowIndex: number; missing: string[] }[] = [];
@@ -2634,12 +2625,16 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         const { _isNew, ...data } = newRows[i];
         const missing: string[] = [];
 
-        // Check NOT NULL columns that don't have a DEFAULT (these must be provided)
-        if (["postgres", "supabase", "cockroach", "mysql", "mariadb"].includes(activeConnection.type)) {
+        // Check NOT NULL columns that don't have a DEFAULT (these must be provided).
+        // Placeholders are dialect-specific: $1/$2 on PostgreSQL-wire
+        // engines, ? on MySQL/MariaDB (sqlx does not understand $n there).
+        if (["postgres", "supabase", "cockroach", "mysql", "mariadb"].includes(saveType)) {
+          const ph1 = isPgLikeSave ? "$1" : "?";
+          const ph2 = isPgLikeSave ? "$2" : "?";
           const notNullCols = await db.select(`
             SELECT column_name
             FROM information_schema.columns
-            WHERE table_schema = $1 AND table_name = $2
+            WHERE table_schema = ${ph1} AND table_name = ${ph2}
               AND is_nullable = 'NO'
               AND column_default IS NULL
             ORDER BY ordinal_position
@@ -2652,8 +2647,8 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               missing.push(colName);
             }
           }
-        } else if (activeConnection.type === "sqlite") {
-          const sqliteCols = await db.select(`PRAGMA table_info("${tableName}")`);
+        } else if (saveType === "sqlite") {
+          const sqliteCols = await db.select(`PRAGMA table_info("${tableName.replace(/"/g, '""')}")`);
           for (const col of sqliteCols) {
             if (col.notnull === 1 && (col.dflt_value === null || col.dflt_value === undefined)) {
               const colName = col.name;
@@ -2697,14 +2692,14 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         
         let query = "";
         if (columns.length === 0) {
-          query = `INSERT INTO ${qid(activeTableName)} DEFAULT VALUES`;
-          if (activeConnection.type === "mysql" || activeConnection.type === "mariadb") {
-             query = `INSERT INTO ${qid(activeTableName)} () VALUES ()`;
+          query = `INSERT INTO ${sqid(activeTableName)} DEFAULT VALUES`;
+          if (isMySqlLikeSave) {
+             query = `INSERT INTO ${sqid(activeTableName)} () VALUES ()`;
           }
         } else {
-          const cols = columns.map(c => qid(c)).join(", ");
-          const vals = columns.map(c => formatSqlValue(data[c])).join(", ");
-          query = `INSERT INTO ${qid(activeTableName)} (${cols}) VALUES (${vals})`;
+          const cols = columns.map(c => sqid(c)).join(", ");
+          const vals = columns.map(c => formatSqlLiteral(data[c])).join(", ");
+          query = `INSERT INTO ${sqid(activeTableName)} (${cols}) VALUES (${vals})`;
         }
         await db.execute(query);
       }
@@ -2728,22 +2723,22 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         const whereClauses: string[] = [];
         
         for (const col of columns) {
-           setClauses.push(`${qid(col)} = ${formatSqlValue(data[col])}`);
+           setClauses.push(`${sqid(col)} = ${formatSqlLiteral(data[col])}`);
         }
         
         if (pk && data[pk] !== undefined && data[pk] !== null) {
-          whereClauses.push(`${qid(pk)} = ${formatSqlValue(data[pk])}`);
+          whereClauses.push(`${sqid(pk)} = ${formatSqlLiteral(data[pk])}`);
         } else {
           for (const col of columns) {
             const val = originalData[col];
-            if (val === null) whereClauses.push(`${qid(col)} IS NULL`);
-            else whereClauses.push(`${qid(col)} = ${formatSqlValue(val)}`);
+            if (val === null || val === undefined) whereClauses.push(`${sqid(col)} IS NULL`);
+            else whereClauses.push(`${sqid(col)} = ${formatSqlLiteral(val)}`);
           }
         }
         
         const sqlSet = setClauses.join(", ");
         const sqlWhere = whereClauses.length > 0 ? whereClauses.join(" AND ") : "TRUE";
-        const updateQuery = `UPDATE ${qid(activeTableName)} SET ${sqlSet} WHERE ${sqlWhere}`;
+        const updateQuery = `UPDATE ${sqid(activeTableName)} SET ${sqlSet} WHERE ${sqlWhere}`;
         
         await db.execute(updateQuery);
       }
@@ -2764,15 +2759,17 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           throw new Error("no original query");
         }
       } catch {
-        const fallbackQuery = `SELECT * FROM ${qid(activeTableName)} LIMIT 1000`;
+        const fallbackQuery = `SELECT * FROM ${sqid(activeTableName)} LIMIT 1000`;
         refreshedRows = await db.select(fallbackQuery) as any[];
       }
       setResults(refreshedRows);
       if (refreshedRows.length > 0) {
         setLastColumns(Object.keys(refreshedRows[0]));
       }
-      // Stay on the saved record — scroll to the first modified/new row
-      // so the user doesn't have to hunt for it after the refresh.
+      // Stay on the saved record — scroll to the first modified row (located
+      // by PK in the refreshed data) so the user doesn't have to hunt for it.
+      // New rows can't be located (server-generated keys are unknown until
+      // refresh, and refresh order is the query's business), so no scroll.
       setTimeout(() => {
         const firstModified = modifiedRows.length > 0 ? modifiedRows[0] : null;
         if (firstModified) {
@@ -2784,8 +2781,6 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               window.dispatchEvent(new CustomEvent("grid-scroll-to-row", { detail: { index: newIdx } }));
             }
           }
-        } else if (newRows.length > 0) {
-          window.dispatchEvent(new CustomEvent("grid-scroll-to-bottom"));
         }
       }, 50);
     } catch (err: any) {
@@ -2814,11 +2809,13 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       for (const col of knownCols) {
         baseRow[col] = null;
       }
-      // Merge user-supplied values on top (e.g. duplicated row data)
+      // Merge user-supplied values on top (e.g. duplicated row data).
+      // New rows go FIRST so the user sees the editable row immediately
+      // without scrolling past the existing data.
       const merged = { ...baseRow, ...newRow, _isNew: true };
-      setResults(prev => [...prev, merged]);
+      setResults(prev => [merged, ...prev]);
       setTimeout(() => {
-        window.dispatchEvent(new CustomEvent("grid-scroll-to-bottom"));
+        window.dispatchEvent(new CustomEvent("grid-scroll-to-row", { detail: { index: 0, focus: true } }));
       }, 50);
       return;
     }
@@ -2849,7 +2846,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       }
       const encodedUser = encodeURIComponent(username);
       const encodedPass = encodeURIComponent(password);
-      const port = conn.port || (conn.type === "mysql" || conn.type === "mariadb" ? 3306 : 5432);
+      const port = conn.port || getDefaultPort(conn.type);
       const Database = (await import("@tauri-apps/plugin-sql")).default;
       let connectionString = "";
       if (conn.type === "sqlite") {
@@ -2861,23 +2858,28 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       }
       db = await Database.load(connectionString);
 
+      // Quote with this operation's connection dialect (see handleSave).
+      const addType = conn.type || "postgres";
+      const aqid = (name: string) => quoteIdentifier(name, addType as DatabaseType);
+      const isMySqlLikeAdd = addType === "mysql" || addType === "mariadb";
+
       // ── Build and run INSERT ───────────────────────────────────────────────
       const columns = Object.keys(newRow).filter(c => newRow[c] !== null);
       let query = "";
       if (columns.length === 0) {
-        query = `INSERT INTO ${qid(activeTableName)} DEFAULT VALUES`;
-        if (activeConnection.type === "mysql" || activeConnection.type === "mariadb") {
-          query = `INSERT INTO ${qid(activeTableName)} () VALUES ()`;
+        query = `INSERT INTO ${aqid(activeTableName)} DEFAULT VALUES`;
+        if (isMySqlLikeAdd) {
+          query = `INSERT INTO ${aqid(activeTableName)} () VALUES ()`;
         }
       } else {
-        const cols = columns.map(c => qid(c)).join(", ");
-        const vals = columns.map(c => formatSqlValue(newRow[c])).join(", ");
-        query = `INSERT INTO ${qid(activeTableName)} (${cols}) VALUES (${vals})`;
+        const cols = columns.map(c => aqid(c)).join(", ");
+        const vals = columns.map(c => formatSqlLiteral(newRow[c])).join(", ");
+        query = `INSERT INTO ${aqid(activeTableName)} (${cols}) VALUES (${vals})`;
       }
       await db.execute(query);
 
       // ── Refresh results on the same connection ─────────────────────────────
-      const selectQuery = `SELECT * FROM ${qid(activeTableName)} LIMIT 1000`;
+      const selectQuery = `SELECT * FROM ${aqid(activeTableName)} LIMIT 1000`;
       const refreshedRows = await db.select(selectQuery) as any[];
       setResults(refreshedRows);
       if (refreshedRows.length > 0) {
@@ -2902,7 +2904,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     const whereClause = fk.refColumns.map((refCol, i) => {
       const qCol = quoteIdentifier(refCol, dbType);
       const val = fk.refColumns.length > 1 && Array.isArray(fkValue) ? fkValue[i] : fkValue;
-      return `${qCol} = ${formatSqlValue(val)}`;
+      return `${qCol} = ${formatSqlLiteral(val)}`;
     }).join(" AND ");
     const query = `SELECT * FROM ${qTable} WHERE ${whereClause} LIMIT 1000`;
     setActiveTableName(fk.refTable);
@@ -3615,11 +3617,11 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               // success/error text visible on the Messages tab.
               setError(null);
               setSuccess(null);
-              // Modified existing rows need server data to revert — nothing in
-              // the codebase preserves pre-edit values, so the only way to undo
-              // a cell edit is to re-fetch. New rows are pure-client state and
-              // can be filtered out without a roundtrip, which is the common
-              // case (user added rows, changed their mind).
+              // Modified existing rows need server data to revert — the grid
+              // only keeps a single `_original` snapshot per row, so a full
+              // re-fetch is the reliable way to undo. New rows are pure-client
+              // state and can be filtered out without a roundtrip, which is the
+              // common case (user added rows, changed their mind).
               setSuppressTabSwitch(true);
               const hasModifications = results.some(r => r._isModified && !r._isNew);
               if (hasModifications && lastSelectQueryRef.current) {
