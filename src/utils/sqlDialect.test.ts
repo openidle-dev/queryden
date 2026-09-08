@@ -94,6 +94,19 @@ describe("sqlDialect — isSelectLike", () => {
     expect(isSelectLike("UPDATE t SET x = 1 -- RETURNING")).toBe(false);
     expect(isSelectLike("DELETE FROM t")).toBe(false);
   });
+
+  it("does NOT treat DML with a subquery (no RETURNING) as a select", () => {
+    expect(isSelectLike("DELETE FROM t WHERE id IN (SELECT id FROM archived)")).toBe(false);
+    expect(isSelectLike("UPDATE t SET a = 1 WHERE id IN (SELECT id FROM s)")).toBe(false);
+    expect(isSelectLike("INSERT INTO t (a) SELECT a FROM s")).toBe(false);
+  });
+
+  it("treats every top-level # as a MySQL comment", () => {
+    // `# LIMIT 1` glued to an identifier must still hide the limit, or the
+    // safety-limit check sees a limit MySQL ignores.
+    expect(stripSqlToCode("SELECT * FROM logs# LIMIT 1")).not.toContain("LIMIT");
+    expect(cleanSqlForKeywords("SELECT * FROM logs# LIMIT 1")).not.toContain("LIMIT");
+  });
 });
 
 describe("sqlDialect — classifyDestructive", () => {

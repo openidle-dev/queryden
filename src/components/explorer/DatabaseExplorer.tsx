@@ -139,6 +139,24 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
     return () => window.removeEventListener("jump-to-explorer-node", handleJumpEvent as EventListener);
   }, [schemaTree]);
 
+  // Expand a server node on request (startup auto-reconnect restores the
+  // previously-open connection the same way a manual click would).
+  useEffect(() => {
+    const handleExpandEvent = (e: CustomEvent<{ connectionId: string }>) => {
+      const connId = e.detail?.connectionId;
+      if (!connId) return;
+      setExpandedNodes((prev) => {
+        if (prev.has(`conn-${connId}`)) return prev;
+        const next = new Set(prev);
+        next.add(`conn-${connId}`);
+        return next;
+      });
+    };
+
+    window.addEventListener("expand-connection", handleExpandEvent as EventListener);
+    return () => window.removeEventListener("expand-connection", handleExpandEvent as EventListener);
+  }, []);
+
   const executeJump = (term: string, targetId?: string) => {
     try {
       if (!term || term.trim() === "") return;

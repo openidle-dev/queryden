@@ -169,4 +169,16 @@ SELECT 1`;
     expect(out.map(s => s.text)).toContain("SELECT 2");
     expect(out.map(s => s.text)).toContain("SELECT 3");
   });
+
+  it("treats # as a comment even when glued to code", () => {
+    const out = splitStatements("SELECT * FROM logs# LIMIT 1\n; SELECT 2");
+    expect(out.map(s => s.text)).toEqual(["SELECT * FROM logs# LIMIT 1", "SELECT 2"]);
+  });
+
+  it("still splits large scripts without quadratic slowdown", () => {
+    const big = `SELECT '${"x".repeat(20000)}'; SELECT 2`;
+    const out = splitStatements(big);
+    expect(out).toHaveLength(2);
+    expect(out[1].text).toBe("SELECT 2");
+  });
 });

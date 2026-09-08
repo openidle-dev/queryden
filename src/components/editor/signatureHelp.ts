@@ -56,6 +56,38 @@ function isQuote(ch: string): boolean {
 }
 
 /**
+ * Split a qualified name on dots outside double-quoted identifiers, so
+ * `"my.schema"."my.func"` stays two parts instead of four. Raw parts keep
+ * their quotes; unquoting/folding happens in the caller.
+ */
+function splitQualifiedRaw(name: string): string[] {
+  const parts: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let k = 0; k < name.length; k++) {
+    const c = name[k];
+    if (c === '"') {
+      if (inQuotes && name[k + 1] === '"') {
+        cur += '""';
+        k++;
+        continue;
+      }
+      inQuotes = !inQuotes;
+      cur += c;
+      continue;
+    }
+    if (c === "." && !inQuotes) {
+      parts.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += c;
+  }
+  parts.push(cur);
+  return parts;
+}
+
+/**
  * Find the enclosing call `(` for a caret at the end of `text` (everything
  * before the caret), and the qualified function name in front of it.
  * Returns null outside a call (or when parens don't balance).
@@ -106,9 +138,17 @@ export function parseCallTarget(text: string): CallTarget | null {
   const before = text.slice(0, i);
   const m = QUALIFIED_RE.exec(before);
   if (!m) return null;
-  const parts = m[1]
-    .split(".")
-    .map((p) => p.trim().replace(/^"(.*)"$/s, "$1"));
+  // Quote-aware dot split + case folding: PostgreSQL folds unquoted
+  // identifiers to lower case (pg_proc.proname holds the folded name), so
+  // `MY_FUNC(` / `Public.My_Func(` must look up `my_func`. Quoted parts
+  // keep their exact case (`"My Func"` stays `My Func`).
+  const parts = splitQualifiedRaw(m[1]).map((raw) => {
+    const t = raw.trim();
+    if (t.length >= 2 && t.startsWith('"') && t.endsWith('"')) {
+      return t.slice(1, -1).replace(/""/g, '"');
+    }
+    return t.toLowerCase();
+  });
   if (parts.some((p) => p.length === 0)) return null;
   if (parts.length === 1 && NON_CALL_KEYWORDS.has(parts[0].toUpperCase())) return null;
   return { parts, parenIndex: i };
@@ -278,6 +318,104 @@ export interface SignatureConnCtx {
   database: string;
 }
 
+// Bounded prefix for signature help: copying the whole document on every
+// `(` / `,` keystroke makes the provider O(document) per trigger. Calls
+// are almost always short, and parseCallTarget stops at the nearest
+// unmatched `(` — earlier statements can never affect a reachable call —
+// so only the current statement's prefix is needed.
+const MAX_SIG_PREFIX_CHARS = 8000;
+
+const SIG_DOLLAR_TAG_RE = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/;
+
+/** Index just after the last top-level `;` in `text` (lexer-aware). */
+function afterLastTopLevelSemicolon(text: string): number {
+  let last = 0;
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === "'") {
+      i++;
+      while (i < text.length) {
+        if (text[i] === "\\" && i + 1 < text.length) { i += 2; continue; }
+        if (text[i] === "'") {
+          if (text[i + 1] === "'") { i += 2; continue; }
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    if (c === '"') {
+      i++;
+      while (i < text.length) {
+        if (text[i] === '"') {
+          if (text[i + 1] === '"') { i += 2; continue; }
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    if (c === "-" && text[i + 1] === "-") {
+      while (i < text.length && text[i] !== "\n") i++;
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "*") {
+      i += 2;
+      while (i < text.length) {
+        if (text[i] === "*" && text[i + 1] === "/") { i += 2; break; }
+        i++;
+      }
+      continue;
+    }
+    if (c === "$") {
+      const m = SIG_DOLLAR_TAG_RE.exec(text.slice(i));
+      if (m) {
+        const tag = m[0];
+        const close = text.indexOf(tag, i + tag.length);
+        i = close === -1 ? text.length : close + tag.length;
+        continue;
+      }
+    }
+    if (c === ";") last = i + 1;
+    i++;
+  }
+  return last;
+}
+
+/**
+ * Fetch only the current statement's prefix before the caret (bounded).
+ * Uses offset-based ranging so cost is O(statement), not O(document).
+ * Falls back to the full prefix when the model lacks offset APIs (tests).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function getSignaturePrefix(model: any, position: any): string {
+  try {
+    if (typeof model.getOffsetAt !== "function" || typeof model.getPositionAt !== "function") {
+      return model.getValueInRange({
+        startLineNumber: 1,
+        startColumn: 1,
+        endLineNumber: position.lineNumber,
+        endColumn: position.column,
+      });
+    }
+    const endOffset: number = model.getOffsetAt(position);
+    const startOffset = Math.max(0, endOffset - MAX_SIG_PREFIX_CHARS);
+    const startPos = model.getPositionAt(startOffset);
+    const window: string = model.getValueInRange({
+      startLineNumber: startPos.lineNumber,
+      startColumn: startPos.column,
+      endLineNumber: position.lineNumber,
+      endColumn: position.column,
+    });
+    return window.slice(afterLastTopLevelSemicolon(window));
+  } catch {
+    return "";
+  }
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let sigHelpDisposable: any = null;
 
@@ -297,12 +435,7 @@ export function registerSignatureHelp(monaco: any, getConn: () => SignatureConnC
       try {
         const ctx = getConn();
         if (!ctx?.db || !ctx.connectionId) return null;
-        const text = model.getValueInRange({
-          startLineNumber: 1,
-          startColumn: 1,
-          endLineNumber: position.lineNumber,
-          endColumn: position.column,
-        });
+        const text = getSignaturePrefix(model, position);
         const target = parseCallTarget(text);
         if (!target) return null;
         const parts = target.parts;

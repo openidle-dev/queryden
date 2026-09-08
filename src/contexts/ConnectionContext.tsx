@@ -1,10 +1,11 @@
-import { createContext, useState, useEffect, ReactNode } from "react";
+import { createContext, useState, useEffect, useRef, ReactNode } from "react";
 import { invokeCmd, StoredConnectionDto, VaultCredentialDto, FolderDto } from "../lib/ipc";
 import { wouldCreateCycle } from "../utils/folderTree";
 import { useSettings } from "../store/settingsStore";
 import { getDefaultDatabaseName } from "../config/app";
 import { quoteIdentifier } from "../utils/sqlSecurity";
 import { escapeSqlStringLiteral, getDefaultPort } from "../utils/sqlDialect";
+import { buildConnectionString } from "../utils/connectionString";
 import { logger } from "../utils/logger";
 
 export interface DatabaseConnection {
@@ -47,6 +48,25 @@ export interface VaultCredential {
   name: string;
   username?: string;
   password?: string;
+}
+
+/**
+ * A lazily-established database handle plus everything needed to talk to
+ * its server (resolved credentials, effective TCP endpoint after any SSH
+ * tunnel swap, target database). See `ensureConnectionDb`.
+ */
+export interface EnsuredConnection {
+  /** Live `tauri-plugin-sql` Database handle (cached per connection+database). */
+  db: any;
+  /** Connection with `serverMajorVersion` filled in when detectable. */
+  connection: DatabaseConnection;
+  username: string;
+  password: string;
+  /** Effective TCP host (127.0.0.1 when routed through an SSH tunnel). */
+  host: string;
+  /** Effective TCP port (tunnel local port when routed through SSH). */
+  port: number;
+  database: string;
 }
 
 export interface DatabaseInfo {
@@ -139,6 +159,23 @@ interface ConnectionContextType {
   updateConnection: (id: string, conn: Partial<DatabaseConnection>) => void;
   connectToDatabase: (connId: string, databaseName?: string, overrideVaultCredential?: VaultCredential) => Promise<void>;
   disconnectFromDatabase: () => Promise<void>;
+  /**
+   * Lazily establish (or reuse a cached) database handle for any saved
+   * connection — no sidebar click required. Opening the app connects nothing
+   * (session restore is metadata-only by design), and tabs keep targeting
+   * their own connections, so query/save paths call this for the tab's
+   * target instead of failing with "connect first" errors.
+   *
+   * Same semantics as the manual `connectToDatabase` (vault-credential
+   * reload fallback, SSH tunnel creation, server-version detection) but with
+   * NO global side effects: it never touches `currentDb`, `activeConnection`
+   * or `selectedDatabase`. Handles are cached per connection+database and
+   * shared across calls; use `dropCachedConnection` to evict (disconnect,
+   * connection removal, or a connection-lost error).
+   */
+  ensureConnectionDb: (connId: string, database?: string) => Promise<EnsuredConnection>;
+  /** Close + evict all cached lazy handles for a connection. */
+  dropCachedConnection: (connId: string) => Promise<void>;
   loadSchema: (database: string, overrideSchemas?: string[]) => Promise<void>;
   getDDL: (type: string, name: string, schema?: string, table?: string) => Promise<string>;
   generateStatement: (type: "select" | "insert" | "update" | "delete", tableName: string) => Promise<string>;
@@ -306,6 +343,14 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const [roles, setRoles] = useState<{ login: string[], group: string[] }>({ login: [], group: [] });
   const [tablespaces, setTablespaces] = useState<{ name: string; owner: string; location: string | null; size: string | null }[]>([]);
 
+  // Lazy per-connection handles for `ensureConnectionDb` (multi-connection
+  // startup connects nothing, so tab-target queries establish their own).
+  // Key: `${connectionId}::${database}`. Refs (not state): handles are
+  // resources, not render input. `pending` dedups concurrent first-use races
+  // so two simultaneous runs share one handshake instead of leaking a spare.
+  const lazyHandlesRef = useRef(new Map<string, any>());
+  const lazyPendingRef = useRef(new Map<string, Promise<any>>());
+
   // Load from file storage on mount
   useEffect(() => {
     async function loadFromFile() {
@@ -456,6 +501,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       } catch {
         // Tunnel may not exist
       }
+      await dropCachedConnection(id);
     }
     setConnections((prev) => prev.filter((c) => c.id !== id));
   };
@@ -566,6 +612,49 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     );
   };
 
+  /**
+   * Resolve a connection's credentials: explicit override first, otherwise
+   * the vault credential referenced by the connection — with a direct reload
+   * fallback when the in-memory vault list hasn't loaded yet (e.g. a lazy
+   * query seconds after app start). Shared by manual connect and lazy
+   * `ensureConnectionDb` so both see the same credentials.
+   */
+  const resolveConnectionCredentials = async (
+    conn: DatabaseConnection,
+    overrideVaultCredential?: VaultCredential,
+  ): Promise<{ username: string; password: string }> => {
+    let username = conn.username || "";
+    let password = conn.password || "";
+
+    // If override vault credential is passed, use it directly
+    if (overrideVaultCredential) {
+      username = overrideVaultCredential.username || "";
+      password = overrideVaultCredential.password || "";
+    } else if (conn.vaultCredentialId) {
+      // Otherwise try to use vault credentials from connection's vaultCredentialId
+      let vaultCred = vaultCredentials.find(vc => vc.id === conn.vaultCredentialId);
+
+      if (!vaultCred) {
+        // Vault credentials not loaded yet, reload directly
+        try {
+          const creds = await invokeCmd("load_vault_credentials", { vaultPassword: null });
+          const mapped = creds.map(vaultDtoToCredential);
+          setVaultCredentials(mapped);
+          vaultCred = mapped.find(vc => vc.id === conn.vaultCredentialId);
+        } catch (e) {
+          logger.error("Failed to reload vault credentials:", e);
+        }
+      }
+
+      if (vaultCred) {
+        username = vaultCred.username || "";
+        password = vaultCred.password || "";
+      }
+    }
+
+    return { username, password };
+  };
+
   const connectToDatabase = async (connId: string, databaseName?: string, overrideVaultCredential?: VaultCredential) => {
     const conn = connections.find((c) => c.id === connId);
     if (!conn) return;
@@ -576,34 +665,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       const targetDb = databaseName || conn.database;
 
       // Resolve credentials - check for override first (passed directly when user selects profile)
-      let username = conn.username || "";
-      let password = conn.password || "";
-      
-      // If override vault credential is passed, use it directly
-      if (overrideVaultCredential) {
-        username = overrideVaultCredential.username || "";
-        password = overrideVaultCredential.password || "";
-      } else if (conn.vaultCredentialId) {
-        // Otherwise try to use vault credentials from connection's vaultCredentialId
-        let vaultCred = vaultCredentials.find(vc => vc.id === conn.vaultCredentialId);
-        
-        if (!vaultCred) {
-          // Vault credentials not loaded yet, reload directly
-          try {
-            const creds = await invokeCmd("load_vault_credentials", { vaultPassword: null });
-            const mapped = creds.map(vaultDtoToCredential);
-            setVaultCredentials(mapped);
-            vaultCred = mapped.find(vc => vc.id === conn.vaultCredentialId);
-          } catch (e) {
-            logger.error("Failed to reload vault credentials:", e);
-          }
-        }
-        
-        if (vaultCred) {
-          username = vaultCred.username || "";
-          password = vaultCred.password || "";
-        }
-      }
+      const { username, password } = await resolveConnectionCredentials(conn, overrideVaultCredential);
 
       // URL encode credentials to handle special characters in passwords/usernames
       const encodedUser = encodeURIComponent(username);
@@ -708,6 +770,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       } catch (e) {
         logger.error("Failed to close SSH tunnel:", e);
       }
+      // Drop lazily-established handles for this connection too, so a later
+      // reconnect starts clean instead of reusing a stale pooled handle.
+      await dropCachedConnection(activeConnection.id);
     }
     if (currentDb) {
       try {
@@ -725,6 +790,137 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     setTablespaces([]);
     // Notify the Monaco editor (if loaded) to drop its module-level schema cache.
     window.dispatchEvent(new CustomEvent("connection-disconnected"));
+  };
+
+  /**
+   * Close + evict every cached lazy handle for a connection (disconnect,
+   * connection removal, or a connection-lost error mid-query). In-flight
+   * handshakes are closed on settle so they can't leak.
+   */
+  const dropCachedConnection = async (connId: string) => {
+    const prefix = `${connId}::`;
+    const settle: Promise<unknown>[] = [];
+    for (const [key, pending] of lazyPendingRef.current) {
+      if (key.startsWith(prefix)) {
+        lazyPendingRef.current.delete(key);
+        settle.push(
+          pending
+            .then((db: any) => {
+              try {
+                const r = db?.close?.();
+                if (r && typeof r.then === "function") return r;
+              } catch {
+                /* already dead */
+              }
+            })
+            .catch(() => undefined),
+        );
+      }
+    }
+    const closes: Promise<unknown>[] = [];
+    for (const [key, db] of lazyHandlesRef.current) {
+      if (key.startsWith(prefix)) {
+        lazyHandlesRef.current.delete(key);
+        closes.push(
+          (async () => {
+            try {
+              await db?.close?.();
+            } catch {
+              /* already dead */
+            }
+          })(),
+        );
+      }
+    }
+    await Promise.allSettled([...settle, ...closes]);
+  };
+
+  const ensureConnectionDb = async (connId: string, database?: string): Promise<EnsuredConnection> => {
+    const conn = connections.find((c) => c.id === connId);
+    if (!conn) {
+      throw new Error("Connection not found. It may have been deleted — re-add it in the Database Explorer.");
+    }
+    const targetDb = database || conn.database;
+
+    // Resolve credentials + effective TCP endpoint first: the CLI/psql path
+    // needs them even on a cache hit, and the tunnel must be up before use.
+    const { username, password } = await resolveConnectionCredentials(conn);
+
+    let host = conn.host || "localhost";
+    let port = conn.port || getDefaultPort(conn.type);
+
+    // Create SSH tunnel if enabled (same parameters as manual connect).
+    if (conn.sshEnabled && conn.sshHost && conn.sshUsername && conn.type !== "sqlite") {
+      const tunnelResult = await invokeCmd("create_ssh_tunnel", {
+        connectionId: conn.id,
+        sshHost: conn.sshHost,
+        sshPort: conn.sshPort || 22,
+        sshUsername: conn.sshUsername,
+        sshPassword: conn.sshPassword || null,
+        sshKeyPath: conn.sshKeyPath || null,
+        sshKeyPassphrase: conn.sshKeyPassphrase || null,
+        remoteHost: host,
+        remotePort: port,
+      });
+      host = "127.0.0.1";
+      port = tunnelResult.local_port;
+    }
+
+    const key = `${conn.id}::${targetDb}`;
+    const cached = lazyHandlesRef.current.get(key);
+    if (cached) {
+      return { db: cached, connection: conn, username, password, host, port, database: targetDb };
+    }
+
+    // Dedup concurrent first-use races on the same key.
+    const pending = lazyPendingRef.current.get(key);
+    if (pending) {
+      const db = await pending;
+      return { db, connection: conn, username, password, host, port, database: targetDb };
+    }
+
+    const Database = (await import("@tauri-apps/plugin-sql")).default;
+    const connectionString = buildConnectionString({
+      type: conn.type,
+      host,
+      port,
+      database: targetDb,
+      username,
+      password,
+      filepath: conn.filepath,
+    });
+    const loadPromise = Database.load(connectionString);
+    lazyPendingRef.current.set(key, loadPromise);
+    try {
+      const db = await loadPromise;
+      lazyHandlesRef.current.set(key, db);
+
+      // Detect the server major version for the psql CLI path (server-level,
+      // so one detection covers every database on the connection). Best
+      // effort — a failure here must not fail the query itself.
+      let connection = conn;
+      if (
+        conn.serverMajorVersion == null &&
+        ["postgres", "supabase", "cockroach", "psql"].includes((conn.type || "").toLowerCase())
+      ) {
+        try {
+          const [versionRow] = await db.select<any[]>(
+            "SELECT (regexp_matches(version(), E'^PostgreSQL (\\d+)'))[1]::int AS major",
+          );
+          const major = versionRow?.major;
+          if (typeof major === "number") {
+            connection = { ...conn, serverMajorVersion: major };
+            updateConnection(conn.id, { serverMajorVersion: major });
+          }
+        } catch {
+          // Version query failed — the CLI path falls back to system psql.
+        }
+      }
+
+      return { db, connection, username, password, host, port, database: targetDb };
+    } finally {
+      lazyPendingRef.current.delete(key);
+    }
   };
 
   const loadSchema = async (_database: string, overrideSchemas?: string[]) => {
@@ -2131,6 +2327,8 @@ SELECT ${colList} FROM ${schemaPart}.${tablePart};
         updateConnection,
         connectToDatabase,
         disconnectFromDatabase,
+        ensureConnectionDb,
+        dropCachedConnection,
         loadSchema,
         getDDL,
         generateStatement,

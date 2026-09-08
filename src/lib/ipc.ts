@@ -207,6 +207,10 @@ export interface SessionTabDto {
 export interface SessionsDataDto {
   tabs: SessionTabDto[];
   activeTabId: string | null;
+  /** Previously-active connection for startup auto-reconnect (absent in old files). */
+  activeConnectionId?: string | null;
+  /** Previously-selected database on that connection. */
+  activeDatabase?: string | null;
   version: number;
 }
 
@@ -281,7 +285,7 @@ export interface IpcCommands {
 
   // storage — sessions (open query tab persistence)
   save_sessions: {
-    args: { tabs: SessionTabDto[]; activeTabId: string | null };
+    args: { tabs: SessionTabDto[]; activeTabId: string | null; activeConnectionId: string | null; activeDatabase: string | null };
     result: void;
   };
   load_sessions: { args: void; result: SessionsDataDto };

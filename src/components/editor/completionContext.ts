@@ -169,6 +169,17 @@ export function detectAliasDotContext(
   };
 }
 
+// Static (schema-free) suggestion matching for SQL keywords and builtin
+// functions. Disconnected users still get these, so the predicate is shared
+// between the no-schema fallback and the connected pre-filter in
+// QueryEditor.tsx. Case-insensitive; empty input matches everything.
+export function matchesStaticLabel(label: string, word: string): boolean {
+  if (!word) return true;
+  const labelLower = label.toLowerCase();
+  const wordLower = word.toLowerCase();
+  return labelLower.startsWith(wordLower) || labelLower.includes(wordLower);
+}
+
 // Issue #97: when a suggestion label is schema-qualified (e.g. `app.users`) and the user types a
 // bare table name (e.g. `users`), a strict `label.startsWith(currentWord)` pre-filter rejects it
 // before Monaco's matcher ever sees the suggestion. This predicate accepts both the qualified

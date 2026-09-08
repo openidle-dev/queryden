@@ -440,6 +440,18 @@ function ExplorerSettings() {
   return (
     <div className="space-y-4">
       <div>
+        <label className="block text-xs font-semibold mb-3 text-[var(--neutral-11)] uppercase tracking-wider">Startup</label>
+        <div className="space-y-4">
+          <ToggleOption
+            label="Reconnect previous connection on startup"
+            description="Automatically reconnect the connection that was active when the app closed (best effort, never prompts)"
+            checked={settings.autoReconnect}
+            onChange={(checked) => settings.setSetting("autoReconnect", checked)}
+          />
+        </div>
+      </div>
+
+      <div>
         <label className="block text-xs font-semibold mb-3 text-[var(--neutral-11)] uppercase tracking-wider">Object Visibility</label>
         <div className="grid grid-cols-2 gap-x-8 gap-y-1 bg-[var(--surface-base)]/30 border border-[var(--neutral-6)] rounded-lg p-3">
           <ToggleOption

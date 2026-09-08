@@ -63,10 +63,12 @@ export function isDateTimeType(
  * Returns true if the column should render with the boolean checkbox editor.
  *
  * Same strategy as {@link isDateTimeType}: authoritative SQL-type match first
- * (`boolean`, `bool`, `bit`), name heuristic (`active`, `is_*`, …) when the
- * type is unknown. Used for NULL cells on new rows, where there is no value
- * to infer the widget from — a new boolean starts unchecked but stays NULL
- * until the user toggles it.
+ * (`boolean`, `bool`), name heuristic (`active`, `is_*`, …) when the type is
+ * unknown. `BIT` is deliberately NOT a boolean: `BIT(8)` and wider bit
+ * fields would otherwise render as a checkbox, losing the real bit value on
+ * save. Used for NULL cells on new rows, where there is no value to infer
+ * the widget from — a new boolean starts unchecked but stays NULL until the
+ * user toggles it.
  */
 export function isBoolType(
   sqlType: string | undefined,
@@ -75,7 +77,7 @@ export function isBoolType(
   if (sqlType && sqlType.trim() !== "") {
     const normalized = sqlType.trim().toUpperCase();
     const head = normalized.split(/[(\s]/, 1)[0];
-    return head === "BOOL" || head === "BOOLEAN" || head === "BIT";
+    return head === "BOOL" || head === "BOOLEAN";
   }
   const low = columnName.toLowerCase();
   return (

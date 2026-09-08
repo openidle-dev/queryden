@@ -105,7 +105,15 @@ describe("isBoolType", () => {
     expect(isBoolType("BOOLEAN", "anything")).toBe(true);
     expect(isBoolType("boolean", "anything")).toBe(true);
     expect(isBoolType("bool", "anything")).toBe(true);
-    expect(isBoolType("BIT", "anything")).toBe(true);
+  });
+
+  it("does NOT map BIT columns to the boolean editor", () => {
+    // BIT(8) and wider bit fields hold bit values, not booleans — a
+    // checkbox would lose the value on save.
+    expect(isBoolType("BIT", "anything")).toBe(false);
+    expect(isBoolType("BIT(8)", "flags")).toBe(false);
+    expect(isBoolType("BIT(1)", "flags")).toBe(false);
+    expect(isBoolType("bit", "anything")).toBe(false);
   });
 
   it("rejects non-boolean types even with suggestive names", () => {
@@ -208,5 +216,13 @@ describe("inferColumnType", () => {
     expect(inferColumnType([{ a: true }], "a")).toBe("bool");
     expect(inferColumnType([{ a: null }], "active")).toBe("bool");
     expect(inferColumnType([], "amount")).toBe("float");
+  });
+
+  it("keeps out-of-range BIGINT digit-strings exact and numeric (#41)", () => {
+    // The Rust decoder emits integers beyond 2^53-1 as strings so JSON.parse
+    // can't round them. The frontend must treat those strings opaquely —
+    // never Number() them — while still classifying the column as numeric.
+    expect(inferColumnType([{ a: "-9223372036854775808" }], "a")).toBe("int");
+    expect(inferColumnType([{ a: "1152921504606846976" }], "a")).toBe("int");
   });
 });

@@ -47,32 +47,19 @@ export interface SqlStatement {
 
 const DOLLAR_TAG_RE = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/;
 
-/** True when `sql[stmtStart..pos]` holds only whitespace/comments. */
-function isAtStatementStart(sql: string, stmtStart: number, pos: number): boolean {
-  const raw = sql.slice(stmtStart, pos);
-  const noBlock = raw.replace(/\/\*[\s\S]*?\*\//g, "");
-  const noLine = noBlock
-    .split("\n")
-    .map((line) => {
-      const idx = line.indexOf("--");
-      return idx === -1 ? line : line.slice(0, idx);
-    })
-    .join("\n");
-  const noHash = noLine
-    .split("\n")
-    .map((line) => {
-      const idx = line.indexOf("#");
-      return idx === -1 ? line : line.slice(0, idx);
-    })
-    .join("\n");
-  return noHash.trim().length === 0;
-}
-
 export function splitStatements(sql: string): SqlStatement[] {
   const statements: SqlStatement[] = [];
   let i = 0;
   let stmtStart = 0;
   let delimiter = ";";
+  // Incremental "are we still at a statement start" flag. The old code
+  // called isAtStatementStart(sql, stmtStart, i) on EVERY character, which
+  // slices sql[stmtStart..i] plus regex/split passes — O(n²) over a long
+  // statement, run on every keystroke and every Run All. Instead flip this
+  // to false on the first non-whitespace, non-comment character and reset
+  // it whenever stmtStart moves. The expensive DELIMITER scan below only
+  // runs while the flag is still true (a few leading chars per statement).
+  let atStmtStart = true;
 
   const emit = (end: number) => {
     const raw = sql.slice(stmtStart, end);
@@ -97,6 +84,7 @@ export function splitStatements(sql: string): SqlStatement[] {
       emit(i);
       i += delimiter.length;
       stmtStart = i;
+      atStmtStart = true;
       continue;
     }
 
@@ -105,9 +93,15 @@ export function splitStatements(sql: string): SqlStatement[] {
     // called `delimiter` mid-query can never trigger it. Only the next
     // token is consumed (plus one newline), so `DELIMITER ; SELECT 2` on a
     // single line still leaves `SELECT 2` as a runnable statement.
-    if (isAtStatementStart(sql, stmtStart, i)) {
+    // Guarded by the incremental atStmtStart flag (O(1)) instead of
+    // re-scanning sql[stmtStart..i] on every character (O(n²)).
+    if (atStmtStart) {
       let j = i;
       while (j < sql.length && (sql[j] === " " || sql[j] === "\t" || sql[j] === "\r")) j++;
+      // Allow comments/newlines between stmtStart and DELIMITER: only
+      // whitespace scanned above; if j hits a comment marker, this isn't a
+      // bare DELIMITER line — fall through to the comment branches below,
+      // which preserve atStmtStart.
       if (
         sql.slice(j, j + 9).toUpperCase() === "DELIMITER" &&
         (j + 9 >= sql.length || /[\s;]/.test(sql[j + 9]))
@@ -129,11 +123,13 @@ export function splitStatements(sql: string): SqlStatement[] {
         if (sql[t] === "\n") t++;
         i = t;
         stmtStart = t;
+        atStmtStart = true;
         continue;
       }
     }
 
     if (c === "'") {
+      atStmtStart = false;
       i++;
       while (i < sql.length) {
         // Backslash escapes (MySQL \' \\, Postgres E'\'' / E'\\').
@@ -154,6 +150,7 @@ export function splitStatements(sql: string): SqlStatement[] {
     }
 
     if (c === '"') {
+      atStmtStart = false;
       i++;
       while (i < sql.length) {
         if (sql[i] === '"') {
@@ -167,6 +164,7 @@ export function splitStatements(sql: string): SqlStatement[] {
     }
 
     if (c === "`") {
+      atStmtStart = false;
       i++;
       while (i < sql.length) {
         if (sql[i] === "\\" && i + 1 < sql.length) {
@@ -188,13 +186,13 @@ export function splitStatements(sql: string): SqlStatement[] {
       continue;
     }
 
-    // MySQL `#` line comment (only when it starts a comment position).
+    // MySQL `#` line comment: consume to end of line regardless of the
+    // preceding character (outside quoted contexts we are always top-level
+    // here). `SELECT * FROM logs# LIMIT 1` must hide `# LIMIT 1`, otherwise
+    // limit-safety checks see a limit that MySQL ignores.
     if (c === "#") {
-      const prev = i === 0 ? "\n" : sql[i - 1];
-      if (prev === "\n" || prev === "\r" || prev === ";" || prev === " " || prev === "\t" || prev === "(") {
-        while (i < sql.length && sql[i] !== "\n") i++;
-        continue;
-      }
+      while (i < sql.length && sql[i] !== "\n") i++;
+      continue;
     }
 
     if (c === "/" && sql[i + 1] === "*") {
@@ -209,6 +207,7 @@ export function splitStatements(sql: string): SqlStatement[] {
     if (c === "$" && delimiter === ";") {
       const m = DOLLAR_TAG_RE.exec(sql.slice(i));
       if (m) {
+        atStmtStart = false;
         const tag = m[0];
         const bodyStart = i + tag.length;
         const closeIdx = sql.indexOf(tag, bodyStart);
@@ -221,9 +220,15 @@ export function splitStatements(sql: string): SqlStatement[] {
       emit(i);
       i++;
       stmtStart = i;
+      atStmtStart = true;
       continue;
     }
 
+    // Whitespace/newlines before the first real token keep us at the
+    // statement start; any other character ends the leading trivia.
+    if (c !== " " && c !== "\t" && c !== "\r" && c !== "\n") {
+      atStmtStart = false;
+    }
     i++;
   }
 

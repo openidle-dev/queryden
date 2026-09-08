@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, Suspense, lazy } from "react"
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { ResultsPanel } from "../results/ResultsPanel";
 import { useConnections } from "../../contexts/useConnections";
+import type { EnsuredConnection } from "../../contexts/ConnectionContext";
 import { useQueryHistory } from "../../store/queryHistoryStore";
 import { useSettings } from "../../store/settingsStore";
 import { Play, Plus, X, ChevronDown, ChevronRight, Terminal, Database, Sparkles, GitCompare, Save, Square, Activity, Loader2, CheckCircle, XCircle, Copy as CopyIcon, FolderOpen, Clipboard, Pencil } from "lucide-react";
@@ -12,6 +13,7 @@ import { EmptyStateLauncher } from "./EmptyStateLauncher";
 import { logger } from "../../utils/logger";
 import { getDefaultDatabaseName } from "../../config/app";
 import { splitStatements } from "../../utils/splitStatements";
+import { mapSelectionStatementsToDocumentLines, mergeGlyphResults } from "../../utils/statementGlyphs";
 import { applyQueryLimit } from "../../utils/applyQueryLimit";
 import { classifyDestructive, formatSqlLiteral, getDefaultPort, isDoBlock as isDoBlockHelper, isSelectLike, splitDottedIdentifier, stripSqlToCode } from "../../utils/sqlDialect";
 import { VariableSubstitutionDialog, extractVariables, substituteVariables, VariableValues } from "../ui/VariableSubstitutionDialog";
@@ -111,7 +113,7 @@ export interface MultiResult {
 }
 
 export function MainContent() {
-  const { connections, folders, activeConnection, selectedDatabase, currentDb, vaultCredentials, databases: globalDatabases, connectToDatabase, initialLoadDone } = useConnections();
+  const { connections, folders, activeConnection, selectedDatabase, currentDb, vaultCredentials, databases: globalDatabases, connectToDatabase, ensureConnectionDb, dropCachedConnection, initialLoadDone } = useConnections();
   const { addQuery } = useQueryHistory();
   const settings = useSettings();
   // Gates the query toolbar, tab strip, and results panel. Until a database
@@ -123,6 +125,12 @@ export function MainContent() {
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [results, setResults] = useState<any[]>([]);
   const [isExecuting, setIsExecuting] = useState(false);
+  // Which tab launched the currently-running query (#222). The tab glyph keys
+  // off this (not the active tab) so the spinner stays on the owning tab when
+  // the user switches tabs mid-run. The editor header / psql window /
+  // results-panel loading use `activeTabIsExecuting` below. The top toolbar
+  // Run/Cancel stays global — one query runs at a time, cancellable anywhere.
+  const [executingTabId, setExecutingTabId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [multiResults, setMultiResults] = useState<MultiResult[]>([]);
@@ -286,6 +294,14 @@ export function MainContent() {
 
   const activeTab = queryTabs.find((t) => t.id === activeTabId);
   const prevActiveTabId = useRef<string | null>(null);
+  // A tab targeting a known saved connection is runnable even when nothing is
+  // globally connected: execution lazily establishes the target connection on
+  // demand (SSH tunnel included), so no manual sidebar connect is needed.
+  const tabTargetId = activeTab?.target?.connectionId;
+  const canRunOnTabTarget = !!tabTargetId && connections.some((c) => c.id === tabTargetId);
+  // True only when the *active* tab owns the running query (#222). Tab glyphs
+  // use `executingTabId` directly; scoped loading indicators use this.
+  const activeTabIsExecuting = isExecuting && executingTabId === activeTabId;
 
   // Keep refs in sync with latest values to avoid stale closures
   useEffect(() => {
@@ -485,37 +501,49 @@ export function MainContent() {
     };
   }, [contextMenu]);
 
-  const qid = (name: string) => quoteIdentifier(name, (activeConnection?.type || "postgres") as DatabaseType);
-
   const loadFKOptions = useCallback(async (fk: { refTable: string; refColumns: string[] }, search: string): Promise<{ pk: any; label: string }[]> => {
-    if (!currentDb) return [];
+    // Resolve the FK lookup against the tab's target connection (lazy ensure
+    // when it was never globally connected), not just the global handle.
+    const fkTab = queryTabs.find(t => t.id === activeTabId);
+    const fkTarget = fkTab?.target;
+    const fkConn = (fkTarget
+      ? connections.find(c => c.id === fkTarget.connectionId)
+      : activeConnection) || activeConnection;
+    if (!fkConn) return [];
     const refCol = fk.refColumns[0];
-    const dbType = (activeConnection?.type || "postgres") as DatabaseType;
+    const dbType = (fkConn.type || "postgres") as DatabaseType;
     const qTable = quoteIdentifier(fk.refTable, dbType);
     const qRefCol = quoteIdentifier(refCol, dbType);
+    // Placeholders are dialect-specific: $1 on PostgreSQL-wire engines, ?
+    // on MySQL/MariaDB (sqlx does not understand $n there).
+    const isPgLikeFk = ["postgres", "supabase", "cockroach"].includes(dbType);
+    const ph = isPgLikeFk ? "$1" : "?";
     try {
+      const db = (fkTarget || !currentDb)
+        ? (await ensureConnectionDb(fkConn.id, fkTarget?.database || selectedDatabase || fkConn.database)).db
+        : currentDb;
       if (search) {
-        const sample = await currentDb.select(`SELECT * FROM ${qTable} LIMIT 1`);
+        const sample = await db.select(`SELECT * FROM ${qTable} LIMIT 1`);
         const displayCol = sample.length > 0
           ? Object.keys(sample[0]).find(k => k !== refCol && !k.endsWith("_id") && typeof sample[0][k] === "string") || refCol
           : refCol;
         const qDisplayCol = quoteIdentifier(displayCol, dbType);
         const likeOp = ["postgres", "supabase", "cockroach", "sqlite"].includes(dbType) ? "ILIKE" : "LIKE";
-        const results = await currentDb.select(
-          `SELECT ${qRefCol}, ${qDisplayCol} FROM ${qTable} WHERE ${qDisplayCol} ${likeOp} $1 LIMIT 50`,
+        const results = await db.select(
+          `SELECT ${qRefCol}, ${qDisplayCol} FROM ${qTable} WHERE ${qDisplayCol} ${likeOp} ${ph} LIMIT 50`,
           [`%${search}%`]
         );
         return results.map((r: any) => ({ pk: r[refCol], label: String(r[displayCol] ?? r[refCol]) }));
       }
       // No search: single SELECT * already has refCol + all candidate display cols
-      const rows = await currentDb.select(`SELECT * FROM ${qTable} LIMIT 100`);
+      const rows = await db.select(`SELECT * FROM ${qTable} LIMIT 100`);
       if (rows.length === 0) return [];
       const displayCol = Object.keys(rows[0]).find(k => k !== refCol && !k.endsWith("_id") && typeof rows[0][k] === "string") || refCol;
       return rows.map((r: any) => ({ pk: r[refCol], label: String(r[displayCol] ?? r[refCol]) }));
     } catch {
       return [];
     }
-  }, [currentDb, activeConnection?.type]);
+  }, [currentDb, activeConnection, selectedDatabase, connections, queryTabs, activeTabId, ensureConnectionDb]);
 
   // ── Session persistence: restore open tabs on startup ────────────────────
   const sessionRestoredRef = useRef(false);
@@ -552,6 +580,45 @@ export function MainContent() {
     })();
   }, [initialLoadDone]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Auto-reconnect: restore the previously-active connection ─────────────
+  // Startup connects nothing by design, so without this the restored tabs and
+  // explorer greet the user fully DISCONNECTED (header, tree, Run) until
+  // something is clicked — even though the session knows what was open.
+  // Runs once, in the background, best effort: any failure just logs (+ a
+  // non-blocking toast) and leaves the connection for manual connect. Never
+  // prompts: connections still waiting for a vault-profile pick stay manual.
+  const autoReconnectAttemptedRef = useRef(false);
+  useEffect(() => {
+    if (!initialLoadDone || autoReconnectAttemptedRef.current) return;
+    autoReconnectAttemptedRef.current = true;
+    (async () => {
+      try {
+        const { invokeCmd } = await import("../../lib/ipc");
+        const { settingsReady, useSettings } = await import("../../store/settingsStore");
+        const { canAutoReconnect } = await import("../../utils/autoReconnect");
+        await settingsReady;
+        if (!useSettings.getState().autoReconnect) return;
+        if (activeConnRef.current) return; // user already connected manually
+        const data = await invokeCmd("load_sessions");
+        const connId = data.activeConnectionId;
+        if (!connId) return;
+        const target = connectionsRef.current.find((c) => c.id === connId);
+        if (!target || !canAutoReconnect(target)) return;
+        logger.debug(`Auto-reconnecting previous session connection: ${target.name}`);
+        await connectToDatabase(connId, data.activeDatabase || undefined);
+        window.dispatchEvent(new CustomEvent("expand-connection", { detail: { connectionId: connId } }));
+        logger.debug(`Auto-reconnected: ${target.name}`);
+      } catch (e) {
+        // Background restore must never modal or block startup.
+        logger.debug("Auto-reconnect failed (connect manually):", e);
+        showToastMessage("Previous connection unavailable — click it in the explorer to reconnect.");
+      }
+    })();
+    // connectToDatabase identity changes per render; the attempted-ref makes
+    // this strictly once, using the first fresh closure after initial load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialLoadDone]);
+
   // ── Session persistence: save tabs whenever they change ──────────────────
   const sessionSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
@@ -575,7 +642,12 @@ export function MainContent() {
           targetDatabase: t.target?.database,
           usePsql: t.usePsql ?? false,
         }));
-        await invokeCmd("save_sessions", { tabs, activeTabId });
+        await invokeCmd("save_sessions", {
+          tabs,
+          activeTabId,
+          activeConnectionId: activeConnection?.id ?? null,
+          activeDatabase: selectedDatabase ?? null,
+        });
       } catch (e) {
         logger.debug("Failed to save session:", e);
       }
@@ -583,7 +655,7 @@ export function MainContent() {
     return () => {
       if (sessionSaveTimerRef.current) clearTimeout(sessionSaveTimerRef.current);
     };
-  }, [queryTabs, activeTabId]);
+  }, [queryTabs, activeTabId, activeConnection?.id, selectedDatabase]);
 
   // Issue #51: invalidate the cached column-types when the active table
   // changes away from the one those types were collected for. An ad-hoc
@@ -627,6 +699,9 @@ export function MainContent() {
           multiResults,
           psqlOutput,
           psqlEntries: prevTab.psqlEntries, // Keep existing entries
+          // Note: statementResults are NOT touched here — they stay in tab
+          // state and flow into QueryEditor via props, so glyphs survive tab
+          // switches (#223).
         });
       }
     }
@@ -642,6 +717,7 @@ export function MainContent() {
       setActiveTableName(activeTab.tableName || null);
       setMultiResults(activeTab.multiResults || []);
       // Note: psqlOutput and psqlEntries are passed directly to PsqlWindow, not restored to global state
+      // Note: statementResults stay in tab state and flow into QueryEditor via props (#223)
     }
     
     prevActiveTabId.current = activeTabId;
@@ -724,6 +800,25 @@ export function MainContent() {
   const updateTabState = useCallback((tabId: string, updates: Partial<QueryTab>) => {
     setQueryTabs(prev => prev.map(t => t.id === tabId ? { ...t, ...updates } : t));
   }, []);
+
+  // Merge a batch of glyph results into a tab's existing marks (#223: one
+  // checkmark per block that was run — accumulate, dedup by line, re-running
+  // a block replaces its mark). Uses a functional update so mid-loop writes
+  // never clobber marks appended by an overlapping write.
+  const appendGlyphResults = useCallback((tabId: string, batch: StatementResult[]) => {
+    if (batch.length === 0) return;
+    setQueryTabs(prev => prev.map(t =>
+      t.id === tabId
+        ? { ...t, statementResults: mergeGlyphResults(t.statementResults || [], batch) }
+        : t
+    ));
+  }, []);
+
+  // Replace a tab's glyph set wholesale — used for the editor's prune
+  // writeback (lines shifted by edits / destroyed blocks dropped).
+  const setGlyphResults = useCallback((tabId: string, glyphResults: StatementResult[]) => {
+    updateTabState(tabId, { statementResults: glyphResults });
+  }, [updateTabState]);
 
   const addNewTab = useCallback((
     query = "",
@@ -825,6 +920,11 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     // is still unwinding: the generation checkpoints and the finally block
     // below no-op when their captured `gen` no longer matches the latest.
     const gen = ++executionGenRef.current;
+    // Fresh run owns the global cancel flag (#212). Abandoned runs bail on
+    // generation mismatch (checked in every loop below), so clearing here
+    // can't resume them — and without it, a previous cancel would make this
+    // run break out of its statement loop immediately.
+    cancelFlagRef.current = false;
     // Use refs for latest values to avoid stale closures
     const currentTab = activeTabRef.current;
     const currentTabId = activeTabIdRef.current;
@@ -893,8 +993,17 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       const parts = splitStatements(queryToRun);
       if (parts.length > 1) {
         isRunAll = true;
-        statementsToRun = parts.map(p => p.text);
-        statementInfos = parts.map(p => ({ lineNumber: p.lineNumber, statementText: p.text }));
+        // Map selection-relative lines back to document-absolute lines (#223):
+        // splitStatements numbers from 1 relative to the selection text, so a
+        // block on document line 14 would otherwise get a glyph on line 3.
+        // statementInfo carries the selection's document start line when the
+        // run came from the editor (smart-run / selection); the toolbar path
+        // has no offset, so it falls back to 1.
+        const baseLine = statementInfo?.lineNumber ?? 1;
+        const mapped: { text: string; lineNumber: number }[] =
+          mapSelectionStatementsToDocumentLines(parts, baseLine);
+        statementsToRun = mapped.map((p) => p.text);
+        statementInfos = mapped.map((p) => ({ lineNumber: p.lineNumber, statementText: p.text }));
       }
     }
     runningCmdRef.current = queryToRun;
@@ -990,10 +1099,8 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     const runCancelled = { current: false };
     currentRunCancelRef.current = runCancelled;
 
-    // Clear statement results when starting new execution (glyphs will appear after execution completes)
-    if (currentTabId) {
-      updateTabState(currentTabId, { statementResults: [] });
-    }
+    // NOTE: no statementResults wipe here (#223) — glyphs accumulate across
+    // runs (one checkmark per block that was run); new marks merge in below.
     const startTime = Date.now();
     let intervalId: any = null;
     
@@ -1007,6 +1114,8 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       // per-path `setIsExecuting(true)` calls below are now redundant no-ops.
       setIsExecuting(true);
       isExecutingRef.current = true;
+      // Pin the spinner to the launching tab (#222).
+      setExecutingTabId(currentTabId ?? null);
 
       // Declare execution state at the top so both libpq and CLI paths can reference them
       let rows: any[] = [];
@@ -1029,17 +1138,48 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       const isSelect = isSelectLike(queryToRun);
       const { isTruncate, isDelete, hasWhere, isDestructive } = classifyDestructive(queryToRun);
 
-      // Resolve credentials (shared between libpq and CLI paths)
-      let username = actualConnection.username || "";
-      let password = actualConnection.password || "";
-      if (actualConnection.vaultCredentialId) {
-        const vaultCred = vaultCredentials.find(vc => vc.id === actualConnection.vaultCredentialId);
-        if (vaultCred) {
-          username = vaultCred.username || "";
-          password = vaultCred.password || "";
+      // Resolve credentials + effective endpoint (shared between libpq and
+      // CLI paths). A tab targeting a never-connected connection lazily
+      // establishes it here — SSH tunnel, vault reload, version detection —
+      // so queries work without a manual sidebar connect. The globally
+      // connected fast path is untouched (reuses currentDb + in-memory
+      // creds). `ensured` is null only when reusing the live global handle.
+      let ensured: EnsuredConnection | null = null;
+      if (targetConn || !currentDb) {
+        try {
+          ensured = await ensureConnectionDb(
+            actualConnection.id,
+            actualDatabase || actualConnection.database,
+          );
+        } catch (ensureErr) {
+          // PSQL-console entries (`type: "psql"`) may not be libpq-usable;
+          // the CLI path can still proceed binary-only (stored credentials +
+          // system-psql version fallback), so don't fail the run here. Every
+          // other engine needs the handle — surface the real error.
+          if (!useCliPath || actualConnection.type !== "psql") throw ensureErr;
+          ensured = null;
         }
       }
-      const port = actualConnection.port || getDefaultPort(actualConnection.type);
+      let username: string;
+      let password: string;
+      let port: number;
+      let cliHost: string;
+      if (ensured) {
+        ({ username, password, port } = ensured);
+        cliHost = ensured.host;
+      } else {
+        username = actualConnection.username || "";
+        password = actualConnection.password || "";
+        if (actualConnection.vaultCredentialId) {
+          const vaultCred = vaultCredentials.find(vc => vc.id === actualConnection.vaultCredentialId);
+          if (vaultCred) {
+            username = vaultCred.username || "";
+            password = vaultCred.password || "";
+          }
+        }
+        port = actualConnection.port || getDefaultPort(actualConnection.type);
+        cliHost = actualConnection.host || "localhost";
+      }
       
       // ── CLI path for psql type ──────────────────────────────────────────────
       if (useCliPath) {
@@ -1057,16 +1197,21 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         let currentPsqlExpanded = currentTab?.psqlExpanded ?? false;
         
         // Resolve major version from three sources (most reliable first):
-        // 1. Stale-check: re-detect from live libpq connection if currentDb is available
+        // 1. The lazily-ensured handle for THIS connection (correct server —
+        //    currentDb may belong to a different connection entirely)
         // 2. Pre-stored: serverMajorVersion captured on connect
         // 3. System binary as last resort
-        let majorVersion: number | null = actualConnection.serverMajorVersion || null;
+        // `ensureConnectionDb` persists a fresh detection via updateConnection,
+        // so prefer its returned connection object over the render-time one.
+        let majorVersion: number | null =
+          ensured?.connection.serverMajorVersion ?? actualConnection.serverMajorVersion ?? null;
         logger.debug("[CLI Path] Initial majorVersion:", majorVersion);
 
-        if (majorVersion === null && currentDb) {
-          logger.debug("[CLI Path] Detecting major version via currentDb.select...");
+        const versionDb = ensured?.db ?? currentDb;
+        if (majorVersion === null && versionDb) {
+          logger.debug("[CLI Path] Detecting major version via live libpq handle...");
           try {
-            const verRows = await currentDb.select("SELECT (regexp_matches(version(), E'^PostgreSQL (\\d+)'))[1]::int AS major") as any[];
+            const verRows = await versionDb.select("SELECT (regexp_matches(version(), E'^PostgreSQL (\\d+)'))[1]::int AS major") as any[];
             majorVersion = verRows[0]?.major || null;
             logger.debug("[CLI Path] SQL check result:", majorVersion);
           } catch (e) {
@@ -1104,8 +1249,11 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
             psqlOutputRef.current = [];
             setPsqlOutput([]);
           }
-          setIsExecuting(false);
-      isExecutingRef.current = false;
+          if (gen === executionGenRef.current) {
+            setIsExecuting(false);
+            isExecutingRef.current = false;
+            setExecutingTabId(null);
+          }
           return;
         }
 
@@ -1141,8 +1289,11 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               psqlOutputRef.current = [];
               setPsqlOutput([]);
             }
-            setIsExecuting(false);
-      isExecutingRef.current = false;
+            if (gen === executionGenRef.current) {
+              setIsExecuting(false);
+              isExecutingRef.current = false;
+              setExecutingTabId(null);
+            }
             return;
           }
           appendPsqlOutput([`Downloading CLI tool ${majorVersion}...`]);
@@ -1168,8 +1319,11 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               psqlOutputRef.current = [];
               setPsqlOutput([]);
             }
-            setIsExecuting(false);
-      isExecutingRef.current = false;
+            if (gen === executionGenRef.current) {
+              setIsExecuting(false);
+              isExecutingRef.current = false;
+              setExecutingTabId(null);
+            }
             return;
           }
         } else if (!toolStatus.available) {
@@ -1209,8 +1363,11 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                 psqlOutputRef.current = [];
                 setPsqlOutput([]);
               }
-              setIsExecuting(false);
-              isExecutingRef.current = false;
+              if (gen === executionGenRef.current) {
+                setIsExecuting(false);
+                isExecutingRef.current = false;
+                setExecutingTabId(null);
+              }
               return;
             }
             // User clicked "Check Again" — re-check after potential install
@@ -1219,7 +1376,8 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           // Fall through to execute when psql is now available
         }
         
-        const cliHost = actualConnection.host || "localhost";
+        // `cliHost`/`port`/`username`/`password` come from the shared
+        // resolution above — the SSH-tunnel endpoint when applicable.
         // currentCliDatabase is already defined above, potentially updated by \c command
         logger.debug("[CLI Path] Using database for execution:", currentCliDatabase);
         
@@ -1364,7 +1522,9 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
 
         if (isRunAll && statementsToRun.length > 0) {
           for (let i = 0; i < statementsToRun.length; i++) {
-            if (cancelFlagRef.current) break;
+            // Bail on cancel OR supersession: an abandoned run must stop even
+            // if a newer run already cleared the shared cancel flag (#212).
+            if (cancelFlagRef.current || runCancelled.current || gen !== executionGenRef.current) break;
             const stmt = statementsToRun[i];
 
             // Handle meta-commands (\c, \x) entirely in the frontend; don't pass to psql.
@@ -1407,7 +1567,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
             error: mr.error,
             executionTime: 0
           })));
-          if (currentTabId) updateTabState(currentTabId, { statementResults });
+          if (currentTabId) appendGlyphResults(currentTabId, statementResults);
           const selectResults = multiResults.filter(r => r.rows && r.rows.length > 0);
           if (selectResults.length > 0) {
             rows = selectResults[0].rows || [];
@@ -1447,14 +1607,17 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                 psqlOutputRef.current = [];
                 setPsqlOutput([]);
               }
-              setIsExecuting(false);
-              isExecutingRef.current = false;
+              if (gen === executionGenRef.current) {
+                setIsExecuting(false);
+                isExecutingRef.current = false;
+                setExecutingTabId(null);
+              }
               return;
             }
 
             appendPsqlOutput([`Watching: ${queryToWatch} (every ${intervalSec}s). Press Stop to cancel.`]);
             
-            while (!cancelFlagRef.current && isExecutingRef.current) {
+            while (!cancelFlagRef.current && !runCancelled.current && gen === executionGenRef.current && isExecutingRef.current) {
               try {
                 // psql \watch typically shows the grid output repeatedly
                 await cliExecStmt(queryToWatch, true, currentPsqlExpanded, currentCliDatabase);
@@ -1466,7 +1629,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               // Non-blocking sleep with cancellation check
               const startWait = Date.now();
               while (Date.now() - startWait < intervalMs) {
-                if (cancelFlagRef.current || !isExecutingRef.current) break;
+                if (cancelFlagRef.current || runCancelled.current || gen !== executionGenRef.current || !isExecutingRef.current) break;
                 await new Promise(r => setTimeout(r, 100));
               }
             }
@@ -1489,8 +1652,11 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               psqlOutputRef.current = [];
               setPsqlOutput([]);
             }
-            setIsExecuting(false);
-            isExecutingRef.current = false;
+            if (gen === executionGenRef.current) {
+              setIsExecuting(false);
+              isExecutingRef.current = false;
+              setExecutingTabId(null);
+            }
             return;
           }
 
@@ -1513,8 +1679,11 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                 psqlOutputRef.current = [];
                 setPsqlOutput([]);
               }
-              setIsExecuting(false);
-              isExecutingRef.current = false;
+              if (gen === executionGenRef.current) {
+                setIsExecuting(false);
+                isExecutingRef.current = false;
+                setExecutingTabId(null);
+              }
               return;
             }
 
@@ -1524,8 +1693,11 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               rows = cliRows ?? [];
               rowsAffected = rows.length;
               statementResults.push({ lineNumber: stmtInfo.lineNumber, status: 'success', rowCount: rowsAffected, executionTime: Date.now() - stmtStartTime });
-              // Store columns for the ResultPanel
-              if (currentTabId) updateTabState(currentTabId, { statementResults, columns: cliCols ?? [] });
+              // Store columns for the ResultPanel; glyphs accumulate (#223).
+              if (currentTabId) {
+                appendGlyphResults(currentTabId, statementResults);
+                updateTabState(currentTabId, { columns: cliCols ?? [] });
+              }
               setLastColumns(cliCols ?? []);
             } else {
               const { rowsAffected: affected } = await cliExecStmt(queryToRun, false, currentPsqlExpanded, currentCliDatabase || "");
@@ -1533,7 +1705,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               setSuccess(isDoBlock ? "DO" : `Query executed successfully. ${rowsAffected} rows affected.`);
               rows = [];
               statementResults.push({ lineNumber: stmtInfo.lineNumber, status: 'success', rowsAffected, executionTime: Date.now() - stmtStartTime });
-              if (currentTabId) updateTabState(currentTabId, { statementResults });
+              if (currentTabId) appendGlyphResults(currentTabId, statementResults);
             }
           } catch (stmtErr: any) {
             // Show the error in the psql terminal
@@ -1557,17 +1729,21 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                 psqlOutputRef.current = [];
                 setPsqlOutput([]);
               }
-              setIsExecuting(false);
-              isExecutingRef.current = false;
+              if (gen === executionGenRef.current) {
+                setIsExecuting(false);
+                isExecutingRef.current = false;
+                setExecutingTabId(null);
+              }
               return;
           }
-          if (currentTabId) updateTabState(currentTabId, { statementResults });
+          if (currentTabId) appendGlyphResults(currentTabId, statementResults);
         }
         
         // Skip the libpq block entirely
-        // Jump to the post-execution section
+        // Jump to the post-execution section. A cancelled/superseded run bails
+        // silently — the newer run (or the cancel itself) owns the UI (#212).
         if (intervalId) clearInterval(intervalId);
-        if (cancelFlagRef.current) return;
+        if (cancelFlagRef.current || runCancelled.current || gen !== executionGenRef.current) return;
         
         // CLI path: results go to psqlOutput (terminal) only, not to the ResultsPanel grid
         const duration = Date.now() - startTime;
@@ -1602,8 +1778,11 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         addQuery({ connectionId: actualConnection.id, connectionName: actualConnection.name, query: queryToRun, success: true, duration, rowCount: rowsAffected });
         
         // End early — skip the libpq execution block
-        setIsExecuting(false);
-      isExecutingRef.current = false;
+        if (gen === executionGenRef.current) {
+          setIsExecuting(false);
+          isExecutingRef.current = false;
+          setExecutingTabId(null);
+        }
         return;
       }
       
@@ -1611,22 +1790,15 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       // Use the transaction-scoped connection if a transaction is active for this connection
       if (txState.active && txDbRef.current && txContextRef.current?.connectionId === actualConnection.id && txContextRef.current?.database === actualDatabase) {
         db = txDbRef.current;
-      } else if (!db || targetConn) {
-        const Database = (await import("@tauri-apps/plugin-sql")).default;
-        let connectionString = "";
-        
-        const encodedUser = encodeURIComponent(username);
-        const encodedPass = encodeURIComponent(password);
-        
-        if (actualConnection.type === "sqlite") {
-          connectionString = `sqlite:${actualConnection.filepath || getDefaultDatabaseName()}`;
-        } else if (["postgres", "supabase", "cockroach"].includes(actualConnection.type)) {
-          connectionString = `postgres://${encodedUser}:${encodedPass}@${actualConnection.host}:${port}/${actualDatabase || actualConnection.database}`;
-        } else if (["mysql", "mariadb"].includes(actualConnection.type)) {
-          connectionString = `mysql://${encodedUser}:${encodedPass}@${actualConnection.host}:${port}/${actualDatabase || actualConnection.database}`;
-        }
-        
-        db = await Database.load(connectionString);
+      } else if (ensured) {
+        // Tab-target (or unconnected-global) run: the lazily-established
+        // handle — SSH tunnel, correct credentials and database included.
+        // Established up front so this never throws here.
+        db = ensured.db;
+      } else if (!db) {
+        // Unreachable: `ensured` covers every case where `db` starts null
+        // (tab target, or no live global handle). Defensive only.
+        throw new Error("No database connection selected");
       }
 
       // Check global permission
@@ -1741,9 +1913,9 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
             executionTime: 0
           })));
           
-          // Store statement results for gutter glyphs
+          // Store statement results for gutter glyphs (accumulate #223)
           if (currentTabId) {
-            updateTabState(currentTabId, { statementResults });
+            appendGlyphResults(currentTabId, statementResults);
           }
           
           // Combine results - use first SELECT result, or show counts for all
@@ -1783,9 +1955,9 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
             });
           }
           
-          // Store statement results for gutter glyphs
+          // Store statement results for gutter glyphs (accumulate #223)
           if (currentTabId) {
-            updateTabState(currentTabId, { statementResults });
+            appendGlyphResults(currentTabId, statementResults);
           }
         }
 
@@ -1986,8 +2158,10 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       let errorMsg = typeof err === 'string' ? err : err?.message || JSON.stringify(err) || "Failed to execute query";
       
       // Translate cryptic driver errors into actionable user advice
+      let isConnectionLost = false;
       if (errorMsg.includes("closed pool") || errorMsg.includes("connection closed") || errorMsg.includes("Broken pipe")) {
         errorMsg = "Connection Lost: The database cluster has closed the connection pool (session timeout). Please click 'Connect' again in the Database Explorer to refresh the link.";
+        isConnectionLost = true;
       } else if (errorMsg.includes("password authentication failed")) {
         errorMsg = `Authentication Failure: Access denied for user "${actualConnection.username}". Please verify your credentials in the connection settings or vault.`;
       } else if (errorMsg.includes("could not connect to server")) {
@@ -2032,9 +2206,17 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         }
       }
       
+      if (gen !== executionGenRef.current) return; // cancelled/superseded: leave UI to the newer run
+      if (isConnectionLost) {
+        // Drop the cached lazy handle so the next run reconnects instead of
+        // reusing the dead pool. Safe: single-flight execution means no newer
+        // run can be using it (a cancel would have made this run stale above).
+        await dropCachedConnection(actualConnection.id);
+      }
       setError(errorMsg);
       if (currentTabId) {
-        // Add error to statement results if we have line info
+        // Add error to statement results if we have line info. Merge into any
+        // partial marks from a multi-statement run (#223) instead of wiping.
         const errorLineNumber = statementInfos?.[0]?.lineNumber || 1;
         const errorStatementResult: StatementResult = {
           lineNumber: errorLineNumber,
@@ -2042,20 +2224,15 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           error: errorMsg,
           executionTime: duration
         };
-        
-        // If we already have partial results from multi-statement execution, update them
-        // Note: statementResults is inside the inner try block, not accessible here.
-        // Start with the error result.
-        const updatedStatementResults: StatementResult[] = [errorStatementResult];
-        
-        updateTabState(currentTabId, { 
-          error: errorMsg, 
-          success: null, 
+
+        appendGlyphResults(currentTabId, [errorStatementResult]);
+        updateTabState(currentTabId, {
+          error: errorMsg,
+          success: null,
           executionTime: duration,
-          statementResults: updatedStatementResults,
-          lastExecutedStatement: { 
-            lineNumber: errorLineNumber, 
-            status: 'error' 
+          lastExecutedStatement: {
+            lineNumber: errorLineNumber,
+            status: 'error'
           }
         });
       }
@@ -2071,20 +2248,17 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     } finally {
       if (intervalId) clearInterval(intervalId);
       // Only the latest generation may clear shared run state. A superseded
-      // (stale) run reaching its finally must NOT reset cancelFlagRef or the
-      // executing flags, or it would wipe the state a newer in-flight run set.
+      // (stale) run reaching its finally must NOT touch shared state at all —
+      // a newer run owns it (clearing the gate here would let a third run
+      // double-execute alongside the newer one).
       if (gen === executionGenRef.current) {
         cancelFlagRef.current = false;
         setIsExecuting(false);
         isExecutingRef.current = false;
-      } else {
-        // Stale (cancelled) run: free the execution gate so new runs can
-        // start, but leave cancelFlagRef alone — a newer run already
-        // cleared it (or will set its own).
-        isExecutingRef.current = false;
+        setExecutingTabId(null);
       }
     }
-  }, [activeConnection, selectedDatabase, addQuery, currentDb, vaultCredentials, settings, confirmDialog]);
+  }, [activeConnection, selectedDatabase, addQuery, currentDb, vaultCredentials, settings, confirmDialog, appendGlyphResults, ensureConnectionDb, dropCachedConnection]);
 
   const cancelQuery = useCallback(() => {
     // Signal per-run cancel token so the libpq run-all loop stops early.
@@ -2096,16 +2270,14 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     // Also set the global flag, which the CLI psql path (run-all, \watch,
     // post-exec bail, catch block) still checks as its cancel signal.
     cancelFlagRef.current = true;
-    // Don't clear isExecutingRef here — doing so would let a new run start
-    // before the cancelled run's async loop settles. The execution gate
-    // stays held until the cancelled run's finally block runs (which checks
-    // the generation and only clears isExecutingRef for stale runs).
-    //
-    // Bump generation so the abandoned run's finally block no-ops UI state
-    // updates (it won't clear cancelFlagRef or setIsExecuting, but WILL
-    // clear isExecutingRef so new runs can start once the stale async
-    // work settles).
+    // Release the re-entrancy gate immediately (#212) — the old code held it
+    // until the abandoned run's async work settled, so every subsequent Run
+    // was silently swallowed (toolbar showed "Run" but nothing executed).
+    // The bumped generation makes the abandoned run's catch/finally no-op,
+    // so its late return can't clobber whatever runs after the cancel.
     executionGenRef.current++;
+    isExecutingRef.current = false;
+    setExecutingTabId(null);
     setIsExecuting(false);
     setError("Query execution cancelled by user.");
     setExecutionTime(runningTimeMs);
@@ -2327,7 +2499,12 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               targetDatabase: t.target?.database,
               usePsql: t.usePsql ?? false,
             }));
-            await invokeCmd("save_sessions", { tabs, activeTabId: activeTabIdRef.current ?? null });
+            await invokeCmd("save_sessions", {
+              tabs,
+              activeTabId: activeTabIdRef.current ?? null,
+              activeConnectionId: activeConnRef.current?.id ?? null,
+              activeDatabase: selectedDbRef.current ?? null,
+            });
           } catch { /* non-critical */ }
 
           const dirty = getDirtyTabs(queryTabsRef.current);
@@ -2372,7 +2549,12 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                 targetDatabase: t.target?.database,
                 usePsql: t.usePsql ?? false,
               }));
-              await invokeCmd("save_sessions", { tabs: cleanTabs, activeTabId: activeTabIdRef.current ?? null });
+              await invokeCmd("save_sessions", {
+                tabs: cleanTabs,
+                activeTabId: activeTabIdRef.current ?? null,
+                activeConnectionId: activeConnRef.current?.id ?? null,
+                activeDatabase: selectedDbRef.current ?? null,
+              });
             } catch { /* non-critical */ }
             try {
               await getCurrentWindow().destroy();
@@ -2435,7 +2617,18 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
   }, [tableSchema, activeTableName]);
 
   const handleUpdateRow = useCallback(async (oldRow: any, newRow: any) => {
-    if (!activeConnection) return;
+    // Quote with the query's actual target connection dialect, not the
+    // globally active one — a tab can target a different engine (e.g. MySQL
+    // needs backticks where PostgreSQL needs double quotes). Mirrors the
+    // saveConn/conn resolution in handleSave; executeQuery resolves the same
+    // target, so quoting must match it.
+    const activeTabForUpdate = queryTabs.find(t => t.id === activeTabId);
+    const updateTarget = activeTabForUpdate?.target;
+    const updateConn = (updateTarget
+      ? connections.find(c => c.id === updateTarget.connectionId)
+      : activeConnection) || activeConnection;
+    if (!updateConn) return;
+    const uqid = (name: string) => quoteIdentifier(name, (updateConn.type || "postgres") as DatabaseType);
     if (!activeTableName) {
       setError("Table context missing: Select a table in the explorer or run a SELECT FROM query to enable edits.");
       return;
@@ -2451,25 +2644,25 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     
     for (const col of columns) {
       if (String(oldRow[col]) !== String(newRow[col])) {
-        setClauses.push(`${qid(col)} = ${formatSqlLiteral(newRow[col])}`);
+        setClauses.push(`${uqid(col)} = ${formatSqlLiteral(newRow[col])}`);
       }
     }
     
     if (setClauses.length === 0) return;
     
     if (pk && oldRow[pk] !== undefined && oldRow[pk] !== null) {
-      whereClauses.push(`${qid(pk)} = ${formatSqlLiteral(oldRow[pk])}`);
+      whereClauses.push(`${uqid(pk)} = ${formatSqlLiteral(oldRow[pk])}`);
     } else {
       for (const col of columns) {
         const val = oldRow[col];
-        if (val === null) whereClauses.push(`${qid(col)} IS NULL`);
-        else whereClauses.push(`${qid(col)} = ${formatSqlLiteral(val)}`);
+        if (val === null) whereClauses.push(`${uqid(col)} IS NULL`);
+        else whereClauses.push(`${uqid(col)} = ${formatSqlLiteral(val)}`);
       }
     }
     
     const sqlSet = setClauses.join(", ");
     const sqlWhere = whereClauses.length > 0 ? whereClauses.join(" AND ") : "TRUE";
-    const updateQuery = `UPDATE ${qid(activeTableName)} SET ${sqlSet} WHERE ${sqlWhere}`;
+    const updateQuery = `UPDATE ${uqid(activeTableName)} SET ${sqlSet} WHERE ${sqlWhere}`;
 
     const confirmed = await confirmDialog.confirm({
       title: "Confirm Changes",
@@ -2502,10 +2695,17 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     } catch (err) {
       throw err;
     }
-  }, [activeTableName, activeConnection, executeQuery, confirmDialog]);
+  }, [activeTableName, activeConnection, executeQuery, confirmDialog, connections, queryTabs, activeTabId]);
 
   const handleDeleteRow = useCallback(async (row: any) => {
-    if (!activeConnection) return;
+    // Same target-connection quoting as handleUpdateRow (see above).
+    const activeTabForDelete = queryTabs.find(t => t.id === activeTabId);
+    const deleteTarget = activeTabForDelete?.target;
+    const deleteConn = (deleteTarget
+      ? connections.find(c => c.id === deleteTarget.connectionId)
+      : activeConnection) || activeConnection;
+    if (!deleteConn) return;
+    const dqid = (name: string) => quoteIdentifier(name, (deleteConn.type || "postgres") as DatabaseType);
     if (!activeTableName) {
       setError("Table context missing: Cannot delete row without target table information.");
       return;
@@ -2518,16 +2718,16 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     const whereClauses: string[] = [];
     
     if (pk && cleanRow[pk] !== undefined && cleanRow[pk] !== null) {
-      whereClauses.push(`${qid(pk)} = ${formatSqlLiteral(cleanRow[pk])}`);
+      whereClauses.push(`${dqid(pk)} = ${formatSqlLiteral(cleanRow[pk])}`);
     } else {
       for (const col of columns) {
         const val = cleanRow[col];
-        if (val === null) whereClauses.push(`${qid(col)} IS NULL`);
-        else whereClauses.push(`${qid(col)} = ${formatSqlLiteral(val)}`);
+        if (val === null) whereClauses.push(`${dqid(col)} IS NULL`);
+        else whereClauses.push(`${dqid(col)} = ${formatSqlLiteral(val)}`);
       }
     }
     
-    const deleteQuery = `DELETE FROM ${qid(activeTableName)} WHERE ` + (whereClauses.length > 0 ? whereClauses.join(" AND ") : "FALSE");
+    const deleteQuery = `DELETE FROM ${dqid(activeTableName)} WHERE ` + (whereClauses.length > 0 ? whereClauses.join(" AND ") : "FALSE");
     
     try {
       setSuppressTabSwitch(true);
@@ -2542,10 +2742,17 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     } finally {
       setSuppressTabSwitch(false);
     }
-  }, [activeTableName, activeConnection, executeQuery]);
+  }, [activeTableName, activeConnection, executeQuery, connections, queryTabs, activeTabId]);
 
   const handleSave = useCallback(async (currentResults: any[]) => {
-    if (!activeTableName || !activeConnection) return;
+    if (!activeTableName) return;
+    // Resolve the save connection first: a tab targeting a known connection
+    // is savable even with no global connection (lazy ensure below).
+    const saveTab = queryTabs.find(t => t.id === activeTabId);
+    const saveTargetConn = saveTab?.target
+      ? connections.find(c => c.id === saveTab.target!.connectionId)
+      : activeConnection;
+    if (!saveTargetConn) return;
     
     const newRows = currentResults.filter(r => r._isNew);
     const modifiedRows = currentResults.filter(r => r._isModified && !r._isNew);
@@ -2572,33 +2779,17 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       // when the tab's target points to a different connection than the
       // globally active one. Without this, INSERT/UPDATE would use the wrong
       // database or wrong server credentials.
+      // Lazily established (SSH tunnel included), so saving works on tabs
+      // whose connection was never manually connected.
       const activeTab = queryTabs.find(t => t.id === activeTabId);
       const targetConn = activeTab?.target;
       const saveConn = targetConn
         ? connections.find(c => c.id === targetConn.connectionId)
         : activeConnection;
-      const saveDbName = targetConn?.database || selectedDatabase || activeConnection.database;
+      const saveDbName = targetConn?.database || selectedDatabase || (activeConnection?.database ?? "");
       const conn = saveConn || activeConnection;
-      let username = conn.username || "";
-      let password = conn.password || "";
-      if (conn.vaultCredentialId) {
-        const vaultCred = vaultCredentials.find(vc => vc.id === conn.vaultCredentialId);
-        if (vaultCred) { username = vaultCred.username || ""; password = vaultCred.password || ""; }
-      }
-      const encodedUser = encodeURIComponent(username);
-      const encodedPass = encodeURIComponent(password);
-      const port = conn.port || getDefaultPort(conn.type);
-      const Database = (await import("@tauri-apps/plugin-sql")).default;
-      let connectionString = "";
-      let db: any;
-      if (conn.type === "sqlite") {
-        connectionString = `sqlite:${conn.filepath || "queryden.db"}`;
-      } else if (["postgres", "supabase", "cockroach"].includes(conn.type)) {
-        connectionString = `postgres://${encodedUser}:${encodedPass}@${conn.host}:${port}/${saveDbName}`;
-      } else {
-        connectionString = `mysql://${encodedUser}:${encodedPass}@${conn.host}:${port}/${saveDbName}`;
-      }
-      db = await Database.load(connectionString);
+      if (!conn) return;
+      const db = (await ensureConnectionDb(conn.id, saveDbName)).db;
 
       // Quote with the SAVE connection's dialect, not the globally active
       // one — a tab can target a different engine (e.g. MySQL needs
@@ -2794,7 +2985,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       isExecutingRef.current = false;
       setSuppressTabSwitch(false);
     }
-  }, [activeTableName, activeConnection, selectedDatabase, vaultCredentials, executeQuery, confirmDialog, connections]);
+  }, [activeTableName, activeConnection, selectedDatabase, vaultCredentials, executeQuery, confirmDialog, connections, ensureConnectionDb]);
 
   const handleAddRow = useCallback(async (newRow: any, localOnly = true): Promise<void> => {
     if (localOnly) {
@@ -2820,7 +3011,14 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       return;
     }
     
-    if (!activeTableName || !activeConnection) return;
+    if (!activeTableName) return;
+    // Same target-aware resolution as handleSave: addable without a global
+    // connection when the tab targets a known connection.
+    const addTab = queryTabs.find(t => t.id === activeTabId);
+    const addTargetConn = addTab?.target
+      ? connections.find(c => c.id === addTab.target!.connectionId)
+      : activeConnection;
+    if (!addTargetConn) return;
 
     // Persist directly via the same pattern as handleSave: create a dedicated
     // db connection, run INSERT via db.execute(), then SELECT-refresh on the
@@ -2831,32 +3029,17 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       setSuppressTabSwitch(true);
 
       // ── Build a save-scoped connection (mirrors handleSave Step 1) ──────────
+      // Lazily established (SSH tunnel included) so adds work on tabs whose
+      // connection was never manually connected.
       const activeTab = queryTabs.find(t => t.id === activeTabId);
       const targetConn = activeTab?.target;
       const saveConn = targetConn
         ? connections.find(c => c.id === targetConn.connectionId)
         : activeConnection;
-      const saveDbName = targetConn?.database || selectedDatabase || activeConnection.database;
+      const saveDbName = targetConn?.database || selectedDatabase || (activeConnection?.database ?? "");
       const conn = saveConn || activeConnection;
-      let username = conn.username || "";
-      let password = conn.password || "";
-      if (conn.vaultCredentialId) {
-        const vaultCred = vaultCredentials.find(vc => vc.id === conn.vaultCredentialId);
-        if (vaultCred) { username = vaultCred.username || ""; password = vaultCred.password || ""; }
-      }
-      const encodedUser = encodeURIComponent(username);
-      const encodedPass = encodeURIComponent(password);
-      const port = conn.port || getDefaultPort(conn.type);
-      const Database = (await import("@tauri-apps/plugin-sql")).default;
-      let connectionString = "";
-      if (conn.type === "sqlite") {
-        connectionString = `sqlite:${conn.filepath || "queryden.db"}`;
-      } else if (["postgres", "supabase", "cockroach"].includes(conn.type)) {
-        connectionString = `postgres://${encodedUser}:${encodedPass}@${conn.host}:${port}/${saveDbName}`;
-      } else {
-        connectionString = `mysql://${encodedUser}:${encodedPass}@${conn.host}:${port}/${saveDbName}`;
-      }
-      db = await Database.load(connectionString);
+      if (!conn) return;
+      db = (await ensureConnectionDb(conn.id, saveDbName)).db;
 
       // Quote with this operation's connection dialect (see handleSave).
       const addType = conn.type || "postgres";
@@ -2895,11 +3078,20 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     } finally {
       setSuppressTabSwitch(false);
     }
-  }, [activeTableName, activeConnection, executeQuery, confirmDialog, lastColumns, results, vaultCredentials, connections, selectedDatabase, queryTabs, activeTabId]);
+  }, [activeTableName, activeConnection, executeQuery, confirmDialog, lastColumns, results, vaultCredentials, connections, selectedDatabase, queryTabs, activeTabId, ensureConnectionDb]);
 
   const handleFkCellClick = useCallback((fk: { refTable: string; refColumns: string[] }, fkValue: any) => {
-    if (!currentDb || !activeConnection) return;
-    const dbType = (activeConnection?.type || "postgres") as DatabaseType;
+    // Quote with the query's actual target connection dialect (same reason
+    // as handleUpdateRow/handleDeleteRow): executeQuery resolves the tab's
+    // target connection, so quoting must match it, not the global one.
+    // The query itself lazily connects, so no global handle is required.
+    const activeTabForFk = queryTabs.find(t => t.id === activeTabId);
+    const fkTarget = activeTabForFk?.target;
+    const fkConn = (fkTarget
+      ? connections.find(c => c.id === fkTarget.connectionId)
+      : activeConnection) || activeConnection;
+    if (!fkConn) return;
+    const dbType = (fkConn?.type || "postgres") as DatabaseType;
     const qTable = quoteIdentifier(fk.refTable, dbType);
     const whereClause = fk.refColumns.map((refCol, i) => {
       const qCol = quoteIdentifier(refCol, dbType);
@@ -2910,14 +3102,20 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     setActiveTableName(fk.refTable);
     lastSelectQueryRef.current = query;
     executeQuery(query);
-  }, [currentDb, activeConnection, executeQuery]);
+  }, [activeConnection, executeQuery, connections, queryTabs, activeTabId]);
 
   const handleFormatSql = useCallback(() => {
     window.dispatchEvent(new CustomEvent("format-sql"));
   }, []);
 
   const handleExplainPlan = useCallback(async () => {
-    if (!activeConnection) {
+    // Tab-target connections work without a global connect: execution below
+    // lazily establishes the target.
+    const explainTab = queryTabs.find(t => t.id === activeTabId);
+    const explainConn = (explainTab?.target
+      ? connections.find(c => c.id === explainTab.target!.connectionId)
+      : activeConnection) || activeConnection;
+    if (!explainConn) {
       setError("Connect to a database first");
       return;
     }
@@ -2936,19 +3134,25 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     }
 
     let explainQuery = "";
-    if (["postgres", "supabase"].includes(activeConnection.type)) {
+    if (["postgres", "supabase"].includes(explainConn.type)) {
       explainQuery = `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${queryToExplain}`;
-    } else if (activeConnection.type === "mysql") {
+    } else if (explainConn.type === "mysql") {
       explainQuery = `EXPLAIN FORMAT=JSON ${queryToExplain}`;
     } else {
       explainQuery = `EXPLAIN ${queryToExplain}`;
     }
 
     await executeQuery(explainQuery);
-  }, [activeConnection, executeQuery]);
+  }, [activeConnection, executeQuery, connections, queryTabs, activeTabId]);
 
   const handleVisualOptimize = useCallback(async () => {
-    if (!activeConnection) {
+    // Tab-target connections work without a global connect (lazy handle below).
+    const optimizeTab = queryTabs.find(t => t.id === activeTabId);
+    const optimizeTarget = optimizeTab?.target;
+    const optimizeConn = (optimizeTarget
+      ? connections.find(c => c.id === optimizeTarget.connectionId)
+      : activeConnection) || activeConnection;
+    if (!optimizeConn) {
       setError("Connect to a database first");
       return;
     }
@@ -2968,7 +3172,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
 
     // Build EXPLAIN query based on database type
     let explainQuery = "";
-    const dbType = activeConnection.type;
+    const dbType = optimizeConn.type;
 
     if (["postgres", "supabase", "cockroach"].includes(dbType)) {
       explainQuery = `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${queryToExplain}`;
@@ -2989,10 +3193,15 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     const startTime = Date.now();
 
     try {
-      if (!currentDb) {
-        throw new Error("No active database connection.");
-      }
-      const rows = await currentDb.select(explainQuery) as any[];
+      // Prefer the tab target's lazily-established handle (correct server even
+      // when the globally connected database is a different connection).
+      const optimizeDb = optimizeTarget || !currentDb
+        ? (await ensureConnectionDb(
+            optimizeConn.id,
+            optimizeTarget?.database || selectedDatabase || optimizeConn.database,
+          )).db
+        : currentDb;
+      const rows = await optimizeDb.select(explainQuery) as any[];
       
       // Debug: Log the raw EXPLAIN result
       logger.debug(`[VisualOptimizer] DB Type: ${dbType}`);
@@ -3043,7 +3252,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       setIsExecuting(false);
       isExecutingRef.current = false;
     }
-  }, [activeConnection, selectedDatabase, currentDb]);
+  }, [activeConnection, selectedDatabase, currentDb, connections, queryTabs, activeTabId, ensureConnectionDb]);
 
   // Handle variable dialog confirmation: substitute variables and re-run query
   const handleVarDialogConfirm = (values: VariableValues, remember: boolean) => {
@@ -3176,10 +3385,11 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         <span className="text-[var(--neutral-11)] whitespace-nowrap">{activeTab?.name || "No Active Tab"}</span>
       </div>
 
-      {/* Combined Tool Window Bar - Top — only when a database is selected.
-          Without a target DB, every action (Run, Format, Explain, Compare,
+      {/* Combined Tool Window Bar - Top — when a database is selected or the
+          active tab targets a known connection (lazy-connect on run).
+          Without either, every action (Run, Format, Explain, Compare,
           Clone, Activity, AI, Save) is either disabled or pointless. See #84. */}
-      {isDatabaseReady && (
+      {(isDatabaseReady || canRunOnTabTarget) && (
       <div className="h-12 flex items-center gap-1 px-2 bg-[var(--surface-panel)] border-b border-[var(--neutral-6)] shrink-0">
         {isExecuting ? (
           <Button variant="destructive" size="sm" onClick={cancelQuery} leftIcon={<Square className="w-3.5 h-3.5" fill="currentColor" />}>
@@ -3193,7 +3403,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               // Always use run-query-smart to get the correct line number from cursor position
               window.dispatchEvent(new CustomEvent("run-query-smart"));
             }}
-            disabled={!activeConnection}
+            disabled={!activeConnection && !canRunOnTabTarget}
             title="Run first statement (Ctrl+Enter in editor for statement at cursor, Ctrl+Shift+Enter for all)"
             leftIcon={<Play className="w-4 h-4" />}
           >
@@ -3351,8 +3561,9 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
               ? tabConnectionName.substring(0, 10) + "..." 
               : tabConnectionName;
             
-            // Determine status for this tab
-            const tabIsExecuting = activeTabId === tab.id && isExecuting;
+            // Determine status for this tab. The running spinner is keyed to
+            // the tab that launched the query (#222), not the active tab.
+            const tabIsExecuting = executingTabId === tab.id && isExecuting;
             const tabHasError = tab.error && activeTabId === tab.id;
             const tabHasSuccess = tab.success && activeTabId === tab.id && !tab.error;
             
@@ -3534,10 +3745,10 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                     <PsqlWindow
                       entries={activeTab.psqlEntries || []}
                       liveOutput={psqlOutput.length > 0 ? psqlOutput : stashPsqlOutputRef.current}
-                      runningCommand={isExecuting ? (runningCmdRef.current || activeTab.query || "") : null}
-                      isExecuting={isExecuting}
+                      runningCommand={activeTabIsExecuting ? (runningCmdRef.current || activeTab.query || "") : null}
+                      isExecuting={activeTabIsExecuting}
                       executionTime={executionTime}
-                      onRun={(q: string) => executeQuery(q)}
+                      onRun={(q: string, info?: { lineNumber: number; statementText: string }) => executeQuery(q, info)}
                       onClear={() => {
                         clearPsqlOutput();
                         if (activeTabId) {
@@ -3567,15 +3778,18 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                   key={activeTabId!}
                   value={activeTab!.query}
                   onChange={updateTabQuery}
-                  onRun={(q: string) => executeQuery(q)}
+                  onRun={(q: string, info?: { lineNumber: number; statementText: string }) => executeQuery(q, info)}
                   connectionName={activeTab?.target?.connectionName || activeConnection?.name || undefined}
                   databaseName={activeTab?.target?.database || selectedDatabase || undefined}
                   tabId={activeTabId!}
                   tabName={activeTab?.name}
-                  isExecuting={isExecuting}
+                  isExecuting={activeTabIsExecuting}
                   hasError={!!error}
                   hasSuccess={!!success}
                   statementResults={activeTab?.statementResults}
+                  onStatementResultsChange={(rs) => {
+                    if (activeTabId) setGlyphResults(activeTabId, rs);
+                  }}
                 />
               </Suspense>
             )
@@ -3589,7 +3803,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           )}
         </Panel>
 
-        {isDatabaseReady && showServices && !activeTab?.usePsql && (
+        {(isDatabaseReady || canRunOnTabTarget) && showServices && !activeTab?.usePsql && (
           <>
             <PanelResizeHandle className="h-1 bg-[var(--neutral-6)] hover:bg-[var(--accent-9)] transition-colors cursor-row-resize select-none shrink-0 data-[resize-handle-state=drag]:bg-[var(--accent-9)] data-[resize-handle-state=hover]:bg-[var(--accent-9)]/60" />
             <Panel minSize={15} maxSize={85} defaultSize={40}>
@@ -3598,7 +3812,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
             error={error}
             successMessage={success}
             multiResults={multiResults}
-            isLoading={isExecuting}
+            isLoading={activeTabIsExecuting}
             executionTime={executionTime}
             tableName={activeTableName || undefined}
             columnTypes={tableColumnTypes?.types}

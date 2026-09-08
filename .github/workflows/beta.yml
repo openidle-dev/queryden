@@ -97,7 +97,10 @@ jobs:
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
           - platform: macos-latest
-            target: aarch64-apple-darwin
+            target: universal-apple-darwin
+            # Universal (fat) binary for Intel + ARM Macs (issue #7);
+            # both rust std targets required (see release.yml).
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
 
     runs-on: ${{ matrix.platform }}
 
@@ -116,7 +119,9 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          # Universal macOS needs both arch slices; every other entry falls
+          # back to its own target triple.
+          targets: ${{ matrix.rust_targets || matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -380,16 +385,21 @@ jobs:
 
           # Tauri's macOS update bundle is named `QueryDen.app.tar.gz`
           # — no architecture in the filename. We only build one macOS
-          # target today (aarch64), so a wildcard without arch is safe
-          # and correct. The old `*aarch64.app.tar.gz` glob silently
+          # target today (universal, issue #7), so a wildcard without arch
+          # is safe and correct. The old `*aarch64.app.tar.gz` glob silently
           # dropped macOS from beta.json (see #112).
+          # The universal tarball serves BOTH updater keys (ARM:
+          # `darwin-aarch64`, Intel: `darwin-x86_64`).
           MAC_TGZ=$(first '*.app.tar.gz')
           MAC_SIG=$(first '*.app.tar.gz.sig')
           if [ -n "$MAC_TGZ" ] && [ -n "$MAC_SIG" ]; then
-            PLATFORMS=$(jq \
-              --arg sig "$(cat "$MAC_SIG")" \
-              --arg url "$BASE_URL/$(basename "$MAC_TGZ")" \
-              '. + {"darwin-aarch64": {signature: $sig, url: $url}}' <<<"$PLATFORMS")
+            for MAC_PLATFORM in darwin-aarch64 darwin-x86_64; do
+              PLATFORMS=$(jq \
+                --arg sig "$(cat "$MAC_SIG")" \
+                --arg url "$BASE_URL/$(basename "$MAC_TGZ")" \
+                --arg platform "$MAC_PLATFORM" \
+                '. + {($platform): {signature: $sig, url: $url}}' <<<"$PLATFORMS")
+            done
           fi
 
           LINUX_APP=$(first '*.AppImage')

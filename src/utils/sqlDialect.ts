@@ -141,14 +141,13 @@ export function stripSqlToCode(sql: string): string {
     }
 
     if (c === "#") {
-      const prev = i === 0 ? "\n" : sql[i - 1];
-      if (prev === "\n" || prev === "\r" || prev === ";" || prev === " " || prev === "\t" || prev === "(") {
-        const start = i;
-        while (i < sql.length && sql[i] !== "\n") i++;
-        blank(start, i);
-        continue;
-      }
-      i++;
+      // MySQL `#` line comment: consume to end of line regardless of the
+      // preceding character (outside strings/quotes, where we never reach
+      // this branch). `SELECT * FROM logs# LIMIT 1` must hide `# LIMIT 1`,
+      // otherwise applyQueryLimit sees a limit that MySQL ignores.
+      const start = i;
+      while (i < sql.length && sql[i] !== "\n") i++;
+      blank(start, i);
       continue;
     }
 
@@ -243,7 +242,9 @@ export function isDoBlock(sql: string): boolean {
 /**
  * Whether the statement returns rows and should go through `db.select()`.
  * Covers SELECT/WITH/SHOW/EXPLAIN/DESCRIBE plus DML with RETURNING
- * (INSERT/UPDATE/DELETE ... RETURNING) and subquery selects.
+ * (INSERT/UPDATE/DELETE ... RETURNING). A DML statement whose only SELECT
+ * is inside a subquery (e.g. `DELETE … WHERE id IN (SELECT …)`) does NOT
+ * return rows and must go through `db.execute()`.
  * DO blocks never count as selects even when their bodies contain
  * SELECT/RETURNING.
  */
@@ -252,7 +253,6 @@ export function isSelectLike(sql: string): boolean {
   const clean = cleanSqlForKeywords(sql);
   if (/^(SELECT|WITH|SHOW|EXPLAIN|DESCRIBE|DESC|VALUES|TABLE)\b/.test(clean)) return true;
   if (/\bRETURNING\b/.test(clean)) return true;
-  if (/\(\s*SELECT\b/.test(clean)) return true;
   return false;
 }
 

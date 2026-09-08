@@ -17,6 +17,7 @@ import { Dialog } from "../ui/Dialog";
 import { useConfirmDialog } from "../ui/ConfirmDialog";
 import { IconButton } from "../ui/IconButton";
 import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
 import { ERDCanvas } from "./ERDCanvas";
 import { useERData, type ERTable } from "./useERData";
 import { TableSelectorDialog } from "./TableSelectorDialog";
@@ -25,6 +26,10 @@ interface ERDDialogProps {
   isOpen: boolean;
   onClose: () => void;
 }
+
+// Radix Select forbids empty-string item values; "All Schemas" (no filter)
+// uses undefined by design, so map it through a non-empty sentinel.
+const ALL_SCHEMAS_SENTINEL = "__all_schemas__";
 
 function extractSchemas(tableNames: string[]): string[] {
   const schemas = new Set<string>();
@@ -356,20 +361,18 @@ export function ERDDialog({ isOpen, onClose }: ERDDialogProps) {
 
               <div className="flex items-center gap-2">
                 {selectedSchemaList.length > 1 && (
-                  <select
-                    className="text-[11px] bg-[var(--surface-base)] border border-[var(--neutral-6)] rounded px-2 py-1 text-[var(--neutral-12)] outline-none"
-                    value={schemaFilter ?? ""}
-                    onChange={(e) =>
-                      setSchemaFilter(e.target.value || undefined)
+                  <Select
+                    selectSize="sm"
+                    className="w-36"
+                    value={schemaFilter ?? ALL_SCHEMAS_SENTINEL}
+                    onValueChange={(v) =>
+                      setSchemaFilter(v === ALL_SCHEMAS_SENTINEL ? undefined : v)
                     }
-                  >
-                    <option value="">All Schemas</option>
-                    {selectedSchemaList.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
+                    options={[
+                      { label: "All Schemas", value: ALL_SCHEMAS_SENTINEL },
+                      ...selectedSchemaList.map((s) => ({ label: s, value: s })),
+                    ]}
+                  />
                 )}
 
                 <div className="relative">

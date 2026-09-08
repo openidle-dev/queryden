@@ -3,6 +3,7 @@ import {
   detectSchemaDotContext,
   detectAliasDotContext,
   matchesQualifiedOrBareName,
+  matchesStaticLabel,
 } from "./completionContext";
 
 const COLUMNS = [
@@ -289,5 +290,27 @@ describe("matchesQualifiedOrBareName — schema-qualified label prefilter", () =
     // the suffix after the first dot is `schema.table`, which `.startsWith("schema")` matches.
     expect(matchesQualifiedOrBareName("db.schema.table", "schema")).toBe(true);
     expect(matchesQualifiedOrBareName("db.schema.table", "table")).toBe(false);
+  });
+});
+
+describe("matchesStaticLabel (schema-free keyword/function fallback)", () => {
+  it("matches prefixes case-insensitively", () => {
+    expect(matchesStaticLabel("SELECT", "sel")).toBe(true);
+    expect(matchesStaticLabel("SELECT", "SEL")).toBe(true);
+    expect(matchesStaticLabel("COUNT", "cou")).toBe(true);
+  });
+
+  it("matches infixes so multi-word keywords survive (e.g. 'join' in 'LEFT JOIN')", () => {
+    expect(matchesStaticLabel("LEFT JOIN", "join")).toBe(true);
+    expect(matchesStaticLabel("ORDER BY", "by")).toBe(true);
+  });
+
+  it("rejects non-matching words", () => {
+    expect(matchesStaticLabel("SELECT", "xyz")).toBe(false);
+    expect(matchesStaticLabel("FROM", "sel")).toBe(false);
+  });
+
+  it("matches everything on empty input (trigger with no word)", () => {
+    expect(matchesStaticLabel("SELECT", "")).toBe(true);
   });
 });

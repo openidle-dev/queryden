@@ -12,6 +12,7 @@ import {
   detectSchemaDotContext,
   detectAliasDotContext,
   matchesQualifiedOrBareName,
+  matchesStaticLabel,
 } from "./completionContext";
 import { resolveStatementAtOffset } from "../../utils/statementAtCursor";
 import { splitStatements } from "../../utils/splitStatements";
@@ -105,6 +106,30 @@ export interface StatementStatus {
   statementText: string;
 }
 
+/**
+ * Static completion entries: SQL keywords + builtin functions. These need no
+ * database schema, so they are suggested even when disconnected (a previous
+ * version only built them inside the schema gate, leaving disconnected users
+ * with zero suggestions of any kind). The schema-backed path reuses the same
+ * lists so both stay in lockstep.
+ */
+const STATIC_KEYWORDS = [
+  "SELECT", "FROM", "WHERE", "JOIN", "LEFT JOIN", "RIGHT JOIN", "INNER JOIN", "CROSS JOIN",
+  "ON", "ORDER BY", "GROUP BY", "HAVING", "INSERT INTO", "VALUES", "UPDATE",
+  "SET", "DELETE FROM", "CREATE TABLE", "ALTER TABLE", "DROP TABLE",
+  "CREATE INDEX", "DROP INDEX", "AS", "DISTINCT", "LIMIT", "OFFSET",
+  "IN", "NOT IN", "LIKE", "ILIKE", "IS NULL", "IS NOT NULL", "AND", "OR", "NOT", "EXISTS", "BETWEEN",
+  "WITH", "RECURSIVE", "UNION", "ALL", "EXCEPT", "INTERSECT"
+];
+
+const STATIC_FUNCTIONS = [
+  "COUNT", "SUM", "AVG", "MAX", "MIN", "NOW", "COALESCE", "NULLIF", "CASE", "RANK", "ROW_NUMBER", "TO_CHAR", "EXTRACT"
+];
+
+function staticFunctionInsertText(fn: string): string {
+  return fn === "CASE" ? "CASE WHEN $1 THEN $2 ELSE $3 END" : fn + "($1)";
+}
+
 interface QueryEditorProps {
   value: string;
   onChange: (value: string) => void;
@@ -121,6 +146,13 @@ interface QueryEditorProps {
     status: 'running' | 'success' | 'error';
   };
   statementResults?: StatementResult[];
+  /**
+   * Writeback for glyph line tracking (#223). The editor moves gutter glyphs
+   * live as text shifts (sticky Monaco decorations) and prunes glyphs whose
+   * block was cut/blanked; it reports the resulting set so tab state stays
+   * in sync across tab switches and remounts.
+   */
+  onStatementResultsChange?: (results: StatementResult[]) => void;
 }
 
 export interface StatementResult {
@@ -256,7 +288,8 @@ export const QueryEditor = memo(function QueryEditor({
   hasError,
   hasSuccess,
   lastExecutedStatement: _lastExecutedStatement,
-  statementResults
+  statementResults,
+  onStatementResultsChange,
 }: QueryEditorProps) {
   const { theme } = useTheme();
   const settings = useSettings();
@@ -310,69 +343,123 @@ export const QueryEditor = memo(function QueryEditor({
     return statementResults.map(r => `${r.lineNumber}:${r.status}:${r.executionTime || 0}`).join(',');
   }, [statementResults]);
 
-  // Effect to update Monaco decorations when statementResults changes (DataGrip-style gutter glyphs)
+  // Live mirror for the throttled prune listener registered at mount (it
+  // outlives renders, so it must not close over stale props).
+  const onGlyphChangeRef = useRef(onStatementResultsChange);
+  onGlyphChangeRef.current = onStatementResultsChange;
+
+  // Gutter glyph bookkeeping (#223): decoration id -> { line, status, result }.
+  // Decorations are sticky (NeverGrowsWhenTypingAtEdges), so survivors ride
+  // along as text shifts without being re-pinned. The result snapshot is
+  // stored per decoration so the throttled prune never reads stale props
+  // (two prunes can fire before the parent re-renders with written-back
+  // lines — looking the result up by line in current props would miss and
+  // wrongly drop the glyph).
+  const glyphMetaRef = useRef(new Map<string, { lineNumber: number; status: string; result: StatementResult }>());
+
+  const glyphClassFor = (result: StatementResult): { cls: string; hover: string; tooltip: string } => {
+    const { status, rowCount, rowsAffected, error, executionTime } = result;
+    if (status === 'success') {
+      let tooltip = '';
+      if (rowCount !== undefined) {
+        tooltip = `${rowCount} row${rowCount !== 1 ? 's' : ''} retrieved`;
+      } else if (rowsAffected !== undefined) {
+        tooltip = `${rowsAffected} row${rowsAffected !== 1 ? 's' : ''} affected`;
+      }
+      if (executionTime !== undefined && executionTime > 0) {
+        tooltip += tooltip ? ` in ${executionTime}ms` : `${executionTime}ms`;
+      }
+      return { cls: 'statement-glyph-success', hover: 'Query succeeded', tooltip };
+    }
+    if (status === 'error') {
+      return { cls: 'statement-glyph-error', hover: 'Query failed', tooltip: error || 'Error executing query' };
+    }
+    return { cls: 'statement-glyph-running', hover: 'Query running...', tooltip: '' };
+  };
+
+  // Reconcile Monaco gutter glyphs with statementResults (DataGrip-style).
+  // Only creates new / removes gone glyphs — survivors keep their live,
+  // Monaco-tracked decorations, so marks follow in-place edits instead of
+  // snapping back to frozen lines.
   useEffect(() => {
     if (!editorRef.current || !monacoRef.current) return;
-    
+
     const editor = editorRef.current;
     const monaco = monacoRef.current;
-    
-    // Always clear existing decorations first
-    if (decorationsRef.current.length > 0) {
-      decorationsRef.current = editor.deltaDecorations(decorationsRef.current, []);
-    }
-    
+
+    const clearAllGlyphs = () => {
+      const ids = [...glyphMetaRef.current.keys()];
+      if (ids.length > 0) {
+        editor.deltaDecorations(ids, []);
+        glyphMetaRef.current.clear();
+      }
+      decorationsRef.current = [];
+    };
+
     // During execution, show no glyph — wait for results
-    if (isExecuting) return;
-    
-    // Only create gutter glyphs when statementResults has data (after execution completes)
-    if (!statementResults || statementResults.length === 0) {
+    if (isExecuting) {
+      clearAllGlyphs();
       return;
     }
-    
-    // Create decorations for all statement results (DataGrip-style)
-    const decorations: any[] = [];
-    
-    statementResults.forEach((result) => {
-      const { lineNumber, status, rowCount, rowsAffected, error, executionTime } = result;
-      
-      let glyphClassName = 'statement-glyph-running';
-      let hoverMessage = 'Query running...';
-      let tooltip = '';
-      
-      if (status === 'success') {
-        glyphClassName = 'statement-glyph-success';
-        hoverMessage = 'Query succeeded';
-        if (rowCount !== undefined) {
-          tooltip = `${rowCount} row${rowCount !== 1 ? 's' : ''} retrieved`;
-        } else if (rowsAffected !== undefined) {
-          tooltip = `${rowsAffected} row${rowsAffected !== 1 ? 's' : ''} affected`;
-        }
-        if (executionTime !== undefined && executionTime > 0) {
-          tooltip += tooltip ? ` in ${executionTime}ms` : `${executionTime}ms`;
-        }
-      } else if (status === 'error') {
-        glyphClassName = 'statement-glyph-error';
-        hoverMessage = 'Query failed';
-        tooltip = error || 'Error executing query';
+
+    // Only create gutter glyphs when statementResults has data (after execution completes)
+    if (!statementResults || statementResults.length === 0) {
+      clearAllGlyphs();
+      return;
+    }
+
+    const desired = new Map<number, StatementResult>();
+    for (const r of statementResults) desired.set(r.lineNumber, r);
+
+    const removals: string[] = [];
+    for (const [id, meta] of glyphMetaRef.current) {
+      const want = desired.get(meta.lineNumber);
+      // Remove glyphs whose block is gone or whose status changed (re-added below).
+      if (!want || want.status !== meta.status) removals.push(id);
+    }
+
+    const additions: any[] = [];
+    const additionLines: number[] = [];
+    // TrackedRangeStickiness lives under monaco.editor.* (NOT top-level
+    // monaco.* — that path is undefined and crashed the app on mount).
+    // Resolve defensively: numeric 1 === NeverGrowsWhenTypingAtEdges and is
+    // stable across monaco versions, so decorations still work even if the
+    // enum moves again instead of throwing.
+    const stickiness: number =
+      (monaco.editor?.TrackedRangeStickiness as any)?.NeverGrowsWhenTypingAtEdges ??
+      (monaco as any)?.TrackedRangeStickiness?.NeverGrowsWhenTypingAtEdges ??
+      1;
+    for (const [line, result] of desired) {
+      let alive = false;
+      for (const [id, meta] of glyphMetaRef.current) {
+        if (removals.includes(id)) continue;
+        if (meta.lineNumber === line && meta.status === result.status) { alive = true; break; }
       }
-      
-      // Add gutter glyph decoration
-      decorations.push({
-        range: new monaco.Range(lineNumber, 1, lineNumber, 1),
+      if (alive) continue;
+      const { cls, hover, tooltip } = glyphClassFor(result);
+      additions.push({
+        range: new monaco.Range(line, 1, line, 1),
         options: {
           isWholeLine: false,
-          glyphMarginClassName: glyphClassName,
-          glyphMarginHoverMessage: { value: tooltip || hoverMessage },
+          glyphMarginClassName: cls,
+          glyphMarginHoverMessage: { value: tooltip || hover },
+          stickiness,
         }
       });
-    });
-    
-    // Apply all decorations
-    if (decorations.length > 0) {
-      decorationsRef.current = editor.deltaDecorations([], decorations);
+      additionLines.push(line);
     }
-    
+
+    if (removals.length > 0 || additions.length > 0) {
+      const newIds: string[] = additions.length > 0 ? editor.deltaDecorations(removals, additions) : editor.deltaDecorations(removals, []);
+      for (const id of removals) glyphMetaRef.current.delete(id);
+      newIds.forEach((id, idx) => {
+        const line = additionLines[idx];
+        const result = desired.get(line);
+        if (result) glyphMetaRef.current.set(id, { lineNumber: line, status: result.status, result });
+      });
+      decorationsRef.current = [...glyphMetaRef.current.keys()];
+    }
+
     // Scroll the last statement into view if there are errors
     const hasErrors = statementResults.some(r => r.status === 'error');
     if (hasErrors) {
@@ -381,7 +468,7 @@ export const QueryEditor = memo(function QueryEditor({
         editor.revealLineInCenter(lastError.lineNumber);
       }
     }
-    
+
   }, [statementResultsFingerprint, isExecuting]);
 
   const handleEditorMount: OnMount = (editor, monaco) => {
@@ -442,6 +529,76 @@ export const QueryEditor = memo(function QueryEditor({
 
     updateVarDecorations();
     const contentChangeDisposable = editor.onDidChangeModelContent(() => throttledVarDecorations());
+
+    // ─── Run-status glyph pruning (#223) ───────────────────────────────────────
+    // Sticky decorations follow the text automatically, but nothing removes a
+    // glyph whose block was cut away. On content change (throttled), read each
+    // glyph's live position: drop glyphs whose decoration is gone or whose
+    // anchor line is now blank (block cut/pasted away), and write back fresh
+    // line numbers for survivors so tab state survives switches/remounts.
+    let glyphPruneTimer: ReturnType<typeof setTimeout> | null = null;
+    const pruneGlyphs = () => {
+      const model = editor.getModel();
+      if (!model || glyphMetaRef.current.size === 0) return;
+
+      let changed = false;
+      const next: StatementResult[] = [];
+      const deadIds: string[] = [];
+      for (const [id, meta] of glyphMetaRef.current) {
+        let range: any = null;
+        try {
+          range = model.getDecorationRange(id);
+        } catch {
+          range = null;
+        }
+        if (!range) {
+          deadIds.push(id);
+          changed = true;
+          continue;
+        }
+        const liveLine = range.startLineNumber;
+        let lineText = "";
+        try {
+          lineText = model.getLineContent(liveLine);
+        } catch {
+          lineText = "";
+        }
+        if (lineText.trim().length === 0) {
+          // Anchor line blanked — the block was cut or deleted.
+          deadIds.push(id);
+          changed = true;
+          continue;
+        }
+        if (liveLine !== meta.lineNumber) {
+          meta.lineNumber = liveLine;
+          meta.result = { ...meta.result, lineNumber: liveLine };
+          changed = true;
+        }
+        next.push(meta.result);
+      }
+      if (deadIds.length > 0) {
+        try {
+          editor.deltaDecorations(deadIds, []);
+        } catch {
+          /* editor tearing down */
+        }
+        for (const id of deadIds) glyphMetaRef.current.delete(id);
+        decorationsRef.current = [...glyphMetaRef.current.keys()];
+      }
+      if (changed) {
+        next.sort((a, b) => a.lineNumber - b.lineNumber);
+        try {
+          onGlyphChangeRef.current?.(next);
+        } catch {
+          /* parent unmounted */
+        }
+      }
+    };
+    const throttledPruneGlyphs = () => {
+      if (glyphPruneTimer) clearTimeout(glyphPruneTimer);
+      glyphPruneTimer = setTimeout(pruneGlyphs, 500);
+    };
+    const glyphPruneDisposable = editor.onDidChangeModelContent(() => throttledPruneGlyphs());
 
     // ─── "Will run" statement highlight ────────────────────────────────────────
     // DataGrip-style affordance: persistently highlight the statement the caret
@@ -670,12 +827,14 @@ export const QueryEditor = memo(function QueryEditor({
       contentChangeDisposable?.dispose();
       cursorMoveDisposable?.dispose();
       cursorContentDisposable?.dispose();
+      glyphPruneDisposable?.dispose();
       window.removeEventListener("focus-editor", focusHandler);
       window.removeEventListener("format-sql", formatHandler);
       window.removeEventListener("run-query-smart", handleRunSmart);
       window.removeEventListener("run-query-all", handleRunAll);
       if (domNode) domNode.removeEventListener("contextmenu", handleContextMenu);
       if (varDecoThrottle !== null) clearTimeout(varDecoThrottle);
+      if (glyphPruneTimer !== null) clearTimeout(glyphPruneTimer);
     });
 
     // NOTE: Ctrl+Shift+F is intentionally NOT bound to formatDocument here.
@@ -737,7 +896,13 @@ export const QueryEditor = memo(function QueryEditor({
     // DataGrip-style parameter hints: `my_func(` shows `my_func(a int, b text)`
     // with the active argument highlighted. Registered once globally; the
     // provider reads the live connection from `globalConnCtx`.
-    registerSignatureHelp(monaco, () => globalConnCtx);
+    // Isolated from the completion provider below: a signature-help failure
+    // must never prevent table/column/keyword suggestions from registering.
+    try {
+      registerSignatureHelp(monaco, () => globalConnCtx);
+    } catch (e) {
+      console.error("Signature-help provider registration failed (completion unaffected):", e);
+    }
 
     editor.onMouseDown((e) => {
       if ((e.event.ctrlKey || e.event.metaKey) && e.target.position) {
@@ -803,20 +968,11 @@ export const QueryEditor = memo(function QueryEditor({
                  }
               };
 
-              // Keywords
-              const keywords = [
-                "SELECT", "FROM", "WHERE", "JOIN", "LEFT JOIN", "RIGHT JOIN", "INNER JOIN", "CROSS JOIN",
-                "ON", "ORDER BY", "GROUP BY", "HAVING", "INSERT INTO", "VALUES", "UPDATE", 
-                "SET", "DELETE FROM", "CREATE TABLE", "ALTER TABLE", "DROP TABLE", 
-                "CREATE INDEX", "DROP INDEX", "AS", "DISTINCT", "LIMIT", "OFFSET", 
-                "IN", "NOT IN", "LIKE", "ILIKE", "IS NULL", "IS NOT NULL", "AND", "OR", "NOT", "EXISTS", "BETWEEN",
-                "WITH", "RECURSIVE", "UNION", "ALL", "EXCEPT", "INTERSECT"
-              ];
-              keywords.forEach(k => addRaw(k, monaco.languages.CompletionItemKind.Keyword, k + " "));
+              // Keywords (shared static list — also used for the no-schema fallback below)
+              STATIC_KEYWORDS.forEach(k => addRaw(k, monaco.languages.CompletionItemKind.Keyword, k + " "));
 
-              // Functions
-              const functions = ["COUNT", "SUM", "AVG", "MAX", "MIN", "NOW", "COALESCE", "NULLIF", "CASE", "RANK", "ROW_NUMBER", "TO_CHAR", "EXTRACT"];
-              functions.forEach(f => addRaw(f, monaco.languages.CompletionItemKind.Function, f === "CASE" ? "CASE WHEN $1 THEN $2 ELSE $3 END" : f + "($1)"));
+              // Functions (shared static list — also used for the no-schema fallback below)
+              STATIC_FUNCTIONS.forEach(f => addRaw(f, monaco.languages.CompletionItemKind.Function, staticFunctionInsertText(f)));
 
               // Tables & Views with smart aliases in JOIN context
               const existingAliases = extractExistingAliases(model.getValue());
@@ -964,6 +1120,29 @@ const isInJoinContext = /(\b|^)(JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|INNER\s+JOIN|CROSS
               }
             }
 
+            // No-schema fallback: with no connection there is no catalog, but
+            // SQL keywords and builtin functions are static — suggest those
+            // instead of an empty list so completion never goes fully dead.
+            if (!items) {
+              const wordLower = word.word.toLowerCase();
+              return {
+                suggestions: [
+                  ...STATIC_KEYWORDS.filter((k) => matchesStaticLabel(k, wordLower)).map((k) => ({
+                    label: k,
+                    kind: monaco.languages.CompletionItemKind.Keyword,
+                    insertText: k + " ",
+                    range,
+                  })),
+                  ...STATIC_FUNCTIONS.filter((f) => matchesStaticLabel(f, wordLower)).map((f) => ({
+                    label: f,
+                    kind: monaco.languages.CompletionItemKind.Function,
+                    insertText: staticFunctionInsertText(f),
+                    range,
+                  })),
+                ],
+              };
+            }
+
             // Dynamic filtering based on context
             let contextSuggestions = [...cachedSuggestions];
 
@@ -978,7 +1157,7 @@ const isInJoinContext = /(\b|^)(JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|INNER\s+JOIN|CROSS
                 // Always include keywords and functions (they're important)
                 if (s.kind === monaco.languages.CompletionItemKind.Keyword ||
                     s.kind === monaco.languages.CompletionItemKind.Function) {
-                  return label.startsWith(currentWord) || label.includes(currentWord);
+                  return matchesStaticLabel(label, currentWord);
                 }
                 return matchesQualifiedOrBareName(label, currentWord);
               });
