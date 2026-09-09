@@ -159,6 +159,46 @@ export function isJsonType(
   return ["json", "data", "metadata", "properties", "attributes"].some((k) => low.includes(k));
 }
 
+const INT_STRING_RE = /^[+-]?\d+$/;
+
+function asBigIntForCompare(val: unknown): bigint | null {
+  if (typeof val === "number") {
+    return Number.isSafeInteger(val) ? BigInt(val) : null;
+  }
+  if (typeof val === "string" && INT_STRING_RE.test(val.trim())) {
+    try {
+      return BigInt(val.trim());
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Total order for grid sorting that keeps #41 digit-exact strings exact.
+ *
+ * - number/number compares numerically (float64, unchanged);
+ * - integer-string/integer-string compares via BigInt, so
+ *   `9007199254740993` sorts before `10000000000000000` (localeCompare gets
+ *   that backwards) without ever coercing through lossy `Number()`;
+ * - safe-integer numbers sort against integer strings the same way;
+ * - everything else falls back to `localeCompare` on strings (unchanged).
+ *
+ * Null/undefined rank outside this function — callers handle those first.
+ */
+export function compareGridValues(a: unknown, b: unknown): number {
+  if (typeof a === "number" && typeof b === "number") {
+    return a - b;
+  }
+  const bigA = asBigIntForCompare(a);
+  const bigB = asBigIntForCompare(b);
+  if (bigA !== null && bigB !== null) {
+    return bigA < bigB ? -1 : bigA > bigB ? 1 : 0;
+  }
+  return String(a).localeCompare(String(b));
+}
+
 /**
  * Name-based type guess used when neither schema nor values are available.
  * Relocated from GridView (behaviour unchanged).

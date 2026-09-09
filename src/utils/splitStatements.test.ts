@@ -170,9 +170,18 @@ SELECT 1`;
     expect(out.map(s => s.text)).toContain("SELECT 3");
   });
 
-  it("treats # as a comment even when glued to code", () => {
-    const out = splitStatements("SELECT * FROM logs# LIMIT 1\n; SELECT 2");
+  it("treats # as a comment even when glued to code (MySQL)", () => {
+    const out = splitStatements("SELECT * FROM logs# LIMIT 1\n; SELECT 2", { hashComments: true });
     expect(out.map(s => s.text)).toEqual(["SELECT * FROM logs# LIMIT 1", "SELECT 2"]);
+  });
+
+  it("preserves PostgreSQL # operators by default (no hashComments)", () => {
+    // `#>` / `#>>` are JSON operators, not comments: the `;` inside the
+    // second statement must still split, and nothing may be swallowed.
+    const out = splitStatements("SELECT doc#>'{a}' FROM t; SELECT 2");
+    expect(out.map(s => s.text)).toEqual(["SELECT doc#>'{a}' FROM t", "SELECT 2"]);
+    const explicit = splitStatements("SELECT doc#>>'{a}' FROM t; SELECT 2", { hashComments: false });
+    expect(explicit).toHaveLength(2);
   });
 
   it("still splits large scripts without quadratic slowdown", () => {

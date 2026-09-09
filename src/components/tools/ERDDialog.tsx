@@ -18,6 +18,11 @@ import { useConfirmDialog } from "../ui/ConfirmDialog";
 import { IconButton } from "../ui/IconButton";
 import { Input } from "../ui/Input";
 import { Select } from "../ui/Select";
+import {
+  ALL_SCHEMAS_VALUE,
+  decodeSchemaFilterValue,
+  encodeSchemaFilterValue,
+} from "../../utils/schemaFilterValue";
 import { ERDCanvas } from "./ERDCanvas";
 import { useERData, type ERTable } from "./useERData";
 import { TableSelectorDialog } from "./TableSelectorDialog";
@@ -26,10 +31,6 @@ interface ERDDialogProps {
   isOpen: boolean;
   onClose: () => void;
 }
-
-// Radix Select forbids empty-string item values; "All Schemas" (no filter)
-// uses undefined by design, so map it through a non-empty sentinel.
-const ALL_SCHEMAS_SENTINEL = "__all_schemas__";
 
 function extractSchemas(tableNames: string[]): string[] {
   const schemas = new Set<string>();
@@ -364,13 +365,13 @@ export function ERDDialog({ isOpen, onClose }: ERDDialogProps) {
                   <Select
                     selectSize="sm"
                     className="w-36"
-                    value={schemaFilter ?? ALL_SCHEMAS_SENTINEL}
+                    value={encodeSchemaFilterValue(schemaFilter)}
                     onValueChange={(v) =>
-                      setSchemaFilter(v === ALL_SCHEMAS_SENTINEL ? undefined : v)
+                      setSchemaFilter(decodeSchemaFilterValue(v))
                     }
                     options={[
-                      { label: "All Schemas", value: ALL_SCHEMAS_SENTINEL },
-                      ...selectedSchemaList.map((s) => ({ label: s, value: s })),
+                      { label: "All Schemas", value: ALL_SCHEMAS_VALUE },
+                      ...selectedSchemaList.map((s) => ({ label: s, value: encodeSchemaFilterValue(s) })),
                     ]}
                   />
                 )}

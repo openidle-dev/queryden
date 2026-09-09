@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  compareGridValues,
   getTypeHeaderPrefix,
   inferColumnType,
   isBoolType,
@@ -224,5 +225,32 @@ describe("inferColumnType", () => {
     // never Number() them — while still classifying the column as numeric.
     expect(inferColumnType([{ a: "-9223372036854775808" }], "a")).toBe("int");
     expect(inferColumnType([{ a: "1152921504606846976" }], "a")).toBe("int");
+  });
+});
+
+describe("compareGridValues (#41 digit-exact sort)", () => {
+  it("sorts numbers numerically (unchanged)", () => {
+    expect(compareGridValues(2, 10)).toBeLessThan(0);
+    expect(compareGridValues(10, 2)).toBeGreaterThan(0);
+    expect(compareGridValues(3, 3)).toBe(0);
+  });
+
+  it("sorts exact-digit integer strings by value, not lexically", () => {
+    // localeCompare puts "9007199254740993" AFTER "10000000000000000".
+    expect(compareGridValues("9007199254740993", "10000000000000000")).toBeLessThan(0);
+    expect(compareGridValues("-9223372036854775808", "-1")).toBeLessThan(0);
+    expect(compareGridValues("10", "9")).toBeGreaterThan(0);
+    expect(compareGridValues("007", "7")).toBe(0);
+  });
+
+  it("sorts safe-integer numbers against integer strings exactly", () => {
+    expect(compareGridValues(9, "10")).toBeLessThan(0);
+    expect(compareGridValues("10", 9)).toBeGreaterThan(0);
+  });
+
+  it("falls back to localeCompare for text and decimals (unchanged)", () => {
+    expect(compareGridValues("b", "a")).toBeGreaterThan(0);
+    expect(compareGridValues("1.5", "1.25")).toBeGreaterThan(0);
+    expect(compareGridValues(true, false)).not.toBe(0);
   });
 });

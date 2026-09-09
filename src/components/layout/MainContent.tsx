@@ -15,7 +15,7 @@ import { getDefaultDatabaseName } from "../../config/app";
 import { splitStatements } from "../../utils/splitStatements";
 import { mapSelectionStatementsToDocumentLines, mergeGlyphResults } from "../../utils/statementGlyphs";
 import { applyQueryLimit } from "../../utils/applyQueryLimit";
-import { classifyDestructive, formatSqlLiteral, getDefaultPort, isDoBlock as isDoBlockHelper, isSelectLike, splitDottedIdentifier, stripSqlToCode } from "../../utils/sqlDialect";
+import { classifyDestructive, formatSqlLiteral, getDefaultPort, isDoBlock as isDoBlockHelper, isMySqlLike, isSelectLike, splitDottedIdentifier, stripSqlToCode } from "../../utils/sqlDialect";
 import { VariableSubstitutionDialog, extractVariables, substituteVariables, VariableValues } from "../ui/VariableSubstitutionDialog";
 import { useLocalHistory } from "../../store/localHistoryStore";
 import { Button } from "../ui/Button";
@@ -23,6 +23,7 @@ import { IconButton } from "../ui/IconButton";
 import { Select } from "../ui/Select";
 import { Menu, MenuItem, MenuSeparator } from "../ui/Menu";
 import { quoteIdentifier, type DatabaseType } from "../../utils/sqlSecurity";
+import { resolveNewTabTarget } from "../../utils/tabTarget";
 
 // Lazy-loaded editor — Monaco (core + SQL contribution) is the single
 // heaviest dependency in the app. Pulling QueryEditor out of the cold-start
@@ -184,6 +185,11 @@ export function MainContent() {
   const activeConnRef = useRef(activeConnection);
   const selectedDbRef = useRef(selectedDatabase);
   const connectionsRef = useRef(connections);
+  // Previous session's active connection (metadata only — inheriting it as a
+  // fresh tab's target never connects). Stashed by the startup session-load
+  // below so tabs created before any sidebar click still target (and
+  // complete against) the connection the user was on.
+  const lastSessionTargetRef = useRef<{ connectionId: string; database: string } | null>(null);
   const foldersRef = useRef(folders);
   useEffect(() => { activeConnRef.current = activeConnection; }, [activeConnection]);
   useEffect(() => { selectedDbRef.current = selectedDatabase; }, [selectedDatabase]);
@@ -597,9 +603,18 @@ export function MainContent() {
         const { settingsReady, useSettings } = await import("../../store/settingsStore");
         const { canAutoReconnect } = await import("../../utils/autoReconnect");
         await settingsReady;
+        // Session metadata first: stashing the previous connection is not
+        // connecting (respects "connects nothing" when auto-reconnect is
+        // off) and lets fresh tabs inherit a target for completion.
+        const data = await invokeCmd("load_sessions");
+        if (data.activeConnectionId) {
+          lastSessionTargetRef.current = {
+            connectionId: data.activeConnectionId,
+            database: data.activeDatabase || "",
+          };
+        }
         if (!useSettings.getState().autoReconnect) return;
         if (activeConnRef.current) return; // user already connected manually
-        const data = await invokeCmd("load_sessions");
         const connId = data.activeConnectionId;
         if (!connId) return;
         const target = connectionsRef.current.find((c) => c.id === connId);
@@ -831,14 +846,23 @@ export function MainContent() {
   ) => {
     tabCounterRef.current += 1;
 
-    // Resolve which connection/database to target:
-    // 1. Explicit params from context-menu events (most reliable)
-    // 2. Currently selected in the sidebar as fallback (via ref to avoid stale closure)
+    // Resolve which connection/database to target (see resolveNewTabTarget):
+    // explicit context-menu params, then the sidebar-active connection, then
+    // the previous session's connection (metadata only — never connects).
+    // Refs avoid stale closures; the resolver drops deleted ids / empty dbs.
     const activeConn = activeConnRef.current;
-    const selectedDb = selectedDbRef.current;
-    const resolvedConnectionId = explicitConnectionId || activeConn?.id;
-    const resolvedConnectionName = explicitConnectionName || activeConn?.name;
-    const resolvedDatabase = explicitDatabase || selectedDb;
+    const lastSession = lastSessionTargetRef.current;
+    const target = resolveNewTabTarget({
+      explicitConnectionId,
+      explicitConnectionName,
+      explicitDatabase,
+      activeConnId: activeConn?.id,
+      activeConnName: activeConn?.name,
+      selectedDb: selectedDbRef.current,
+      lastSessionConnectionId: lastSession?.connectionId,
+      lastSessionDatabase: lastSession?.database,
+      knownConnections: connectionsRef.current,
+    });
 
     const newTab: QueryTab = {
       id: crypto.randomUUID(),
@@ -850,11 +874,7 @@ export function MainContent() {
       originalQuery: query,
       savedQueryName,
       usePsql,
-      target: resolvedConnectionId && resolvedDatabase ? {
-        connectionId: resolvedConnectionId,
-        connectionName: resolvedConnectionName || "",
-        database: resolvedDatabase
-      } : undefined
+      target,
     };
     setQueryTabs((prev) => [...prev, newTab]);
     setActiveTabId(newTab.id);
@@ -942,12 +962,17 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       return;
     }
 
+    // `#` handling follows the executing connection's dialect: MySQL treats
+    // `#…` as a line comment, while PostgreSQL uses `#` inside JSON
+    // operators (`#>`, `#>>`). All lexer entry points below take this.
+    const hashOpts = { hashComments: isMySqlLike(actualConnection.type) };
+
     // Extract single statement from full query — used when no specific query
     // is provided (e.g. toolbar Run button without selection). Uses the
     // context-aware splitter so a semicolon inside a string, dollar-quoted
     // body, or comment is not treated as a statement terminator.
     const extractSingleStatement = (query: string): string => {
-      const parts = splitStatements(query);
+      const parts = splitStatements(query, hashOpts);
       return parts.length > 0 ? parts[0].text : query;
     };
 
@@ -990,7 +1015,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     // commands into a prepared statement", and the libpq path further down
     // sends one execute() per statement only when isRunAll is set.
     if (!isRunAll && typeof specificQuery === "string") {
-      const parts = splitStatements(queryToRun);
+      const parts = splitStatements(queryToRun, hashOpts);
       if (parts.length > 1) {
         isRunAll = true;
         // Map selection-relative lines back to document-absolute lines (#223):
@@ -1061,7 +1086,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     // Match on the original text but reject matches blanked out by the
     // lexer (FROM/JOIN inside 'strings', quoted identifiers, DO bodies,
     // or comments). Stripped SQL preserves length so indices align.
-    const strippedForTable = stripSqlToCode(queryToRun);
+    const strippedForTable = stripSqlToCode(queryToRun, hashOpts);
     const tableRe = /(?:FROM|JOIN|UPDATE|INTO)\s+(?:"([^"]+)"(?:\."([^"]+)")?|([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)?))\b/gi;
     let tableNameMatch: RegExpMatchArray | null = null;
     for (let m = tableRe.exec(queryToRun); m !== null; m = tableRe.exec(queryToRun)) {
@@ -1135,8 +1160,8 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       // Lexer-aware: keywords inside strings/dollar bodies/comments are
       // invisible, and DO LANGUAGE variants count as DO blocks.
       const isDoBlock = isDoBlockHelper(queryToRun);
-      const isSelect = isSelectLike(queryToRun);
-      const { isTruncate, isDelete, hasWhere, isDestructive } = classifyDestructive(queryToRun);
+      const isSelect = isSelectLike(queryToRun, hashOpts);
+      const { isTruncate, isDelete, hasWhere, isDestructive } = classifyDestructive(queryToRun, hashOpts);
 
       // Resolve credentials + effective endpoint (shared between libpq and
       // CLI paths). A tab targeting a never-connected connection lazily
@@ -1534,11 +1559,11 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
 
             const stmtInfo = statementInfos[i];
             const lineNumber = stmtInfo?.lineNumber || 1;
-            const isStmtSelect = isSelectLike(stmt);
+            const isStmtSelect = isSelectLike(stmt, hashOpts);
             try {
               const stmtStartTime = Date.now();
               if (isStmtSelect) {
-                const limitedStmt = applyQueryLimit(stmt, settings.maxRowsToDisplay);
+                const limitedStmt = applyQueryLimit(stmt, settings.maxRowsToDisplay, hashOpts);
                 const { rows: stmtRows, columns: stmtCols } = await cliExecStmt(limitedStmt, true, currentPsqlExpanded, currentCliDatabase);
                 const safeRows = stmtRows ?? [];
                 multiResults.push({ query: stmt, rows: safeRows, columns: stmtCols, rowsAffected: safeRows.length, lineNumber });
@@ -1688,7 +1713,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
             }
 
             if (isSelect) {
-              const limitedQuery = applyQueryLimit(queryToRun, settings.maxRowsToDisplay);
+              const limitedQuery = applyQueryLimit(queryToRun, settings.maxRowsToDisplay, hashOpts);
               const { rows: cliRows, columns: cliCols } = await cliExecStmt(limitedQuery, true, currentPsqlExpanded, currentCliDatabase || "");
               rows = cliRows ?? [];
               rowsAffected = rows.length;
@@ -1859,12 +1884,12 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
             const stmtInfo = statementInfos[i];
             const lineNumber = stmtInfo?.lineNumber || 1;
 
-            const isStmtSelect = isSelectLike(stmt);
+            const isStmtSelect = isSelectLike(stmt, hashOpts);
             
             try {
               const stmtStartTime = Date.now();
               if (isStmtSelect) {
-                const limitedStmt = applyQueryLimit(stmt, settings.maxRowsToDisplay);
+                const limitedStmt = applyQueryLimit(stmt, settings.maxRowsToDisplay, hashOpts);
                 const stmtRows = await db.select(limitedStmt) as any[];
                 multiResults.push({ query: stmt, rows: stmtRows, rowsAffected: stmtRows.length, lineNumber });
                 statementResults.push({
@@ -1933,7 +1958,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           const stmtStartTime = Date.now();
           
           if (isSelect) {
-            const limitedQuery = applyQueryLimit(queryToRun, settings.maxRowsToDisplay);
+            const limitedQuery = applyQueryLimit(queryToRun, settings.maxRowsToDisplay, hashOpts);
             rows = await db.select(limitedQuery) as any[];
             rowsAffected = rows.length;
             statementResults.push({
@@ -2985,7 +3010,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       isExecutingRef.current = false;
       setSuppressTabSwitch(false);
     }
-  }, [activeTableName, activeConnection, selectedDatabase, vaultCredentials, executeQuery, confirmDialog, connections, ensureConnectionDb]);
+  }, [activeTableName, activeConnection, selectedDatabase, vaultCredentials, executeQuery, confirmDialog, connections, queryTabs, activeTabId, ensureConnectionDb]);
 
   const handleAddRow = useCallback(async (newRow: any, localOnly = true): Promise<void> => {
     if (localOnly) {
@@ -3781,6 +3806,8 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                   onRun={(q: string, info?: { lineNumber: number; statementText: string }) => executeQuery(q, info)}
                   connectionName={activeTab?.target?.connectionName || activeConnection?.name || undefined}
                   databaseName={activeTab?.target?.database || selectedDatabase || undefined}
+                  targetConnectionId={activeTab?.target?.connectionId}
+                  targetDatabase={activeTab?.target?.database}
                   tabId={activeTabId!}
                   tabName={activeTab?.name}
                   isExecuting={activeTabIsExecuting}

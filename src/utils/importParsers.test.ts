@@ -29,4 +29,29 @@ describe("importParsers — DataGrip driver-only sources", () => {
     expect(result.connections[0].db_type).toBe("postgres");
     expect(result.connections[0].port).toBe(5433);
   });
+
+  it("decodes XML entities in text values", () => {
+    const xml = `<data-sources>
+  <data-source name="ops &amp; db">
+    <user-name>ops&amp;db</user-name>
+    <driver>mysql</driver>
+  </data-source>
+</data-sources>`;
+    const result = parseImport(xml);
+    expect(result.connections[0].name).toBe("ops & db");
+    expect(result.vaultCredentials[0].username).toBe("ops&db");
+  });
+
+  it("unwraps CDATA-wrapped JDBC URLs without entity decoding", () => {
+    const xml = `<data-sources>
+  <data-source name="cdata">
+    <database-url><![CDATA[jdbc:mysql://db.internal:3306/shop?useSSL=false&serverTimezone=UTC]]></database-url>
+    <user-name>root</user-name>
+  </data-source>
+</data-sources>`;
+    const result = parseImport(xml);
+    expect(result.connections[0].db_type).toBe("mysql");
+    expect(result.connections[0].port).toBe(3306);
+    expect(result.connections[0].database).toBe("shop");
+  });
 });

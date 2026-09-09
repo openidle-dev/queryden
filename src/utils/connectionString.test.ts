@@ -40,6 +40,16 @@ describe("buildConnectionString (multi-connection lazy connect)", () => {
     expect(buildConnectionString({ type: "sqlite" })).toBe("sqlite:queryden.db");
   });
 
+  it("brackets IPv6 host literals", () => {
+    expect(
+      buildConnectionString({ type: "postgres", host: "::1", port: 5432, database: "d", username: "u", password: "p" }),
+    ).toBe("postgres://u:p@[::1]:5432/d");
+    // Already-bracketed input is left alone.
+    expect(
+      buildConnectionString({ type: "postgres", host: "[::1]", port: 5432, database: "d", username: "u", password: "p" }),
+    ).toBe("postgres://u:p@[::1]:5432/d");
+  });
+
   it("throws for unknown engine ids instead of guessing a scheme", () => {
     expect(() => buildConnectionString({ type: "mongodb", host: "h" })).toThrow(/unsupported/i);
     expect(() => buildConnectionString({ type: "" })).toThrow(/unsupported/i);

@@ -101,11 +101,21 @@ describe("sqlDialect — isSelectLike", () => {
     expect(isSelectLike("INSERT INTO t (a) SELECT a FROM s")).toBe(false);
   });
 
-  it("treats every top-level # as a MySQL comment", () => {
+  it("treats every top-level # as a MySQL comment (opt-in)", () => {
     // `# LIMIT 1` glued to an identifier must still hide the limit, or the
     // safety-limit check sees a limit MySQL ignores.
-    expect(stripSqlToCode("SELECT * FROM logs# LIMIT 1")).not.toContain("LIMIT");
-    expect(cleanSqlForKeywords("SELECT * FROM logs# LIMIT 1")).not.toContain("LIMIT");
+    const mysql = { hashComments: true };
+    expect(stripSqlToCode("SELECT * FROM logs# LIMIT 1", mysql)).not.toContain("LIMIT");
+    expect(cleanSqlForKeywords("SELECT * FROM logs# LIMIT 1", mysql)).not.toContain("LIMIT");
+  });
+
+  it("preserves PostgreSQL # JSON operators by default", () => {
+    // `UPDATE t SET doc = doc #> '{a}' RETURNING doc` must keep RETURNING
+    // visible so it routes via db.select() and the row is displayed.
+    expect(stripSqlToCode("SELECT doc#>'{a}' FROM t")).toContain("#>");
+    expect(isSelectLike("UPDATE t SET doc = doc #> '{a}' RETURNING doc")).toBe(true);
+    // ...while the same text under the MySQL rule hides everything past `#`.
+    expect(isSelectLike("UPDATE t SET doc = doc #> '{a}' RETURNING doc", { hashComments: true })).toBe(false);
   });
 });
 

@@ -14,13 +14,14 @@
  * SQL lexer state and only emits a split on a semicolon that is
  * genuinely at top level.
  *
-  * Contexts that are skipped:
-  *   - `'single-quoted strings'` (with `''` and `\` escapes for MySQL / E'..')
-  *   - `"double-quoted identifiers"` (with `""` escape)
-  *   - `` `backtick identifiers` `` (MySQL, with ```` `` ```` and `\` escapes)
-  *   - `$$ ... $$` and `$tag$ ... $tag$` dollar-quoted bodies
-  *   - `--` and `#` (MySQL) line comments
-  *   - `/* block comments *‌/`
+ * Contexts that are skipped:
+ *   - `'single-quoted strings'` (with `''` and `\` escapes for MySQL / E'..')
+ *   - `"double-quoted identifiers"` (with `""` escape)
+ *   - `` `backtick identifiers` `` (MySQL, with ```` `` ```` and `\` escapes)
+ *   - `$$ ... $$` and `$tag$ ... $tag$` dollar-quoted bodies
+ *   - `--` line comments and `/* block comments *‌/`
+ *   - `#` line comments, but ONLY with `{ hashComments: true }` (MySQL):
+ *     by default `#` is code so PostgreSQL `#>`/`#>>` operators survive.
  *
  * Empty statements (e.g. trailing `;`) are dropped.
  *
@@ -47,11 +48,12 @@ export interface SqlStatement {
 
 const DOLLAR_TAG_RE = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/;
 
-export function splitStatements(sql: string): SqlStatement[] {
+export function splitStatements(sql: string, opts?: { hashComments?: boolean }): SqlStatement[] {
   const statements: SqlStatement[] = [];
   let i = 0;
   let stmtStart = 0;
   let delimiter = ";";
+  const hashComments = opts?.hashComments === true;
   // Incremental "are we still at a statement start" flag. The old code
   // called isAtStatementStart(sql, stmtStart, i) on EVERY character, which
   // slices sql[stmtStart..i] plus regex/split passes — O(n²) over a long
@@ -186,11 +188,14 @@ export function splitStatements(sql: string): SqlStatement[] {
       continue;
     }
 
-    // MySQL `#` line comment: consume to end of line regardless of the
-    // preceding character (outside quoted contexts we are always top-level
-    // here). `SELECT * FROM logs# LIMIT 1` must hide `# LIMIT 1`, otherwise
-    // limit-safety checks see a limit that MySQL ignores.
-    if (c === "#") {
+    // `#` handling is dialect-gated (default: code, not a comment):
+    // MySQL treats `#` to end-of-line as a comment (`SELECT * FROM logs#
+    // LIMIT 1` must hide `# LIMIT 1`, otherwise limit-safety checks see a
+    // limit MySQL ignores) — callers pass `{ hashComments: true }`.
+    // PostgreSQL uses `#` inside operators (`#>`, `#>>` JSON operators,
+    // `#!`, `#-`), so the default preserves it: `SELECT doc#>'{a}'; ...`
+    // must still split into two statements.
+    if (c === "#" && hashComments) {
       while (i < sql.length && sql[i] !== "\n") i++;
       continue;
     }

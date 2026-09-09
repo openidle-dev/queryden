@@ -2,10 +2,11 @@ import { useState, useMemo, useCallback } from "react";
 import { Search, CheckSquare, Square, Table, AlertCircle } from "lucide-react";
 import { cn } from "../../lib/cn";
 import { Select } from "../ui/Select";
-
-// Radix Select forbids empty-string item values; "All Schemas" (no filter)
-// uses undefined by design, so map it through a non-empty sentinel.
-const ALL_SCHEMAS_SENTINEL = "__all_schemas__";
+import {
+  ALL_SCHEMAS_VALUE,
+  decodeSchemaFilterValue,
+  encodeSchemaFilterValue,
+} from "../../utils/schemaFilterValue";
 
 interface TableSelectorDialogProps {
   tables: string[];
@@ -110,11 +111,11 @@ export function TableSelectorDialog({
             <Select
               selectSize="sm"
               className="w-36"
-              value={schemaFilter ?? ALL_SCHEMAS_SENTINEL}
-              onValueChange={(v) => setSchemaFilter(v === ALL_SCHEMAS_SENTINEL ? undefined : v)}
+              value={encodeSchemaFilterValue(schemaFilter)}
+              onValueChange={(v) => setSchemaFilter(decodeSchemaFilterValue(v))}
               options={[
-                { label: "All Schemas", value: ALL_SCHEMAS_SENTINEL },
-                ...schemas.map((s) => ({ label: s, value: s })),
+                { label: "All Schemas", value: ALL_SCHEMAS_VALUE },
+                ...schemas.map((s) => ({ label: s, value: encodeSchemaFilterValue(s) })),
               ]}
             />
           )}

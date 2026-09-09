@@ -21,9 +21,23 @@ export type KnownDbType =
   | "cockroach"
   | "mysql"
   | "mariadb"
-  | "sqlite";
+  | "sqlite"
+  | "sqlserver";
 
 const DOLLAR_TAG_RE = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/;
+
+/**
+ * Lexer options for dialect-sensitive token handling.
+ *
+ * `hashComments`: treat `#` as a MySQL line comment. Default `false`:
+ * PostgreSQL uses `#` inside operators (`#>`, `#>>` JSON operators, `#!`,
+ * `#-`), so blanking `#…` unconditionally corrupts PG statements
+ * (`SELECT doc#>'{a}'` would swallow the rest of the line). MySQL-family
+ * callers opt in.
+ */
+export interface SqlLexerOptions {
+  hashComments?: boolean;
+}
 
 /** True for PostgreSQL-wire-protocol engines. */
 export function isPgLike(type: string | undefined | null): boolean {
@@ -37,12 +51,20 @@ export function isMySqlLike(type: string | undefined | null): boolean {
   return ["mysql", "mariadb"].includes(type.toLowerCase());
 }
 
+/** True for SQL Server (MSSQL) connections. No driver exists yet (comingSoon); stubs ready. */
+export function isSqlServerLike(type: string | undefined | null): boolean {
+  if (!type) return false;
+  return type.toLowerCase() === "sqlserver";
+}
+
 /** Default TCP port for an engine id. Falls back to 5432 for unknown. */
 export function getDefaultPort(type: string | undefined | null): number {
   const t = (type || "").toLowerCase();
   if (t === "mysql" || t === "mariadb") return 3306;
+  if (t === "sqlserver") return 1433;
   if (t === "cockroach") return 26257;
-  if (t === "redshift" || t === "greenplum" || t === "timescale" || t === "neon" || t === "citus" || t === "alloydb") return 5432;
+  if (t === "redshift") return 5439;
+  if (t === "greenplum" || t === "timescale" || t === "neon" || t === "citus" || t === "alloydb") return 5432;
   if (t === "yugabyte") return 5433;
   if (t === "tidb") return 4000;
   if (t === "materialize") return 6875;
@@ -57,9 +79,11 @@ export function getDefaultPort(type: string | undefined | null): number {
  *
  * Handles single-quoted strings (with doubled-quote and backslash escapes),
  * double-quoted identifiers, backtick identifiers, dollar-quoted bodies,
- * line comments and block comments.
+ * line comments and block comments. `#` line comments only when
+ * `opts.hashComments` is set (MySQL family) — otherwise `#` is passed
+ * through untouched so PostgreSQL operators (`#>`, `#>>`) survive.
  */
-export function stripSqlToCode(sql: string): string {
+export function stripSqlToCode(sql: string, opts?: SqlLexerOptions): string {
   const out = sql.split("");
   const blank = (from: number, to: number) => {
     for (let k = from; k < to; k++) {
@@ -141,13 +165,19 @@ export function stripSqlToCode(sql: string): string {
     }
 
     if (c === "#") {
-      // MySQL `#` line comment: consume to end of line regardless of the
-      // preceding character (outside strings/quotes, where we never reach
-      // this branch). `SELECT * FROM logs# LIMIT 1` must hide `# LIMIT 1`,
-      // otherwise applyQueryLimit sees a limit that MySQL ignores.
-      const start = i;
-      while (i < sql.length && sql[i] !== "\n") i++;
-      blank(start, i);
+      if (opts?.hashComments) {
+        // MySQL `#` line comment: consume to end of line regardless of the
+        // preceding character (outside strings/quotes, where we never reach
+        // this branch). `SELECT * FROM logs# LIMIT 1` must hide `# LIMIT 1`,
+        // otherwise applyQueryLimit sees a limit that MySQL ignores.
+        const start = i;
+        while (i < sql.length && sql[i] !== "\n") i++;
+        blank(start, i);
+        continue;
+      }
+      // PostgreSQL and friends: `#` starts an operator (`#>`, `#>>`), not a
+      // comment. Leave it (and the rest of the line) visible to keyword scans.
+      i++;
       continue;
     }
 
@@ -185,8 +215,8 @@ export function stripSqlToCode(sql: string): string {
 }
 
 /** Upper-cased, comment/string-free SQL for keyword tests. */
-export function cleanSqlForKeywords(sql: string): string {
-  return stripSqlToCode(sql).trim().toUpperCase();
+export function cleanSqlForKeywords(sql: string, opts?: SqlLexerOptions): string {
+  return stripSqlToCode(sql, opts).trim().toUpperCase();
 }
 
 /**
@@ -247,10 +277,14 @@ export function isDoBlock(sql: string): boolean {
  * return rows and must go through `db.execute()`.
  * DO blocks never count as selects even when their bodies contain
  * SELECT/RETURNING.
+ *
+ * Pass `{ hashComments: true }` for MySQL-family connections so `#`
+ * comments don't leak keywords into detection; the default preserves
+ * PostgreSQL `#>`/`#>>` operators.
  */
-export function isSelectLike(sql: string): boolean {
+export function isSelectLike(sql: string, opts?: SqlLexerOptions): boolean {
   if (isDoBlock(sql)) return false;
-  const clean = cleanSqlForKeywords(sql);
+  const clean = cleanSqlForKeywords(sql, opts);
   if (/^(SELECT|WITH|SHOW|EXPLAIN|DESCRIBE|DESC|VALUES|TABLE)\b/.test(clean)) return true;
   if (/\bRETURNING\b/.test(clean)) return true;
   return false;
@@ -265,8 +299,8 @@ export interface DestructiveFlags {
 }
 
 /** Lexer-aware destructive-operation classification. */
-export function classifyDestructive(sql: string): DestructiveFlags {
-  const clean = cleanSqlForKeywords(sql);
+export function classifyDestructive(sql: string, opts?: SqlLexerOptions): DestructiveFlags {
+  const clean = cleanSqlForKeywords(sql, opts);
   const isTruncate = /\bTRUNCATE\b/.test(clean);
   const isDelete = /\bDELETE\b/.test(clean);
   const hasWhere = /\bWHERE\b/.test(clean);

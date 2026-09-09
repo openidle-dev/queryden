@@ -465,6 +465,44 @@ impl CliManager {
 
 // ─── Output parser ─────────────────────────────────────────────────────────────
 
+fn looks_like_command_tag(line: &str) -> bool {
+    let t = line.trim();
+    if t.is_empty() {
+        return false;
+    }
+    // Fixed multi-word tags whose verb takes no object kind.
+    if t == "START TRANSACTION" || t == "SECURITY LABEL" {
+        return true;
+    }
+    if let Some((verb, rest)) = t.split_once(' ') {
+        // DML tags: verb + ASCII row counts only.
+        if matches!(verb, "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "MERGE" | "COPY" | "MOVE" | "FETCH") {
+            return !rest.is_empty()
+                && rest.split_whitespace().all(|p| p.bytes().all(|c| c.is_ascii_digit()));
+        }
+        // DDL tags: verb + object kind (`CREATE TABLE`, `DROP INDEX`,
+        // `DISCARD ALL`, …). Real psql tags never carry anything else.
+        const DDL_VERBS: [&str; 6] = [
+            "CREATE", "DROP", "ALTER", "TRUNCATE", "REFRESH", "DISCARD",
+        ];
+        return DDL_VERBS.contains(&verb);
+    }
+    // Bare single-word tags (`COMMIT`, `GRANT`, `DO`, `VACUUM`, …). Matching
+    // is case-sensitive, so only an all-caps header collides — and that
+    // requires a quoted reserved word used as a column name on a zero-row
+    // result, which is vanishingly rare versus the certainty of tags.
+    const BARE_TAGS: [&str; 23] = [
+        "COMMIT", "ROLLBACK", "BEGIN", "DO", "SET", "RESET", "ABORT", "END",
+        "CALL", "VACUUM", "ANALYZE", "CHECKPOINT", "REINDEX", "GRANT",
+        "REVOKE", "COMMENT", "LISTEN", "UNLISTEN", "NOTIFY", "CLUSTER",
+        "PREPARE", "EXECUTE", "DEALLOCATE",
+    ];
+    if BARE_TAGS.contains(&t) {
+        return true;
+    }
+    false
+}
+
 /// Parse raw psql stdout into structured columns + rows.
 ///
 /// The execute path runs psql unaligned (`-A -F|`) WITH the header row and
@@ -494,6 +532,16 @@ fn parse_psql_output(lines: &[String], query: &str) -> (Vec<String>, Vec<Vec<Str
         return (Vec::new(), Vec::new());
     }
 
+    // Successful non-SELECT commands emit a lone command tag (`CREATE TABLE`,
+    // `UPDATE 5`, `COMMIT`, …) with no header row. Without this check the tag
+    // would be returned as a one-column result and the frontend would paint
+    // a bogus grid instead of the raw status line. A genuine header-only
+    // result (`SELECT id … WHERE false` → `["id"]`) never matches the tag
+    // shape (see `looks_like_command_tag`), so it keeps its header below.
+    if lines.len() == 1 && looks_like_command_tag(&lines[0]) {
+        return (Vec::new(), Vec::new());
+    }
+
     let header: Vec<String> = lines[0].split('|').map(|s| s.trim().to_string()).collect();
     if header.iter().all(|h| h.is_empty()) {
         return (Vec::new(), Vec::new());
@@ -517,10 +565,10 @@ fn parse_psql_output(lines: &[String], query: &str) -> (Vec<String>, Vec<Vec<Str
         }
     }
 
-    // NOTE: no one-column/empty heuristic here — meta-commands are
-    // detected from the query text (leading `\`) above. A header-only
-    // result is a genuine empty result set (`SELECT … WHERE false`) and
-    // must keep its header.
+    // NOTE: no one-column/empty heuristic here — meta-commands are detected
+    // from the query text (leading `\`) and command tags by shape above. A
+    // header-only result is a genuine empty result set
+    // (`SELECT … WHERE false`) and must keep its header.
 
     (header, data_rows)
 }
@@ -1218,6 +1266,48 @@ mod tests {
         // empty result set, not meta-command output.
         let (cols, rows) = parse_psql_output(&lines(&["id"]), "SELECT id FROM t WHERE false");
         assert_eq!(cols, vec!["id"]);
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn command_tags_fall_back_to_raw() {
+        // Successful non-SELECT commands emit a lone status tag with no
+        // header row — the frontend must render stdout, not a grid.
+        for tag in [
+            "CREATE TABLE",
+            "DROP TABLE",
+            "ALTER TABLE",
+            "CREATE INDEX",
+            "TRUNCATE TABLE",
+            "GRANT",
+            "COMMIT",
+            "ROLLBACK",
+            "BEGIN",
+            "DO",
+            "SET",
+            "VACUUM",
+            "START TRANSACTION",
+            "SELECT 1",
+            "INSERT 0 1",
+            "UPDATE 5",
+            "DELETE 3",
+            "COPY 10",
+        ] {
+            let (cols, rows) = parse_psql_output(&lines(&[tag]), "CREATE TABLE t (id int)");
+            assert!(cols.is_empty() && rows.is_empty(), "tag rendered as grid: {tag}");
+        }
+    }
+
+    #[test]
+    fn header_shaped_like_words_still_grids() {
+        // A header-only result whose text is ordinary words is a genuine
+        // empty result set — only command-tag shapes go raw.
+        let (cols, rows) = parse_psql_output(&lines(&["status"]), "SELECT status FROM t WHERE false");
+        assert_eq!(cols, vec!["status"]);
+        assert!(rows.is_empty());
+        // Case-sensitive: a quoted lowercase column never matches a tag.
+        let (cols, rows) = parse_psql_output(&lines(&["commit"]), "SELECT \"commit\" FROM t WHERE false");
+        assert_eq!(cols, vec!["commit"]);
         assert!(rows.is_empty());
     }
 

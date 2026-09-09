@@ -13,9 +13,14 @@ import {
   detectAliasDotContext,
   matchesQualifiedOrBareName,
   matchesStaticLabel,
+  pickCompletionSchema,
+  generateTableAlias,
+  extractExistingAliases,
+  type CompletionSchemaLike,
 } from "./completionContext";
 import { resolveStatementAtOffset } from "../../utils/statementAtCursor";
 import { splitStatements } from "../../utils/splitStatements";
+import { isMySqlLike } from "../../utils/sqlDialect";
 import {
   clearSignatureHelpCache,
   registerSignatureHelp,
@@ -27,8 +32,21 @@ let sqlProviderDisposable: any = null;
 let sqlFormatterDisposable: any = null;
 let sqlHoverProviderDisposable: any = null;
 let globalSchemaItems: any = null;
+// Connection id that owns `globalSchemaItems` (null when disconnected).
+let globalSchemaConnId: string | null = null;
+// Background-fetched schema for the active tab's own target connection (see
+// `ensureSchemaFor`). Lets tabs complete against their own connection when it
+// was never sidebar-connected. Only one editor is mounted at a time (the
+// active tab, keyed by tab id), so a module singleton is safe here.
+let tabSchemaItems: CompletionSchemaLike | null = null;
+let tabSchemaConnId: string | null = null;
+// Explicit target of the mounted editor tab (`undefined` = no target).
+let tabTargetConnId: string | null | undefined = undefined;
 let cachedSuggestions: any[] = [];
 let lastSchemaHash: string = "";
+// Which schema source the cache was built from — a new source forces a
+// rebuild even if the array lengths + timestamp hash happens to collide.
+let lastSchemaSourceKey: string = "";
 // Latest live-connection snapshot for the signature-help provider (which is
 // registered once globally and therefore can't close over component state).
 let globalConnCtx: SignatureConnCtx = { db: null, connectionId: null, dbType: "", database: "" };
@@ -40,8 +58,13 @@ let globalConnCtx: SignatureConnCtx = { db: null, connectionId: null, dbType: ""
  */
 export function resetEditorSchemaCache(): void {
   globalSchemaItems = null;
+  globalSchemaConnId = null;
+  tabSchemaItems = null;
+  tabSchemaConnId = null;
+  tabTargetConnId = undefined;
   cachedSuggestions = [];
   lastSchemaHash = "";
+  lastSchemaSourceKey = "";
   globalConnCtx = { db: null, connectionId: null, dbType: "", database: "" };
   clearSignatureHelpCache();
 }
@@ -52,52 +75,6 @@ export function resetEditorSchemaCache(): void {
 if (typeof window !== "undefined") {
   window.addEventListener("connection-disconnected", resetEditorSchemaCache);
 }
-
-// Smart alias generation - like DataGrip/DBeaver
-// Generates alias from table name: "users" -> "u", "user_roles" -> "ur", "project_issue" -> "pi"
-const generateTableAlias = (tableName: string, existingAliases: Set<string>): string => {
-  // Remove schema prefix if present (e.g., "public.users" -> "users")
-  const cleanName = tableName.includes('.') ? tableName.split('.').pop() || tableName : tableName;
-  
-  // Split by underscore or use first letters
-  const words = cleanName.split(/[_-]/);
-  
-  let alias: string;
-  if (words.length >= 2) {
-    // Multi-word: take first letter of first two words (e.g., "project_issue" -> "pi")
-    alias = (words[0][0] + words[1][0]).toLowerCase();
-  } else if (cleanName.length >= 2) {
-    // Single word: first 2 characters
-    alias = cleanName.substring(0, 2).toLowerCase();
-  } else {
-    alias = cleanName.toLowerCase();
-  }
-  
-  // If alias already exists, append number (like DBeaver: u, u2, u3)
-  if (existingAliases.has(alias)) {
-    let counter = 2;
-    while (existingAliases.has(alias + counter)) {
-      counter++;
-    }
-    alias = alias + counter;
-  }
-  
-  return alias;
-};
-
-// Extract all aliases currently used in the query
-const extractExistingAliases = (query: string): Set<string> => {
-  const aliases = new Set<string>();
-  // Match patterns like "table_name AS alias" or "table_name alias" after FROM/JOIN
-  const aliasPattern = /(?:FROM|JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|INNER\s+JOIN|CROSS\s+JOIN)\s+[\w"]+\.?\w+\s+(?:AS\s+)?(\w+)/gi;
-  let match;
-  while ((match = aliasPattern.exec(query)) !== null) {
-    if (match[1] && match[1].length <= 3) {  // Short aliases only
-      aliases.add(match[1].toLowerCase());
-    }
-  }
-  return aliases;
-};
 
 // Statement execution status for inline indicators
 export interface StatementStatus {
@@ -136,6 +113,14 @@ interface QueryEditorProps {
   onRun?: (query?: any, statementInfo?: { lineNumber: number; statementText: string }) => void;
   connectionName?: string;
   databaseName?: string;
+  /**
+   * Explicit connection/database this tab targets. Completion (and hover)
+   * resolve against this connection's schema — background-fetching it when
+   * the tab was never sidebar-connected — instead of only the globally
+   * active connection. `undefined` = untargeted (global schema applies).
+   */
+  targetConnectionId?: string;
+  targetDatabase?: string;
   isExecuting?: boolean;
   hasError?: boolean;
   hasSuccess?: boolean;
@@ -276,12 +261,14 @@ const showIntentionActions = (editor: any, monaco: any, onRunRef: React.MutableR
 };
 
 // Memoize to prevent unnecessary re-renders when parent state changes
-export const QueryEditor = memo(function QueryEditor({ 
-  value, 
-  onChange, 
+export const QueryEditor = memo(function QueryEditor({
+  value,
+  onChange,
   onRun,
   connectionName,
   databaseName,
+  targetConnectionId,
+  targetDatabase,
   tabId,
   tabName,
   isExecuting,
@@ -299,7 +286,12 @@ export const QueryEditor = memo(function QueryEditor({
   const onRunRef = useRef<any>(null);
   const lastSnapshotRef = useRef<string>("");
   const snapshotTimerRef = useRef<any>(null);
-  const { schemaItems, currentDb, activeConnection, selectedDatabase } = useConnections();
+  const { schemaItems, currentDb, activeConnection, selectedDatabase, ensureSchemaFor, connections, vaultCredentials } = useConnections();
+  // `#` comment handling follows the active connection's dialect (a ref
+  // because handleEditorMount's handlers outlive renders — reading the prop
+  // directly would pin the dialect from mount time across connection switches).
+  const hashOptsRef = useRef<{ hashComments: boolean }>({ hashComments: false });
+  hashOptsRef.current = { hashComments: isMySqlLike(activeConnection?.type) };
   
   onRunRef.current = onRun;
 
@@ -322,9 +314,70 @@ export const QueryEditor = memo(function QueryEditor({
 
   useEffect(() => {
     globalSchemaItems = schemaItems;
+    globalSchemaConnId = activeConnection?.id ?? null;
     cachedSuggestions = [];  // Clear cached suggestions
     lastSchemaHash = "";      // Force cache miss
-  }, [schemaItems]);
+    lastSchemaSourceKey = "";
+  }, [schemaItems, activeConnection?.id]);
+
+  // Tab-targeted schema: when this tab targets a connection that is NOT the
+  // globally-active one (fresh tabs inheriting the previous connection,
+  // restored sessions, multi-connection work), background-fetch its schema
+  // so completion, hover and JOIN suggestions work without a sidebar click.
+  // Results land in the module `tabSchemaItems` the provider reads; the
+  // explorer tree (global schema) is never touched. Suggestions simply
+  // appear once the fetch resolves. The fetch establishes a connection, so
+  // it honors the "Reconnect previous connection on startup" setting: users
+  // who disabled all automatic connections keep them off. `vaultCredentials`
+  // in deps retries after a vault-profile pick (background fetches can't
+  // prompt, so the first attempt with a locked vault fails by design).
+  useEffect(() => {
+    tabTargetConnId = targetConnectionId ?? undefined;
+    if (!targetConnectionId || settings.autoReconnect === false) {
+      if (tabSchemaItems !== null || tabSchemaConnId !== null) {
+        tabSchemaItems = null;
+        tabSchemaConnId = null;
+        lastSchemaHash = "";
+        lastSchemaSourceKey = "";
+      }
+      return;
+    }
+    // Tab targets the globally-active connection: the global schema covers
+    // it — no background fetch, and any stale tab cache is dropped.
+    if (activeConnection?.id === targetConnectionId && schemaItems) {
+      if (tabSchemaItems !== null || tabSchemaConnId !== null) {
+        tabSchemaItems = null;
+        tabSchemaConnId = null;
+        lastSchemaHash = "";
+        lastSchemaSourceKey = "";
+      }
+      return;
+    }
+    let cancelled = false;
+    tabSchemaConnId = targetConnectionId;
+    // Always resolve through the context cache (hit = same ref, no work):
+    // it was possibly evicted by a disconnect since our last run, and only
+    // a fresh resolve observes that instead of serving stale module state.
+    ensureSchemaFor(targetConnectionId, targetDatabase)
+      .then((items) => {
+        if (cancelled) return;
+        if (tabSchemaItems !== items) {
+          tabSchemaItems = items;
+          lastSchemaHash = ""; // Force the provider to rebuild from the new source
+          lastSchemaSourceKey = "";
+        }
+      })
+      .catch(() => {
+        if (!cancelled && tabSchemaConnId === targetConnectionId) tabSchemaItems = null;
+      });
+    return () => {
+      cancelled = true;
+    };
+    // ensureSchemaFor identity changes per render (plain context closure);
+    // depending on it would refire every render, so depend on the stable
+    // inputs instead — cache hits make refires cheap and idempotent.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetConnectionId, targetDatabase, activeConnection?.id, schemaItems, connections, vaultCredentials, settings.autoReconnect]);
 
   // Keep the signature-help provider's connection snapshot current.
   useEffect(() => {
@@ -624,7 +677,7 @@ export const QueryEditor = memo(function QueryEditor({
       }
 
       const text = model.getValue();
-      const target = resolveStatementAtOffset(text, model.getOffsetAt(position));
+      const target = resolveStatementAtOffset(text, model.getOffsetAt(position), hashOptsRef.current);
       // Don't bother highlighting when the whole buffer is a single statement —
       // there's nothing to disambiguate and a full-editor band is just noise.
       if (!target || text.trim() === target.text) {
@@ -768,7 +821,7 @@ export const QueryEditor = memo(function QueryEditor({
       // paint under the cursor (updateCursorStatementHighlight, below) is the
       // exact same statement we execute here — the highlight can never lie
       // about what Ctrl+Enter will run.
-      const targetStatement = resolveStatementAtOffset(text, offset);
+      const targetStatement = resolveStatementAtOffset(text, offset, hashOptsRef.current);
 
       if (targetStatement) {
         const startPos = model.getPositionAt(targetStatement.start);
@@ -799,7 +852,7 @@ export const QueryEditor = memo(function QueryEditor({
       // Collect all statements with their line numbers
       // Use the untrimmed text so splitStatements' line number computation
       // matches Monaco's 1-based line numbering (trim loses leading blanks).
-      const parsed = splitStatements(rawText);
+      const parsed = splitStatements(rawText, hashOptsRef.current);
       const allStatements = parsed.map(s => ({ text: s.text, lineNumber: s.lineNumber }));
       
       // Run all statements - pass special flag to executeQuery
@@ -865,17 +918,25 @@ export const QueryEditor = memo(function QueryEditor({
           if (!word) return null;
           
           let contents = [];
-          
-          if (globalSchemaItems && word.word) {
+
+          // Hover follows the same tab-aware schema source as completion.
+          const hoverItems = pickCompletionSchema({
+            globalItems: globalSchemaItems,
+            globalConnId: globalSchemaConnId,
+            tabItems: tabSchemaItems,
+            tabConnId: tabSchemaConnId,
+            targetConnId: tabTargetConnId,
+          });
+          if (hoverItems && word.word) {
             const token = word.word.toLowerCase();
-            const isTable = globalSchemaItems.tables?.includes(token) || globalSchemaItems.tables?.some((t: string) => t.endsWith(`.${token}`));
-            const isView = globalSchemaItems.views?.includes(token) || globalSchemaItems.views?.some((v: string) => v.endsWith(`.${token}`));
+            const isTable = hoverItems.tables?.includes(token) || hoverItems.tables?.some((t: string) => t.endsWith(`.${token}`));
+            const isView = hoverItems.views?.includes(token) || hoverItems.views?.some((v: string) => v.endsWith(`.${token}`));
 
             if (isTable || isView) {
-              const tableCols = globalSchemaItems.columns?.filter((c: any) => 
+              const tableCols = hoverItems.columns?.filter((c: any) =>
                 c.table_name === token || c.table_name.endsWith(`.${token}`)
               ) || [];
-              
+
               if (tableCols.length > 0) {
                 let schemaDef = `\`\`\`sql\nCREATE ${isTable ? 'TABLE' : 'VIEW'} ${token} (\n`;
                 schemaDef += tableCols.map((c: any) => `  ${c.column_name}`).join(',\n');
@@ -884,7 +945,7 @@ export const QueryEditor = memo(function QueryEditor({
               } else {
                  contents.push({ value: `**${isTable ? 'Table' : 'View'}**: \`${token}\`` });
               }
-            } else if (globalSchemaItems.functions?.includes(token) || globalSchemaItems.functions?.some((f: string) => f.endsWith(`.${token}`))) {
+            } else if (hoverItems.functions?.includes(token) || hoverItems.functions?.some((f: string) => f.endsWith(`.${token}`))) {
                contents.push({ value: `**Function**: \`${token}()\`` });
             }
           }
@@ -944,25 +1005,38 @@ export const QueryEditor = memo(function QueryEditor({
             endColumn: word.endColumn,
           };
 
-          const items = globalSchemaItems;
-          
+          // Tab-aware schema source: the tab's own connection wins over the
+          // globally-active one (see pickCompletionSchema). Tabs on lazy
+          // connections get their background-fetched schema here.
+          const items = pickCompletionSchema({
+            globalItems: globalSchemaItems,
+            globalConnId: globalSchemaConnId,
+            tabItems: tabSchemaItems,
+            tabConnId: tabSchemaConnId,
+            targetConnId: tabTargetConnId,
+          });
+
 // Re-compute suggestions only if schema has changed
             // Use a hash of key arrays for more reliable cache invalidation
             const schemaHash = items ? `${items.tables?.length || 0}-${items.views?.length || 0}-${items.columns?.length || 0}-${items.foreignKeys?.length || 0}-${items._ts || 0}` : "";
-            
-            if (items && schemaHash !== lastSchemaHash) {
+            const sourceKey = tabTargetConnId ?? `global:${globalSchemaConnId ?? ""}`;
+
+            if (items && (schemaHash !== lastSchemaHash || sourceKey !== lastSchemaSourceKey)) {
               const rawSuggestions: any[] = [];
               const rawSeen = new Set();
-              
-              const addRaw = (label: string, kind: any, insertText: string, detail?: string, documentation?: any) => {
+
+              const addRaw = (label: string, kind: any, insertText: string, detail?: string, documentation?: any, snippet?: boolean) => {
+                 if (label == null) return;
                  if (!rawSeen.has(label + kind)) {
-                   rawSuggestions.push({ 
-                     label, 
-                     kind, 
-                     insertText, 
+                   rawSuggestions.push({
+                     label,
+                     kind,
+                     insertText,
                      detail,
                      documentation,
-                     range 
+                     // `$1` tab-stop placeholders only expand when flagged.
+                     ...(snippet ? { insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet } : {}),
+                     range
                    });
                    rawSeen.add(label + kind);
                  }
@@ -972,8 +1046,11 @@ export const QueryEditor = memo(function QueryEditor({
               STATIC_KEYWORDS.forEach(k => addRaw(k, monaco.languages.CompletionItemKind.Keyword, k + " "));
 
               // Functions (shared static list — also used for the no-schema fallback below)
-              STATIC_FUNCTIONS.forEach(f => addRaw(f, monaco.languages.CompletionItemKind.Function, staticFunctionInsertText(f)));
+              STATIC_FUNCTIONS.forEach(f => addRaw(f, monaco.languages.CompletionItemKind.Function, staticFunctionInsertText(f), undefined, undefined, true));
 
+              // Schema-backed entries. Guarded: a malformed catalog row must
+              // never throw out of the provider and kill ALL suggestions.
+              try {
               // Tables & Views with smart aliases in JOIN context
               const existingAliases = extractExistingAliases(model.getValue());
               if (items.tables) items.tables.forEach((t: string) => {
@@ -992,15 +1069,16 @@ export const QueryEditor = memo(function QueryEditor({
                    const targetAlias = generateTableAlias(fk.target_table, existingAliases);
                    const label = `JOIN ${fk.target_table} ON ${fk.source_column} = ${fk.target_column}`;
                    const insertText = `${fk.target_table} ${targetAlias} ON \${1:${fk.source_table}.${fk.source_column}} = \${2:${fk.target_table}.${fk.target_column}}`;
-                   const suggestion = { 
-                     label, 
-                     kind: monaco.languages.CompletionItemKind.Snippet, 
-                     insertText, 
-                     detail: "Join via Foreign Key",
-                     documentation: { value: `Smart Join between **${fk.source_table}** and **${fk.target_table}**` },
-                     range,
-                     isForeignKey: true
-                   };
+                    const suggestion = { 
+                      label, 
+                      kind: monaco.languages.CompletionItemKind.Snippet, 
+                      insertText, 
+                      insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                      detail: "Join via Foreign Key",
+                      documentation: { value: `Smart Join between **${fk.source_table}** and **${fk.target_table}**` },
+                      range,
+                      isForeignKey: true
+                    };
                    fkSuggestions.push(suggestion);
                   });
                 // Add FK suggestions to main list
@@ -1018,10 +1096,17 @@ export const QueryEditor = memo(function QueryEditor({
                 });
               }
 
-              if (items.functions) items.functions.forEach((f: string) => addRaw(f, monaco.languages.CompletionItemKind.Method, f.includes('.') ? f + "($1)" : f + "($1)"));
-              
+              if (items.functions) items.functions.forEach((f: string) => addRaw(f, monaco.languages.CompletionItemKind.Method, f.includes('.') ? f + "($1)" : f + "($1)", undefined, undefined, true));
+              } catch (rebuildErr) {
+                // Keywords + builtin functions above are already queued and the
+                // schema-dot / alias-dot paths below read `items` directly, so
+                // completion degrades instead of dying on malformed catalog data.
+                console.error("Schema suggestion rebuild failed (static suggestions kept):", rebuildErr);
+              }
+
               cachedSuggestions = rawSuggestions;
               lastSchemaHash = schemaHash;
+              lastSchemaSourceKey = sourceKey;
             }
 
             // FILTER logic for specific context (JOIN, ON, etc.)
@@ -1083,6 +1168,7 @@ const isInJoinContext = /(\b|^)(JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|INNER\s+JOIN|CROSS
                     label: bare,
                     kind: monaco.languages.CompletionItemKind.Method,
                     insertText: `${bare}($1)`,
+                    insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
                     detail: `${anyMatch.schema}.${bare}()`,
                     range: schemaRange,
                     sortText: `2${String(idx).padStart(4, "0")}`,
@@ -1137,6 +1223,7 @@ const isInJoinContext = /(\b|^)(JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|INNER\s+JOIN|CROSS
                     label: f,
                     kind: monaco.languages.CompletionItemKind.Function,
                     insertText: staticFunctionInsertText(f),
+                    insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
                     range,
                   })),
                 ],

@@ -256,11 +256,49 @@ function parseDBeaverCredentialsConfig(content: string): ParseResult | null {
 
 // ── DataGrip format ────────────────────────────────────────────────────────
 
+/**
+ * Decode XML character data: predefined entities (`&amp;` etc.) plus decimal
+ * and hexadecimal numeric references. `&amp;` is replaced last so
+ * `&amp;lt;` decodes to the literal text `&lt;` (single-pass semantics).
+ * Out-of-range code points keep their original text instead of throwing.
+ */
+function decodeXmlEntities(text: string): string {
+  return text
+    .replace(/&#(\d+);/g, (m, d) => {
+      try {
+        return String.fromCodePoint(parseInt(d, 10));
+      } catch {
+        return m;
+      }
+    })
+    .replace(/&#x([0-9a-fA-F]+);/g, (m, h) => {
+      try {
+        return String.fromCodePoint(parseInt(h, 16));
+      } catch {
+        return m;
+      }
+    })
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
 function extractXmlTag(block: string, tags: string[]): string {
   for (const tag of tags) {
     const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i");
     const m = block.match(re);
-    if (m) return (m[1] || "").trim();
+    if (m) {
+      const raw = (m[1] || "").trim();
+      // CDATA sections are literal character data: unwrap without entity
+      // decoding (`<![CDATA[a&amp;b]]>` means the seven characters `a&amp;b`).
+      // A CDATA-wrapped JDBC URL would otherwise fail the URL matcher on `&`.
+      if (raw.startsWith("<![CDATA[") && raw.endsWith("]]>")) {
+        return raw.slice(9, -3);
+      }
+      return decodeXmlEntities(raw);
+    }
   }
   return "";
 }
@@ -279,7 +317,8 @@ function parseDataGripXML(content: string): ParseResult | null {
       const attrs = m[1] || "";
       const body = m[2] || "";
       const nameM = attrs.match(/\bname\s*=\s*"([^"]*)"/i);
-      blocks.push({ name: nameM ? nameM[1] : "", body });
+      // Attribute values are XML character data too (`name="a &amp; b"`).
+      blocks.push({ name: nameM ? decodeXmlEntities(nameM[1]) : "", body });
     }
     if (blocks.length === 0) return null;
 

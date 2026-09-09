@@ -34,12 +34,12 @@ export interface CursorStatement {
 }
 
 /** Split `text` into the same statement spans the run-at-cursor path uses. */
-function collectStatements(text: string): CursorStatement[] {
+function collectStatements(text: string, opts?: { hashComments?: boolean }): CursorStatement[] {
   // Reuse the lexer-aware splitter so Ctrl+Enter, the highlight, and
   // Ctrl+Shift+Enter all agree on statement boundaries (DO $$, strings,
   // comments, backticks, DELIMITER). splitStatements.end is the terminator
   // position (or end of input), matching CursorStatement.end semantics.
-  return splitStatements(text).map((s) => ({
+  return splitStatements(text, opts).map((s) => ({
     start: s.start,
     end: s.end,
     text: s.text,
@@ -49,10 +49,12 @@ function collectStatements(text: string): CursorStatement[] {
 
 /**
  * Return the statement the caret targets, or `null` when there is no runnable
- * statement (empty / whitespace-only text).
+ * statement (empty / whitespace-only text). Pass `{ hashComments: true }`
+ * for MySQL-family connections so `#` comments don't corrupt boundaries;
+ * the default preserves PostgreSQL `#>`/`#>>` operators.
  */
-export function resolveStatementAtOffset(text: string, offset: number): CursorStatement | null {
-  const statements = collectStatements(text);
+export function resolveStatementAtOffset(text: string, offset: number, opts?: { hashComments?: boolean }): CursorStatement | null {
+  const statements = collectStatements(text, opts);
   if (statements.length === 0) return null;
 
   for (let i = 0; i < statements.length; i++) {

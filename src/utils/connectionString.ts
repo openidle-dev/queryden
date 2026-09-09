@@ -60,7 +60,12 @@ export function buildConnectionString(input: ConnectionStringInput): string {
   }
 
   const scheme = isPostgresFamily ? "postgres" : "mysql";
-  const host = input.host || "localhost";
+  const rawHost = input.host || "localhost";
+  // Bracket IPv6 literals (`::1` → `[::1]`): a bare `::1` in the authority
+  // (`...@::1:5432/...`) is not a valid URI and breaks the connection.
+  const host = rawHost.includes(":") && !(rawHost.startsWith("[") && rawHost.endsWith("]"))
+    ? `[${rawHost}]`
+    : rawHost;
   const port = input.port || getDefaultPort(type === "psql" ? "postgres" : type);
   const database = input.database || "";
   const username = encodeURIComponent(input.username || "");
