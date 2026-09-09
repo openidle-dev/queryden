@@ -257,32 +257,34 @@ function parseDBeaverCredentialsConfig(content: string): ParseResult | null {
 // ── DataGrip format ────────────────────────────────────────────────────────
 
 /**
- * Decode XML character data: predefined entities (`&amp;` etc.) plus decimal
- * and hexadecimal numeric references. `&amp;` is replaced last so
- * `&amp;lt;` decodes to the literal text `&lt;` (single-pass semantics).
- * Out-of-range code points keep their original text instead of throwing.
+ * Decode XML character data in a single pass: predefined entities (`&amp;`
+ * etc.) plus decimal and hexadecimal numeric references. One combined
+ * pattern replaces each *original* match exactly once, so `&#38;lt;`
+ * (numeric `&` + literal `lt;`) decodes to the literal text `&lt;` — the
+ * old chained replaces decoded the generated `&lt;` a second time into
+ * `<`, corrupting values on the DataGrip import path. Out-of-range code
+ * points keep their original text instead of throwing.
  */
+const NAMED_XML_ENTITIES: Record<string, string> = {
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  amp: "&",
+};
+
 function decodeXmlEntities(text: string): string {
-  return text
-    .replace(/&#(\d+);/g, (m, d) => {
+  return text.replace(/&#(\d+);|&#x([0-9a-fA-F]+);|&(lt|gt|quot|apos|amp);/g,
+    (m, dec: string | undefined, hex: string | undefined, named: string | undefined) => {
+      if (named !== undefined) return NAMED_XML_ENTITIES[named];
       try {
-        return String.fromCodePoint(parseInt(d, 10));
+        return String.fromCodePoint(
+          dec !== undefined ? parseInt(dec, 10) : parseInt(hex as string, 16),
+        );
       } catch {
         return m;
       }
-    })
-    .replace(/&#x([0-9a-fA-F]+);/g, (m, h) => {
-      try {
-        return String.fromCodePoint(parseInt(h, 16));
-      } catch {
-        return m;
-      }
-    })
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
+    });
 }
 
 function extractXmlTag(block: string, tags: string[]): string {

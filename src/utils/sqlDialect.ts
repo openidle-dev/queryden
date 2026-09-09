@@ -57,6 +57,23 @@ export function isSqlServerLike(type: string | undefined | null): boolean {
   return type.toLowerCase() === "sqlserver";
 }
 
+/**
+ * Resolve `#` handling for an editor tab: the tab's own target connection
+ * wins (a PostgreSQL tab must keep `#>` operators intact even when the
+ * sidebar is on MySQL, and vice versa); untargeted tabs fall back to the
+ * globally-active connection. Pure so statement splitting stays unit-testable.
+ */
+export function resolveTabHashComments(
+  targetConnectionId: string | null | undefined,
+  connections: { id: string; type: string }[],
+  activeConnType: string | null | undefined,
+): { hashComments: boolean } {
+  const tabConn = targetConnectionId
+    ? connections.find((c) => c.id === targetConnectionId)
+    : undefined;
+  return { hashComments: isMySqlLike(tabConn?.type ?? activeConnType ?? undefined) };
+}
+
 /** Default TCP port for an engine id. Falls back to 5432 for unknown. */
 export function getDefaultPort(type: string | undefined | null): number {
   const t = (type || "").toLowerCase();

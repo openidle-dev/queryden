@@ -57,6 +57,19 @@ export async function fetchSchemaItems(req: SchemaFetchRequest): Promise<SchemaI
   const schemaFilter = selectedSchemas.length > 0
     ? `AND table_schema IN (${selectedSchemas.map(s => escapeSqlStringLiteral(s)).join(',')})`
     : '';
+  // Each catalog view exposes the schema under its own column name — using
+  // `table_schema` against routines/triggers/foreign tables is a SQL error,
+  // and the per-section try/catch then left functions, procedures, triggers
+  // and foreign tables silently empty whenever a schema filter was active.
+  const schemaFilterRoutine = selectedSchemas.length > 0
+    ? `AND routine_schema IN (${selectedSchemas.map(s => escapeSqlStringLiteral(s)).join(',')})`
+    : '';
+  const schemaFilterTrigger = selectedSchemas.length > 0
+    ? `AND trigger_schema IN (${selectedSchemas.map(s => escapeSqlStringLiteral(s)).join(',')})`
+    : '';
+  const schemaFilterForeignTable = selectedSchemas.length > 0
+    ? `AND foreign_table_schema IN (${selectedSchemas.map(s => escapeSqlStringLiteral(s)).join(',')})`
+    : '';
   const schemaFilterFk = selectedSchemas.length > 0
     ? `AND c.connamespace::regnamespace::text IN (${selectedSchemas.map(s => escapeSqlStringLiteral(s)).join(',')})`
     : '';
@@ -114,10 +127,10 @@ export async function fetchSchemaItems(req: SchemaFetchRequest): Promise<SchemaI
     setSchemaProgress({ phase: "functions", current: 3, total: 12 });
     try {
       const functions = await currentDb.select(`
-        SELECT routine_schema as routine_schema, routine_name as routine_name 
+        SELECT routine_schema as routine_schema, routine_name as routine_name
         FROM information_schema.routines
         WHERE routine_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
-          ${schemaFilter}
+          ${schemaFilterRoutine}
         ORDER BY routine_schema, routine_name
       `);
       schema.functions = functions.length > 0 ? functions.map((f: any) =>
@@ -130,10 +143,10 @@ export async function fetchSchemaItems(req: SchemaFetchRequest): Promise<SchemaI
     setSchemaProgress({ phase: "triggers", current: 4, total: 12 });
     try {
       const triggers = await currentDb.select(`
-        SELECT trigger_schema as trigger_schema, trigger_name as trigger_name 
+        SELECT trigger_schema as trigger_schema, trigger_name as trigger_name
         FROM information_schema.triggers
         WHERE trigger_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
-          ${schemaFilter}
+          ${schemaFilterTrigger}
         ORDER BY trigger_schema, trigger_name
       `);
       schema.triggers = triggers.length > 0 ? triggers.map((t: any) =>
@@ -204,7 +217,7 @@ export async function fetchSchemaItems(req: SchemaFetchRequest): Promise<SchemaI
         FROM information_schema.routines
         WHERE routine_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
           AND routine_type = 'PROCEDURE'
-          ${schemaFilter}
+          ${schemaFilterRoutine}
         ORDER BY routine_schema, routine_name
       `);
       schema.procedures = procedures.length > 0 ? procedures.map((p: any) =>
@@ -240,7 +253,7 @@ export async function fetchSchemaItems(req: SchemaFetchRequest): Promise<SchemaI
         SELECT foreign_table_schema, foreign_table_name
         FROM information_schema.foreign_tables
         WHERE foreign_table_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
-          ${schemaFilter}
+          ${schemaFilterForeignTable}
         ORDER BY foreign_table_schema, foreign_table_name
       `);
       schema.foreignTables = foreignTables.length > 0 ? foreignTables.map((ft: any) =>
@@ -265,7 +278,7 @@ export async function fetchSchemaItems(req: SchemaFetchRequest): Promise<SchemaI
           WHERE a.attnum > 0 
             AND NOT a.attisdropped
             AND n.nspname NOT IN ('information_schema', 'pg_catalog', 'topology')
-            ${selectedSchemas.length > 0 ? `AND n.nspname IN (${selectedSchemas.map(s => `'${s}'`).join(',')})` : ''}
+            ${selectedSchemas.length > 0 ? `AND n.nspname IN (${selectedSchemas.map(s => escapeSqlStringLiteral(s)).join(',')})` : ''}
             AND c.relkind IN ('r', 'v', 'm', 'f')
           ORDER BY n.nspname, c.relname, a.attnum
           LIMIT 50000

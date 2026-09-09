@@ -20,7 +20,7 @@ import {
 } from "./completionContext";
 import { resolveStatementAtOffset } from "../../utils/statementAtCursor";
 import { splitStatements } from "../../utils/splitStatements";
-import { isMySqlLike } from "../../utils/sqlDialect";
+import { resolveTabHashComments } from "../../utils/sqlDialect";
 import {
   clearSignatureHelpCache,
   registerSignatureHelp,
@@ -287,11 +287,14 @@ export const QueryEditor = memo(function QueryEditor({
   const lastSnapshotRef = useRef<string>("");
   const snapshotTimerRef = useRef<any>(null);
   const { schemaItems, currentDb, activeConnection, selectedDatabase, ensureSchemaFor, connections, vaultCredentials } = useConnections();
-  // `#` comment handling follows the active connection's dialect (a ref
-  // because handleEditorMount's handlers outlive renders — reading the prop
-  // directly would pin the dialect from mount time across connection switches).
+  // `#` comment handling follows the TAB's target connection dialect: a tab
+  // on PostgreSQL must keep `#>` operators intact even when the sidebar sits
+  // on MySQL (and vice versa). Untargeted tabs fall back to the active
+  // connection. A ref because handleEditorMount's handlers outlive renders —
+  // reading the prop directly would pin the dialect from mount time across
+  // connection switches.
   const hashOptsRef = useRef<{ hashComments: boolean }>({ hashComments: false });
-  hashOptsRef.current = { hashComments: isMySqlLike(activeConnection?.type) };
+  hashOptsRef.current = resolveTabHashComments(targetConnectionId, connections, activeConnection?.type);
   
   onRunRef.current = onRun;
 

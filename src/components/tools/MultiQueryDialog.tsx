@@ -169,27 +169,22 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
   const executeQuery = async (queryText?: any, _statementInfo?: any) => {
     if (selectedTargets.length === 0) { setError("Please select at least one database"); return; }
 
-    // Determine what text to run
+    // Determine what text to run. Pre-split `__runAll` payloads (already
+    // split by the editor under its own dialect) are reused verbatim;
+    // otherwise the raw text is split PER TARGET below, because `#` is a
+    // MySQL comment but a PostgreSQL operator start (`#>`, `#>>`) — one
+    // shared split corrupts one side on mixed-dialect runs.
     let queryToRun = "";
-    let statementsToRun: string[] = [];
+    let preSplit: string[] | null = null;
 
     if (queryText && typeof queryText === 'object' && queryText.__runAll) {
-      statementsToRun = queryText.statements || [];
+      preSplit = queryText.statements || [];
     } else {
       queryToRun = typeof queryText === 'string' ? queryText : query;
       if (!queryToRun.trim()) { setError("Empty query"); return; }
-      // Lexer-aware split so DO $$ bodies, strings and comments survive.
-      // `#` handling: the same text runs on every selected target, which may
-      // mix dialects — enable MySQL `#` comments when any target is
-      // MySQL-family (otherwise PostgreSQL `#>` operators would corrupt).
-      const anyMySql = selectedTargets.some(t => {
-        const c = connections.find(x => x.id === t.connectionId);
-        return c ? isMySqlLike(c.type) : false;
-      });
-      statementsToRun = splitStatements(queryToRun, { hashComments: anyMySql }).map(s => s.text);
     }
 
-    if (statementsToRun.length === 0) return;
+    if (preSplit && preSplit.length === 0) return;
 
     setError(null);
     setIsExecuting(true);
@@ -225,6 +220,13 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
       if (!conn) continue;
       const startTime = Date.now();
 
+      // Split under this target's own dialect (see above). Statement
+      // classification below already runs per target, so split + classify
+      // stay aligned on mixed runs.
+      const hashOpts = { hashComments: isMySqlLike(conn.type) };
+      const targetStatements = preSplit ?? splitStatements(queryToRun, hashOpts).map(s => s.text);
+      if (targetStatements.length === 0) continue;
+
       try {
         let username = conn.username || "", password = conn.password || "";
         if (conn.vaultCredentialId) { const vaultCred = vaultCredentials.find(vc => vc.id === conn.vaultCredentialId); if (vaultCred) { username = vaultCred.username || ""; password = vaultCred.password || ""; } }
@@ -242,7 +244,7 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
         let totalAffected = 0;
 
         // Execute each statement sequentially
-        for (const stmt of statementsToRun) {
+        for (const stmt of targetStatements) {
           if (isSelectQueryFor(stmt, conn.type)) {
             const rows = await db.select<any[]>(stmt);
             lastRows = rows;

@@ -10,6 +10,7 @@ import {
   isPgLike,
   isSelectLike,
   quoteIdentifierPart,
+  resolveTabHashComments,
   splitDottedIdentifier,
   stripSqlToCode,
   stripTrailingSemicolonAndComments,
@@ -189,5 +190,30 @@ describe("sqlDialect — strip helpers", () => {
     // Literal tail must survive intact.
     expect(stripTrailingSemicolonAndComments("SELECT 'a -- b'")).toBe("SELECT 'a -- b'");
     expect(stripSqlToCode("SELECT 'a -- b'")).not.toContain("-- b");
+  });
+});
+
+describe("sqlDialect — resolveTabHashComments", () => {
+  // Regression: the editor derived `#` handling from the globally-active
+  // connection, so a PostgreSQL tab corrupted `#>` operators (or a MySQL tab
+  // missed `#` comments) whenever the sidebar sat on the other dialect.
+  const conns = [
+    { id: "pg", type: "postgres" },
+    { id: "my", type: "mysql" },
+  ];
+
+  it("uses the tab target's dialect over the active connection", () => {
+    expect(resolveTabHashComments("pg", conns, "mysql")).toEqual({ hashComments: false });
+    expect(resolveTabHashComments("my", conns, "postgres")).toEqual({ hashComments: true });
+  });
+
+  it("falls back to the active connection for untargeted tabs", () => {
+    expect(resolveTabHashComments(undefined, conns, "mysql")).toEqual({ hashComments: true });
+    expect(resolveTabHashComments(undefined, conns, "postgres")).toEqual({ hashComments: false });
+  });
+
+  it("falls back safely for unknown targets and no connection", () => {
+    expect(resolveTabHashComments("gone", conns, "mysql")).toEqual({ hashComments: true });
+    expect(resolveTabHashComments(undefined, [], null)).toEqual({ hashComments: false });
   });
 });

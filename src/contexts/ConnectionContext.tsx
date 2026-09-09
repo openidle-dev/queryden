@@ -6,6 +6,15 @@ import { getDefaultDatabaseName } from "../config/app";
 import { quoteIdentifier } from "../utils/sqlSecurity";
 import { getDefaultPort } from "../utils/sqlDialect";
 import { fetchSchemaItems } from "../utils/schemaFetch";
+import {
+  buildCopyInsertSql,
+  buildCopyPreviewSql,
+  buildCountSql,
+  buildCreateDatabaseSql,
+  buildDropDatabaseSql,
+  buildRoleDDL,
+  splitDisplayName,
+} from "../utils/ddlBuilders";
 import { buildConnectionString } from "../utils/connectionString";
 import { logger } from "../utils/logger";
 
@@ -1058,29 +1067,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     return run;
   };
 
-  const buildRoleDDL = (role: any, isLogin: boolean): string => {
-    let ddl = `CREATE ROLE ${role.rolname} WITH`;
-    const opts: string[] = [];
-    opts.push(isLogin ? 'LOGIN' : 'NOLOGIN');
-    opts.push(role.rolsuper ? 'SUPERUSER' : 'NOSUPERUSER');
-    opts.push(role.rolcreatedb ? 'CREATEDB' : 'NOCREATEDB');
-    opts.push(role.rolcreaterole ? 'CREATEROLE' : 'NOCREATEROLE');
-    opts.push(role.rolinherit ? 'INHERIT' : 'NOINHERIT');
-    opts.push(role.rolreplication ? 'REPLICATION' : 'NOREPLICATION');
-    opts.push(role.rolbypassrls ? 'BYPASSRLS' : 'NOBYPASSRLS');
-    if (role.rolpassword) {
-      opts.push(`ENCRYPTED PASSWORD '${role.rolpassword}'`);
-    }
-    const connLimit = role.rolconnlimit ?? -1;
-    opts.push(`CONNECTION LIMIT ${connLimit}`);
-    if (role.rolvaliduntil) {
-      opts.push(`VALID UNTIL '${role.rolvaliduntil}'`);
-    } else {
-      opts.push("VALID UNTIL 'infinity'");
-    }
-    ddl += '\n  ' + opts.join('\n  ') + ';';
-    return ddl;
-  };
+  // Role DDL lives in ddlBuilders.buildRoleDDL (pure + adversarially
+  // tested): role names/attributes come from pg_roles rows and must be
+  // quoted/escaped, never interpolated raw.
 
   const getDDL = async (type: string, name: string, schema?: string, table?: string): Promise<string> => {
     if (!activeConnection || !currentDb) return "";
@@ -1553,7 +1542,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
             if (!roleInfo || roleInfo.length === 0) {
               return `-- Role ${name} not found`;
             }
-            return buildRoleDDL(roleInfo[0], true);
+            return buildRoleDDL(roleInfo[0], true, activeConnection.type);
           } catch (e) {
             return `-- Could not get role definition: ${e}`;
           }
@@ -1579,7 +1568,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
             if (!roleInfo || roleInfo.length === 0) {
               return `-- Role ${name} not found`;
             }
-            return buildRoleDDL(roleInfo[0], false);
+            return buildRoleDDL(roleInfo[0], false, activeConnection.type);
           } catch (e) {
             return `-- Could not get role definition: ${e}`;
           }
@@ -1649,63 +1638,44 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     if (!activeConnection || !currentDb) return "-- Not connected to a database";
     
     try {
-      const parts = tableName.split('.');
-      const schemaPart = parts.length > 1 ? parts[0] : 'public';
-      const tablePart = parts.length > 1 ? parts.slice(1).join('.') : tableName;
-      
+      // Quote-aware split (`"my.schema"."my.table"` stays two parts).
+      const { schema: rawSchema, table: tablePart } = splitDisplayName(tableName);
+      const schemaPart = rawSchema ?? 'public';
+
       if (!["postgres", "supabase", "cockroach"].includes(activeConnection.type)) {
         return `-- COPY is only supported for PostgreSQL. Consider using INSERT statements for ${activeConnection.type}.`;
       }
-      
+
       // Get column names
       const cols = await currentDb.select(`
-        SELECT column_name, data_type FROM information_schema.columns 
+        SELECT column_name, data_type FROM information_schema.columns
         WHERE table_name = $1 AND table_schema = $2
         ORDER BY ordinal_position
       `, [tablePart, schemaPart]);
-      
+
       if (cols.length === 0) {
         return `-- No columns found for table ${tableName}`;
       }
-      
+
       const colNames = cols.map((c: any) => c.column_name);
-      const colList = colNames.join(", ");
-      
-      // Use COPY command for PostgreSQL - this is the fastest method
-      // Note: COPY requires both databases to be accessible
-      // We'll generate a script that uses \connect or pg_dump approach
-      
-      const copySQL = `
--- Fast data copy using PostgreSQL COPY command
--- This script will copy all data from ${tableName} to ${targetDB}.
 
--- Method 1: Using INSERT with SELECT (works across databases if same server)
-INSERT INTO ${targetDB}.${schemaPart}.${tablePart} (${colList})
-SELECT ${colList} FROM ${schemaPart}.${tablePart};
+      // Sample row for the preview INSERT. Column identifiers are quoted
+      // (catalog content must never be interpolated raw); values go through
+      // formatSqlLiteral inside the preview builder.
+      const quotedCols = colNames.map((c: string) => quoteIdentifier(c, activeConnection.type));
+      const sampleSelect = `SELECT ${quotedCols.join(", ")} FROM ${quoteIdentifier(`${schemaPart}.${tablePart}`, activeConnection.type)} LIMIT 1`;
+      const sampleRow = await currentDb.select(sampleSelect);
 
--- Note: For cross-server copying, use pg_dump/pg_restore:
--- pg_dump -t ${tablePart} ${selectedDatabase} | psql -h targethost -d ${targetDB}
-
--- Alternative: Generate batch INSERTs for safer cross-server copy
--- The following generates INSERT statements:
-`;
-      
-      // Also generate sample batch INSERT for verification
-      const sampleRow = await currentDb.select(`SELECT ${colList} FROM ${schemaPart}.${tablePart} LIMIT 1`);
-      
-      if (sampleRow.length > 0) {
-        const values = colNames.map((col: string) => {
-          const val = sampleRow[0][col];
-          if (val === null) return 'NULL';
-          if (typeof val === 'number') return val.toString();
-          if (typeof val === 'boolean') return val ? 'TRUE' : 'FALSE';
-          if (val instanceof Date) return `'${val.toISOString()}'`;
-          return `'${String(val).replace(/'/g, "''")}'`;
-        });
-        return copySQL + `\n-- Example INSERT:\nINSERT INTO ${targetDB}.${schemaPart}.${tablePart} (${colList}) VALUES (${values.join(", ")});`;
-      }
-      
-      return copySQL + `\n-- Table ${tableName} appears to be empty.`;
+      return buildCopyPreviewSql({
+        dbType: activeConnection.type,
+        tableDisplay: tableName,
+        targetDb: targetDB,
+        srcSchema: schemaPart,
+        srcTable: tablePart,
+        colNames,
+        sampleRow: sampleRow.length > 0 ? sampleRow[0] : null,
+        currentDbDisplay: selectedDatabase ?? "",
+      });
     } catch (e) {
       console.error("Failed to generate copy SQL:", e);
       return `-- Error generating copy SQL: ${e}`;
@@ -1739,9 +1709,9 @@ SELECT ${colList} FROM ${schemaPart}.${tablePart};
           // Force disconnect failed (maybe not enough permissions), proceeding anyway
         }
 
-        await currentDb.execute(`DROP DATABASE "${dbName}"`);
+        await currentDb.execute(buildDropDatabaseSql(activeConnection.type, dbName));
       } else if (["mysql", "mariadb"].includes(activeConnection.type)) {
-        await currentDb.execute(`DROP DATABASE \`${dbName}\``);
+        await currentDb.execute(buildDropDatabaseSql(activeConnection.type, dbName));
       } else {
         // SQLite doesn't really have "Drop Database" in the same way, but we could delete the file
         // For now, only support server-based DBs
@@ -1774,26 +1744,9 @@ SELECT ${colList} FROM ${schemaPart}.${tablePart};
     }
 
     try {
-      if (["postgres", "supabase", "cockroach"].includes(activeConnection.type)) {
-        let sql = `CREATE DATABASE "${payload.name}"`;
-        if (payload.owner) sql += ` OWNER = "${payload.owner}"`;
-        if (payload.template) sql += ` TEMPLATE = "${payload.template}"`;
-        if (payload.encoding) sql += ` ENCODING = '${payload.encoding}'`;
-        if (payload.lcCollate) sql += ` LC_COLLATE = '${payload.lcCollate}'`;
-        if (payload.lcCtype) sql += ` LC_CTYPE = '${payload.lcCtype}'`;
-        if (payload.tablespace) sql += ` TABLESPACE = "${payload.tablespace}"`;
-        if (payload.connectionLimit !== undefined) sql += ` CONNECTION_LIMIT = ${payload.connectionLimit}`;
-        if (payload.isTemplate !== undefined) sql += ` IS_TEMPLATE = ${payload.isTemplate ? 'TRUE' : 'FALSE'}`;
-
-        await currentDb.execute(sql);
-      } else if (["mysql", "mariadb"].includes(activeConnection.type)) {
-        let sql = `CREATE DATABASE \`${payload.name}\``;
-        if (payload.encoding) sql += ` CHARACTER SET ${payload.encoding}`;
-        if (payload.lcCollate) sql += ` COLLATE ${payload.lcCollate}`;
-        await currentDb.execute(sql);
-      } else {
-        throw new Error(`Create Database is not supported for ${activeConnection.type}`);
-      }
+      // DDL text comes from the pure, adversarially-tested builders
+      // (quoting/escaping included); unsupported engines throw there.
+      await currentDb.execute(buildCreateDatabaseSql(activeConnection.type, payload));
 
       // Refresh databases list
       if (["postgres", "supabase", "cockroach"].includes(activeConnection.type)) {
@@ -1966,68 +1919,85 @@ SELECT ${colList} FROM ${schemaPart}.${tablePart};
     }
     
     try {
-      const parts = sourceTable.split('.');
-      const schemaPart = parts.length > 1 ? parts[0] : 'public';
-      const tablePart = parts.length > 1 ? parts.slice(1).join('.') : sourceTable;
-      const targetParts = targetTable.split('.');
-      const targetSchemaPart = targetParts.length > 1 ? targetParts[0] : 'public';
-      const targetTablePart = targetParts.length > 1 ? targetParts.slice(1).join('.') : targetTable;
-      
+      // Quote-aware display-name split (`"my.schema"."my.table"` stays two
+      // parts); every identifier below is quoted by the builders, never
+      // interpolated raw.
+      const src = splitDisplayName(sourceTable);
+      const schemaPart = src.schema ?? 'public';
+      const tablePart = src.table;
+      const tgt = splitDisplayName(targetTable);
+      const targetSchemaPart = tgt.schema ?? 'public';
+      const targetTablePart = tgt.table;
+
       // Check if target table exists
       const checkTarget = await currentDb.select(`
         SELECT EXISTS (
-          SELECT FROM information_schema.tables 
+          SELECT FROM information_schema.tables
           WHERE table_schema = $1 AND table_name = $2
         ) as exists
       `, [targetSchemaPart, targetTablePart]);
-      
+
       if (!checkTarget[0]?.exists) {
         return { success: false, rowsCopied: 0, error: `Target table ${targetSchemaPart}.${targetTablePart} does not exist. Run DDL first.` };
       }
-      
+
       // Get row count before
-      const countBefore = await currentDb.select(`SELECT COUNT(*) as count FROM ${schemaPart}.${tablePart}`);
+      const countBefore = await currentDb.select(buildCountSql(activeConnection.type, schemaPart, tablePart));
       const sourceCount = countBefore[0]?.count || 0;
-      
+
       if (sourceCount === 0) {
         return { success: true, rowsCopied: 0, error: undefined };
       }
-      
+
       let rowsCopied = 0;
-      
+
       // Execute based on method
       if (method === "insert" || method === "copy") {
-        // For INSERT or COPY method, use INSERT...SELECT 
+        // For INSERT or COPY method, use INSERT...SELECT
         // (COPY via SQL requires file system access, so we use INSERT for safety)
-        const batchSize = options?.batchSize || 1000;
-        
+        const rawBatch = options?.batchSize;
+        const batchSize = rawBatch !== undefined && Number.isFinite(rawBatch) && rawBatch > 0
+          ? Math.floor(rawBatch)
+          : 1000;
+
         if (sourceCount <= batchSize) {
           // Direct insert for small tables
-          const result = await currentDb.execute(`
-            INSERT INTO ${targetDB}.${targetSchemaPart}.${targetTablePart}
-            SELECT * FROM ${schemaPart}.${tablePart}
-          `);
+          const result = await currentDb.execute(buildCopyInsertSql({
+            dbType: activeConnection.type,
+            targetDb: targetDB,
+            targetSchema: targetSchemaPart,
+            targetTable: targetTablePart,
+            srcSchema: schemaPart,
+            srcTable: tablePart,
+          }));
           rowsCopied = typeof result.rowsAffected === 'number' ? result.rowsAffected : sourceCount;
         } else {
           // Batch insert for large tables
-          const result = await currentDb.execute(`
-            INSERT INTO ${targetDB}.${targetSchemaPart}.${targetTablePart}
-            SELECT * FROM ${schemaPart}.${tablePart} LIMIT ${batchSize}
-          `);
+          const result = await currentDb.execute(buildCopyInsertSql({
+            dbType: activeConnection.type,
+            targetDb: targetDB,
+            targetSchema: targetSchemaPart,
+            targetTable: targetTablePart,
+            srcSchema: schemaPart,
+            srcTable: tablePart,
+            limit: batchSize,
+          }));
           rowsCopied = typeof result.rowsAffected === 'number' ? result.rowsAffected : batchSize;
         }
       } else if (method === "pgdump") {
         // pg_dump method - requires shell execution, return guidance
-        return { 
-          success: false, 
-          rowsCopied: 0, 
-          error: "pg_dump/pg_restore requires server-side execution. Use: pg_dump -t ${tablePart} -d ${selectedDatabase} | psql -d ${targetDB}" 
+        return {
+          success: false,
+          rowsCopied: 0,
+          error: "pg_dump/pg_restore requires server-side execution. Use: pg_dump -t ${tablePart} -d ${selectedDatabase} | psql -d ${targetDB}"
         };
       }
-      
+
       // Verify after if requested
       if (options?.verifyAfter) {
-        const countAfter = await currentDb.select(`SELECT COUNT(*) as count FROM ${targetDB}.${targetSchemaPart}.${targetTablePart}`);
+        const countAfter = await currentDb.select(
+          buildCountSql(activeConnection.type, targetSchemaPart, targetTablePart, targetDB)
+        );
         const targetCount = countAfter[0]?.count || 0;
         if (targetCount !== rowsCopied) {
           return { success: false, rowsCopied, error: `Verification failed: expected ${rowsCopied}, found ${targetCount}` };

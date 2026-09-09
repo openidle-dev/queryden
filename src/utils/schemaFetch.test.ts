@@ -233,6 +233,45 @@ describe("fetchSchemaItems — no duplicate suggestions", () => {
   });
 });
 
+describe("fetchSchemaItems — per-view schema columns when filtered", () => {
+  // Regression: routines/triggers/foreign-tables queries interpolated the
+  // `table_schema` filter, which PostgreSQL rejects (those views expose
+  // routine_schema / trigger_schema / foreign_table_schema). The caught
+  // errors left functions, procedures, triggers and foreign tables empty.
+  it("uses each catalog view's own schema column", async () => {
+    const issued: string[] = [];
+    await fetchSchemaItems({ db: pgDb(issued), connType: "postgres", selectedSchemas: ["devops"] });
+    const find = (needle: string) => issued.find((s) => s.includes(needle));
+
+    expect(find("information_schema.tables")).toContain("AND table_schema IN ('devops')");
+
+    const routines = issued.filter((s) => s.includes("information_schema.routines"));
+    expect(routines).toHaveLength(2); // functions read + procedures read
+    for (const sql of routines) {
+      expect(sql).toContain("AND routine_schema IN ('devops')");
+      expect(sql).not.toMatch(/AND table_schema IN/);
+    }
+
+    expect(find("information_schema.triggers")).toContain("AND trigger_schema IN ('devops')");
+    expect(find("information_schema.foreign_tables")).toContain("AND foreign_table_schema IN ('devops')");
+    expect(find("FROM pg_attribute")).toContain("AND n.nspname IN ('devops')");
+  });
+
+  it("escapes schema names in every filter (apostrophes must not break SQL)", async () => {
+    const issued: string[] = [];
+    await fetchSchemaItems({ db: pgDb(issued), connType: "postgres", selectedSchemas: ["o'brien"] });
+    const filtered = issued.filter((s) =>
+      /_schema IN \(|nspname IN \(|regnamespace::text IN \(/.test(s),
+    );
+    // tables, views, 2× routines, triggers, indexes, sequences,
+    // procedures, foreign tables, columns, foreign keys
+    expect(filtered.length).toBeGreaterThan(5);
+    for (const sql of filtered) {
+      expect(sql).toContain("'o''brien'");
+    }
+  });
+});
+
 describe("fetchSchemaItems — unknown engine", () => {
   it("returns empty collections with a timestamp", async () => {
     const schema = await fetchSchemaItems({ db: mockDb(() => []), connType: "oracle", selectedSchemas: [] });
