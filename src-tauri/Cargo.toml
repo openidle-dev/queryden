@@ -52,6 +52,17 @@ time = { version = "0.3", features = ["formatting"] }
 # that the upstream version doesn't support yet.
 tauri-plugin-sql = { path = "patches/tauri-plugin-sql" }
 
+# macOS universal builds (`--target universal-apple-darwin`) compile both
+# aarch64 + x86_64 slices on an arm64 runner. openssl-sys (via
+# ssh2 -> libssh2-sys -> openssl-sys) locates OpenSSL through pkg-config,
+# which is not configured for cross-compilation, so the x86_64 slice fails
+# with "Could not find directory of OpenSSL installation". Building OpenSSL
+# from source via the `vendored` feature handles both Apple arches correctly.
+# Scoped to macOS only so Linux/Windows builds keep using system OpenSSL
+# and don't pay the vendored compile cost.
+[target.'cfg(target_os = "macos")'.dependencies]
+openssl-sys = { version = "0.9", features = ["vendored"] }
+
 [profile.release]
 strip = true
 lto = "thin"         # Thin LTO: near-identical size to fat, 2-5x faster link
