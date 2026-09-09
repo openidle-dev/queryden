@@ -37,7 +37,13 @@ hex = "0.4.3"
 argon2 = "0.5"
 password-hash = "0.5"
 keyring = { version = "3" }
-ssh2 = "0.9"
+# vendored-openssl: builds OpenSSL from source (openssl-src) instead of using
+# the system install via pkg-config. Required for the macOS universal build
+# (aarch64 host -> x86_64 slice): openssl-sys cannot cross-compile against a
+# single-arch Homebrew OpenSSL, so the build fails with
+# "pkg-config has not been configured to support cross-compilation".
+# Vendored costs ~1-2 min of extra compile time but works on all targets.
+ssh2 = { version = "0.9", features = ["vendored-openssl"] }
 tokio = { version = "1", features = ["process", "io-util", "rt-multi-thread", "fs", "rt"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 zip = "2"
