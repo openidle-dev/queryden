@@ -17,6 +17,12 @@ import { Dialog } from "../ui/Dialog";
 import { useConfirmDialog } from "../ui/ConfirmDialog";
 import { IconButton } from "../ui/IconButton";
 import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
+import {
+  ALL_SCHEMAS_VALUE,
+  decodeSchemaFilterValue,
+  encodeSchemaFilterValue,
+} from "../../utils/schemaFilterValue";
 import { ERDCanvas } from "./ERDCanvas";
 import { useERData, type ERTable } from "./useERData";
 import { TableSelectorDialog } from "./TableSelectorDialog";
@@ -356,20 +362,18 @@ export function ERDDialog({ isOpen, onClose }: ERDDialogProps) {
 
               <div className="flex items-center gap-2">
                 {selectedSchemaList.length > 1 && (
-                  <select
-                    className="text-[11px] bg-[var(--surface-base)] border border-[var(--neutral-6)] rounded px-2 py-1 text-[var(--neutral-12)] outline-none"
-                    value={schemaFilter ?? ""}
-                    onChange={(e) =>
-                      setSchemaFilter(e.target.value || undefined)
+                  <Select
+                    selectSize="sm"
+                    className="w-36"
+                    value={encodeSchemaFilterValue(schemaFilter)}
+                    onValueChange={(v) =>
+                      setSchemaFilter(decodeSchemaFilterValue(v))
                     }
-                  >
-                    <option value="">All Schemas</option>
-                    {selectedSchemaList.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
+                    options={[
+                      { label: "All Schemas", value: ALL_SCHEMAS_VALUE },
+                      ...selectedSchemaList.map((s) => ({ label: s, value: encodeSchemaFilterValue(s) })),
+                    ]}
+                  />
                 )}
 
                 <div className="relative">

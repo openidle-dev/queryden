@@ -1,10 +1,21 @@
-import { createContext, useState, useEffect, ReactNode } from "react";
+import { createContext, useState, useEffect, useRef, ReactNode } from "react";
 import { invokeCmd, StoredConnectionDto, VaultCredentialDto, FolderDto } from "../lib/ipc";
 import { wouldCreateCycle } from "../utils/folderTree";
 import { useSettings } from "../store/settingsStore";
 import { getDefaultDatabaseName } from "../config/app";
 import { quoteIdentifier } from "../utils/sqlSecurity";
-import { escapeSqlStringLiteral, getDefaultPort } from "../utils/sqlDialect";
+import { getDefaultPort } from "../utils/sqlDialect";
+import { fetchSchemaItems } from "../utils/schemaFetch";
+import {
+  buildCopyInsertSql,
+  buildCopyPreviewSql,
+  buildCountSql,
+  buildCreateDatabaseSql,
+  buildDropDatabaseSql,
+  buildRoleDDL,
+  splitDisplayName,
+} from "../utils/ddlBuilders";
+import { buildConnectionString } from "../utils/connectionString";
 import { logger } from "../utils/logger";
 
 export interface DatabaseConnection {
@@ -47,6 +58,25 @@ export interface VaultCredential {
   name: string;
   username?: string;
   password?: string;
+}
+
+/**
+ * A lazily-established database handle plus everything needed to talk to
+ * its server (resolved credentials, effective TCP endpoint after any SSH
+ * tunnel swap, target database). See `ensureConnectionDb`.
+ */
+export interface EnsuredConnection {
+  /** Live `tauri-plugin-sql` Database handle (cached per connection+database). */
+  db: any;
+  /** Connection with `serverMajorVersion` filled in when detectable. */
+  connection: DatabaseConnection;
+  username: string;
+  password: string;
+  /** Effective TCP host (127.0.0.1 when routed through an SSH tunnel). */
+  host: string;
+  /** Effective TCP port (tunnel local port when routed through SSH). */
+  port: number;
+  database: string;
 }
 
 export interface DatabaseInfo {
@@ -139,7 +169,34 @@ interface ConnectionContextType {
   updateConnection: (id: string, conn: Partial<DatabaseConnection>) => void;
   connectToDatabase: (connId: string, databaseName?: string, overrideVaultCredential?: VaultCredential) => Promise<void>;
   disconnectFromDatabase: () => Promise<void>;
+  /**
+   * Lazily establish (or reuse a cached) database handle for any saved
+   * connection — no sidebar click required. Opening the app connects nothing
+   * (session restore is metadata-only by design), and tabs keep targeting
+   * their own connections, so query/save paths call this for the tab's
+   * target instead of failing with "connect first" errors.
+   *
+   * Same semantics as the manual `connectToDatabase` (vault-credential
+   * reload fallback, SSH tunnel creation, server-version detection) but with
+   * NO global side effects: it never touches `currentDb`, `activeConnection`
+   * or `selectedDatabase`. Handles are cached per connection+database and
+   * shared across calls; use `dropCachedConnection` to evict (disconnect,
+   * connection removal, or a connection-lost error).
+   */
+  ensureConnectionDb: (connId: string, database?: string) => Promise<EnsuredConnection>;
+  /** Close + evict all cached lazy handles for a connection. */
+  dropCachedConnection: (connId: string) => Promise<void>;
   loadSchema: (database: string, overrideSchemas?: string[]) => Promise<void>;
+  /**
+   * Fetch (or reuse a cached) schema snapshot for ANY saved connection —
+   * backing tab-targeted completion for tabs whose connection was never
+   * sidebar-connected. Unlike `loadSchema` it never touches global tree
+   * state (`schemaItems`, progress): results live in a per-connection cache
+   * keyed `${connId}::${database}`. Concurrent callers share one fetch.
+   * Returns null when the connection is unknown or introspection fails, so
+   * callers fall back to the global schema / static keywords.
+   */
+  ensureSchemaFor: (connId: string, database?: string) => Promise<SchemaItems | null>;
   getDDL: (type: string, name: string, schema?: string, table?: string) => Promise<string>;
   generateStatement: (type: "select" | "insert" | "update" | "delete", tableName: string) => Promise<string>;
   exportConnections: (path: string, includePasswords: boolean) => Promise<void>;
@@ -306,6 +363,20 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const [roles, setRoles] = useState<{ login: string[], group: string[] }>({ login: [], group: [] });
   const [tablespaces, setTablespaces] = useState<{ name: string; owner: string; location: string | null; size: string | null }[]>([]);
 
+  // Lazy per-connection handles for `ensureConnectionDb` (multi-connection
+  // startup connects nothing, so tab-target queries establish their own).
+  // Key: `${connectionId}::${database}`. Refs (not state): handles are
+  // resources, not render input. `pending` dedups concurrent first-use races
+  // so two simultaneous runs share one handshake instead of leaking a spare.
+  const lazyHandlesRef = useRef(new Map<string, any>());
+  const lazyPendingRef = useRef(new Map<string, Promise<any>>());
+  // Per-connection schema snapshots backing tab-targeted completion
+  // (`ensureSchemaFor`). Same key shape as the lazy handles. Cached for the
+  // session — introspection is read-only catalog traffic, and eviction rides
+  // on `dropCachedConnection` (disconnect / removal / connection-loss).
+  const schemaCacheRef = useRef(new Map<string, SchemaItems>());
+  const schemaPendingRef = useRef(new Map<string, Promise<SchemaItems | null>>());
+
   // Load from file storage on mount
   useEffect(() => {
     async function loadFromFile() {
@@ -456,6 +527,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       } catch {
         // Tunnel may not exist
       }
+      await dropCachedConnection(id);
     }
     setConnections((prev) => prev.filter((c) => c.id !== id));
   };
@@ -566,6 +638,49 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     );
   };
 
+  /**
+   * Resolve a connection's credentials: explicit override first, otherwise
+   * the vault credential referenced by the connection — with a direct reload
+   * fallback when the in-memory vault list hasn't loaded yet (e.g. a lazy
+   * query seconds after app start). Shared by manual connect and lazy
+   * `ensureConnectionDb` so both see the same credentials.
+   */
+  const resolveConnectionCredentials = async (
+    conn: DatabaseConnection,
+    overrideVaultCredential?: VaultCredential,
+  ): Promise<{ username: string; password: string }> => {
+    let username = conn.username || "";
+    let password = conn.password || "";
+
+    // If override vault credential is passed, use it directly
+    if (overrideVaultCredential) {
+      username = overrideVaultCredential.username || "";
+      password = overrideVaultCredential.password || "";
+    } else if (conn.vaultCredentialId) {
+      // Otherwise try to use vault credentials from connection's vaultCredentialId
+      let vaultCred = vaultCredentials.find(vc => vc.id === conn.vaultCredentialId);
+
+      if (!vaultCred) {
+        // Vault credentials not loaded yet, reload directly
+        try {
+          const creds = await invokeCmd("load_vault_credentials", { vaultPassword: null });
+          const mapped = creds.map(vaultDtoToCredential);
+          setVaultCredentials(mapped);
+          vaultCred = mapped.find(vc => vc.id === conn.vaultCredentialId);
+        } catch (e) {
+          logger.error("Failed to reload vault credentials:", e);
+        }
+      }
+
+      if (vaultCred) {
+        username = vaultCred.username || "";
+        password = vaultCred.password || "";
+      }
+    }
+
+    return { username, password };
+  };
+
   const connectToDatabase = async (connId: string, databaseName?: string, overrideVaultCredential?: VaultCredential) => {
     const conn = connections.find((c) => c.id === connId);
     if (!conn) return;
@@ -576,34 +691,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       const targetDb = databaseName || conn.database;
 
       // Resolve credentials - check for override first (passed directly when user selects profile)
-      let username = conn.username || "";
-      let password = conn.password || "";
-      
-      // If override vault credential is passed, use it directly
-      if (overrideVaultCredential) {
-        username = overrideVaultCredential.username || "";
-        password = overrideVaultCredential.password || "";
-      } else if (conn.vaultCredentialId) {
-        // Otherwise try to use vault credentials from connection's vaultCredentialId
-        let vaultCred = vaultCredentials.find(vc => vc.id === conn.vaultCredentialId);
-        
-        if (!vaultCred) {
-          // Vault credentials not loaded yet, reload directly
-          try {
-            const creds = await invokeCmd("load_vault_credentials", { vaultPassword: null });
-            const mapped = creds.map(vaultDtoToCredential);
-            setVaultCredentials(mapped);
-            vaultCred = mapped.find(vc => vc.id === conn.vaultCredentialId);
-          } catch (e) {
-            logger.error("Failed to reload vault credentials:", e);
-          }
-        }
-        
-        if (vaultCred) {
-          username = vaultCred.username || "";
-          password = vaultCred.password || "";
-        }
-      }
+      const { username, password } = await resolveConnectionCredentials(conn, overrideVaultCredential);
 
       // URL encode credentials to handle special characters in passwords/usernames
       const encodedUser = encodeURIComponent(username);
@@ -708,6 +796,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       } catch (e) {
         logger.error("Failed to close SSH tunnel:", e);
       }
+      // Drop lazily-established handles for this connection too, so a later
+      // reconnect starts clean instead of reusing a stale pooled handle.
+      await dropCachedConnection(activeConnection.id);
     }
     if (currentDb) {
       try {
@@ -727,6 +818,163 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     window.dispatchEvent(new CustomEvent("connection-disconnected"));
   };
 
+  /**
+   * Close + evict every cached lazy handle for a connection (disconnect,
+   * connection removal, or a connection-lost error mid-query). In-flight
+   * handshakes are closed on settle so they can't leak. Cached schema
+   * snapshots for the connection are evicted too so a later reconnect
+   * re-introspects instead of completing against stale catalog data.
+   */
+  const dropCachedConnection = async (connId: string) => {
+    const prefix = `${connId}::`;
+    for (const key of [...schemaCacheRef.current.keys()]) {
+      if (key.startsWith(prefix)) schemaCacheRef.current.delete(key);
+    }
+    for (const key of [...schemaPendingRef.current.keys()]) {
+      if (key.startsWith(prefix)) schemaPendingRef.current.delete(key);
+    }
+    const settle: Promise<unknown>[] = [];
+    for (const [key, pending] of lazyPendingRef.current) {
+      if (key.startsWith(prefix)) {
+        lazyPendingRef.current.delete(key);
+        settle.push(
+          pending
+            .then((db: any) => {
+              try {
+                const r = db?.close?.();
+                if (r && typeof r.then === "function") return r;
+              } catch {
+                /* already dead */
+              }
+            })
+            .catch(() => undefined),
+        );
+      }
+    }
+    const closes: Promise<unknown>[] = [];
+    for (const [key, db] of lazyHandlesRef.current) {
+      if (key.startsWith(prefix)) {
+        lazyHandlesRef.current.delete(key);
+        closes.push(
+          (async () => {
+            try {
+              await db?.close?.();
+            } catch {
+              /* already dead */
+            }
+          })(),
+        );
+      }
+    }
+    await Promise.allSettled([...settle, ...closes]);
+  };
+
+  const ensureConnectionDb = async (connId: string, database?: string): Promise<EnsuredConnection> => {
+    const conn = connections.find((c) => c.id === connId);
+    if (!conn) {
+      throw new Error("Connection not found. It may have been deleted — re-add it in the Database Explorer.");
+    }
+    const targetDb = database || conn.database;
+
+    // Resolve credentials + effective TCP endpoint first: the CLI/psql path
+    // needs them even on a cache hit, and the tunnel must be up before use.
+    const { username, password } = await resolveConnectionCredentials(conn);
+
+    let host = conn.host || "localhost";
+    let port = conn.port || getDefaultPort(conn.type);
+
+    // Create SSH tunnel if enabled (same parameters as manual connect).
+    if (conn.sshEnabled && conn.sshHost && conn.sshUsername && conn.type !== "sqlite") {
+      const tunnelResult = await invokeCmd("create_ssh_tunnel", {
+        connectionId: conn.id,
+        sshHost: conn.sshHost,
+        sshPort: conn.sshPort || 22,
+        sshUsername: conn.sshUsername,
+        sshPassword: conn.sshPassword || null,
+        sshKeyPath: conn.sshKeyPath || null,
+        sshKeyPassphrase: conn.sshKeyPassphrase || null,
+        remoteHost: host,
+        remotePort: port,
+      });
+      host = "127.0.0.1";
+      port = tunnelResult.local_port;
+    }
+
+    const key = `${conn.id}::${targetDb}`;
+    const cached = lazyHandlesRef.current.get(key);
+    if (cached) {
+      return { db: cached, connection: conn, username, password, host, port, database: targetDb };
+    }
+
+    // Dedup concurrent first-use races on the same key. Re-validates after
+    // the await: a dropCachedConnection during the load closes the handle on
+    // settle, so a fulfilled-but-evicted promise must not be reused.
+    const pending = lazyPendingRef.current.get(key);
+    if (pending) {
+      const db = await pending;
+      const stillRegistered = lazyPendingRef.current.get(key) === pending;
+      const cachedNow = lazyHandlesRef.current.get(key);
+      if (!stillRegistered && cachedNow !== db) {
+        throw new Error("Connection was closed while connecting. Please run again to reconnect.");
+      }
+      return { db, connection: conn, username, password, host, port, database: targetDb };
+    }
+
+    const Database = (await import("@tauri-apps/plugin-sql")).default;
+    const connectionString = buildConnectionString({
+      type: conn.type,
+      host,
+      port,
+      database: targetDb,
+      username,
+      password,
+      filepath: conn.filepath,
+    });
+    const loadPromise = Database.load(connectionString);
+    lazyPendingRef.current.set(key, loadPromise);
+    try {
+      const db = await loadPromise;
+      // A dropCachedConnection that ran while loading already closed this
+      // handle on settle and cleared the entries: only cache when this
+      // promise is still the registered load. (The close itself is owned by
+      // the drop path, so just refuse — the caller retries fresh.)
+      if (lazyPendingRef.current.get(key) !== loadPromise) {
+        throw new Error("Connection was closed while connecting. Please run again to reconnect.");
+      }
+      lazyHandlesRef.current.set(key, db);
+
+      // Detect the server major version for the psql CLI path (server-level,
+      // so one detection covers every database on the connection). Best
+      // effort — a failure here must not fail the query itself.
+      let connection = conn;
+      if (
+        conn.serverMajorVersion == null &&
+        ["postgres", "supabase", "cockroach", "psql"].includes((conn.type || "").toLowerCase())
+      ) {
+        try {
+          const [versionRow] = await db.select<any[]>(
+            "SELECT (regexp_matches(version(), E'^PostgreSQL (\\d+)'))[1]::int AS major",
+          );
+          const major = versionRow?.major;
+          if (typeof major === "number") {
+            connection = { ...conn, serverMajorVersion: major };
+            updateConnection(conn.id, { serverMajorVersion: major });
+          }
+        } catch {
+          // Version query failed — the CLI path falls back to system psql.
+        }
+      }
+
+      return { db, connection, username, password, host, port, database: targetDb };
+    } finally {
+      // Only clear our own registration — a newer load for the same key
+      // (started after an eviction) must keep its entry.
+      if (lazyPendingRef.current.get(key) === loadPromise) {
+        lazyPendingRef.current.delete(key);
+      }
+    }
+  };
+
   const loadSchema = async (_database: string, overrideSchemas?: string[]) => {
     if (!activeConnection || !currentDb) {
       setSchemaItems(null);
@@ -735,334 +983,30 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
 
     setIsLoadingSchema(true);
     setSchemaProgress({ phase: "initializing", current: 0, total: 12 });
-    
+
     // Use overrideSchemas if provided (from SchemaSelectionDialog), otherwise read from state
-    const selectedSchemas = overrideSchemas !== undefined 
-      ? overrideSchemas 
+    const selectedSchemas = overrideSchemas !== undefined
+      ? overrideSchemas
       : getSelectedSchemas(activeConnection.id, _database);
-    const schemaFilter = selectedSchemas.length > 0 
-      ? `AND table_schema IN (${selectedSchemas.map(s => escapeSqlStringLiteral(s)).join(',')})`
-      : '';
-    const schemaFilterFk = selectedSchemas.length > 0
-      ? `AND c.connamespace::regnamespace::text IN (${selectedSchemas.map(s => escapeSqlStringLiteral(s)).join(',')})`
-      : '';
-    
+
     try {
-      const schema: SchemaItems = {
-        tables: [],
-        views: [],
-        functions: [],
-        triggers: [],
-        indexes: [],
-        sequences: [],
-        types: [],
-        procedures: [],
-        operators: [],
-        foreignTables: [],
-        eventTriggers: [],
-        extensions: [],
-        languages: [],
-      };
-
-      if (["postgres", "supabase", "cockroach"].includes(activeConnection.type)) {
-        setSchemaProgress({ phase: "tables", current: 1, total: 12 });
-        try {
-          const tables = await currentDb.select(`
-            SELECT table_schema as table_schema, table_name as table_name 
-            FROM information_schema.tables
-            WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
-              AND table_type = 'BASE TABLE'
-              ${schemaFilter}
-            ORDER BY table_schema, table_name
-          `);
-          schema.tables = tables.length > 0 ? tables.map((t: any) => 
-            t.table_schema === 'public' ? t.table_name : `${t.table_schema}.${t.table_name}`
-          ) : [];
-        } catch (e) {
-          console.error("Failed to fetch tables:", e);
-        }
-
-        setSchemaProgress({ phase: "views", current: 2, total: 12 });
-        try {
-          const views = await currentDb.select(`
-            SELECT table_schema as table_schema, table_name as table_name 
-            FROM information_schema.views
-            WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
-              ${schemaFilter}
-            ORDER BY table_schema, table_name
-          `);
-          schema.views = views.length > 0 ? views.map((v: any) => 
-            v.table_schema === 'public' ? v.table_name : `${v.table_schema}.${v.table_name}`
-          ) : [];
-        } catch (e) {
-          console.error("Failed to fetch views:", e);
-        }
-
-        setSchemaProgress({ phase: "functions", current: 3, total: 12 });
-        try {
-          const functions = await currentDb.select(`
-            SELECT routine_schema as routine_schema, routine_name as routine_name 
-            FROM information_schema.routines
-            WHERE routine_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
-              ${schemaFilter}
-            ORDER BY routine_schema, routine_name
-          `);
-          schema.functions = functions.length > 0 ? functions.map((f: any) => 
-            f.routine_schema === 'public' ? f.routine_name : `${f.routine_schema}.${f.routine_name}`
-          ) : [];
-        } catch (e) {
-          console.error("Failed to fetch functions:", e);
-        }
-
-        setSchemaProgress({ phase: "triggers", current: 4, total: 12 });
-        try {
-          const triggers = await currentDb.select(`
-            SELECT trigger_schema as trigger_schema, trigger_name as trigger_name 
-            FROM information_schema.triggers
-            WHERE trigger_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
-              ${schemaFilter}
-            ORDER BY trigger_schema, trigger_name
-          `);
-          schema.triggers = triggers.length > 0 ? triggers.map((t: any) => 
-            t.trigger_schema === 'public' ? t.trigger_name : `${t.trigger_schema}.${t.trigger_name}`
-          ) : [];
-        } catch (e) {
-          schema.triggers = [];
-        }
-
-        setSchemaProgress({ phase: "indexes", current: 5, total: 12 });
-        try {
-          const indexes = await currentDb.select(`
-            SELECT schemaname as schemaname, indexname as indexname 
-            FROM pg_indexes
-            WHERE schemaname NOT IN ('information_schema', 'pg_catalog', 'topology')
-              ${schemaFilter.replace('table_schema', 'schemaname')}
-            ORDER BY schemaname, indexname
-          `);
-          schema.indexes = indexes.length > 0 ? indexes.map((i: any) => 
-            i.schemaname === 'public' ? i.indexname : `${i.schemaname}.${i.indexname}`
-          ) : [];
-        } catch (e) {
-          console.error("Failed to fetch indexes:", e);
-        }
-
-        // Fetch Sequences
-        setSchemaProgress({ phase: "indexes", current: 6, total: 12 });
-        try {
-          const sequences = await currentDb.select(`
-            SELECT sequence_schema as sequence_schema, sequence_name as sequence_name 
-            FROM information_schema.sequences 
-            WHERE sequence_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
-              ${schemaFilter.replace('table_schema', 'sequence_schema')}
-            ORDER BY sequence_schema, sequence_name
-          `);
-          schema.sequences = sequences.length > 0 ? sequences.map((s: any) => 
-            s.sequence_schema === 'public' ? s.sequence_name : `${s.sequence_schema}.${s.sequence_name}`
-          ) : [];
-        } catch (e) {
-          schema.sequences = [];
-        }
-
-        // Fetch user-defined types (domains, enums, composites, ranges)
-        setSchemaProgress({ phase: "types", current: 7, total: 12 });
-        try {
-          const types = await currentDb.select(`
-            SELECT n.nspname AS type_schema, t.typname AS type_name
-            FROM pg_type t
-            JOIN pg_namespace n ON t.typnamespace = n.oid
-            WHERE n.nspname NOT IN ('information_schema', 'pg_catalog', 'topology')
-              AND t.typtype IN ('d', 'e', 'c', 'r', 'm')
-              AND t.typrelid = 0
-            ORDER BY n.nspname, t.typname
-          `);
-          schema.types = types.length > 0 ? types.map((t: any) =>
-            t.type_schema === 'public' ? t.type_name : `${t.type_schema}.${t.type_name}`
-          ) : [];
-        } catch (e) {
-          console.error("Failed to fetch types:", e);
-          schema.types = [];
-        }
-
-        // Fetch procedures (stored procedures, distinct from functions)
-        setSchemaProgress({ phase: "procedures", current: 8, total: 12 });
-        try {
-          const procedures = await currentDb.select(`
-            SELECT routine_schema as routine_schema, routine_name as routine_name
-            FROM information_schema.routines
-            WHERE routine_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
-              AND routine_type = 'PROCEDURE'
-              ${schemaFilter}
-            ORDER BY routine_schema, routine_name
-          `);
-          schema.procedures = procedures.length > 0 ? procedures.map((p: any) =>
-            p.routine_schema === 'public' ? p.routine_name : `${p.routine_schema}.${p.routine_name}`
-          ) : [];
-        } catch (e) {
-          console.error("Failed to fetch procedures:", e);
-          schema.procedures = [];
-        }
-
-        // Fetch operators
-        setSchemaProgress({ phase: "operators", current: 9, total: 12 });
-        try {
-          const operators = await currentDb.select(`
-            SELECT n.nspname AS operator_schema, o.oprname AS operator_name
-            FROM pg_operator o
-            JOIN pg_namespace n ON o.oprnamespace = n.oid
-            WHERE n.nspname NOT IN ('information_schema', 'pg_catalog', 'topology')
-            ORDER BY n.nspname, o.oprname
-          `);
-          schema.operators = operators.length > 0 ? operators.map((o: any) =>
-            o.operator_schema === 'public' ? o.operator_name : `${o.operator_schema}.${o.operator_name}`
-          ) : [];
-        } catch (e) {
-          console.error("Failed to fetch operators:", e);
-          schema.operators = [];
-        }
-
-        // Fetch foreign tables
-        setSchemaProgress({ phase: "foreign_tables", current: 10, total: 12 });
-        try {
-          const foreignTables = await currentDb.select(`
-            SELECT foreign_table_schema, foreign_table_name
-            FROM information_schema.foreign_tables
-            WHERE foreign_table_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
-              ${schemaFilter}
-            ORDER BY foreign_table_schema, foreign_table_name
-          `);
-          schema.foreignTables = foreignTables.length > 0 ? foreignTables.map((ft: any) =>
-            ft.foreign_table_schema === 'public' ? ft.foreign_table_name : `${ft.foreign_table_schema}.${ft.foreign_table_name}`
-          ) : [];
-        } catch (e) {
-          console.error("Failed to fetch foreign tables:", e);
-          schema.foreignTables = [];
-        }
-
-        // Fetch columns for IntelliSense
-        setSchemaProgress({ phase: "columns", current: 11, total: 12 }); 
-        try {
-          const cols = await currentDb.select(`
-              SELECT 
-                n.nspname as table_schema,
-                c.relname as table_name,
-                a.attname as column_name
-              FROM pg_attribute a
-              JOIN pg_class c ON a.attrelid = c.oid
-              JOIN pg_namespace n ON c.relnamespace = n.oid
-              WHERE a.attnum > 0 
-                AND NOT a.attisdropped
-                AND n.nspname NOT IN ('information_schema', 'pg_catalog', 'topology')
-                ${selectedSchemas.length > 0 ? `AND n.nspname IN (${selectedSchemas.map(s => `'${s}'`).join(',')})` : ''}
-                AND c.relkind IN ('r', 'v', 'm', 'f')
-              ORDER BY n.nspname, c.relname, a.attnum
-              LIMIT 50000
-          `);
-          
-          schema.columns = cols.map((c: any) => ({
-            table_name: c.table_schema === 'public' ? c.table_name : `${c.table_schema}.${c.table_name}`,
-            column_name: c.column_name
-          }));
-        } catch (err) {
-          console.error("Failed to fetch columns:", err);
-        }
-
-        // Fetch Foreign Keys for smart completion
-        setSchemaProgress({ phase: "foreign_keys", current: 12, total: 12 });
-        try {
-          const fks = await currentDb.select(`
-              SELECT
-                conrelid::regclass::text AS source_table,
-                a.attname AS source_column,
-                confrelid::regclass::text AS target_table,
-                af.attname AS target_column
-              FROM pg_constraint AS c
-              JOIN pg_attribute AS a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
-              JOIN pg_attribute AS af ON af.attrelid = c.confrelid AND af.attnum = ANY(c.confkey)
-              WHERE c.contype = 'f'
-                AND c.connamespace::regnamespace::text NOT IN ('information_schema', 'pg_catalog', 'topology')
-                ${schemaFilterFk}
-          `);
-          schema.foreignKeys = fks;
-        } catch (err) {
-          console.error("Failed to fetch Foreign Keys:", err);
-        }
-
-        // Fetch extensions
-        try {
-          const extensions = await currentDb.select(`
-            SELECT extname FROM pg_extension ORDER BY extname
-          `);
-          schema.extensions = extensions.map((e: any) => e.extname);
-        } catch (e) {
-          schema.extensions = [];
-        }
-
-        // Fetch event triggers
-        try {
-          const eventTriggers = await currentDb.select(`
-            SELECT evtname FROM pg_event_trigger ORDER BY evtname
-          `);
-          schema.eventTriggers = eventTriggers.map((t: any) => t.evtname);
-        } catch (e) {
-          schema.eventTriggers = [];
-        }
-
-        // Fetch procedural languages
-        try {
-          const languages = await currentDb.select(`
-            SELECT lanname FROM pg_language WHERE lanispl = true ORDER BY lanname
-          `);
-          schema.languages = languages.map((l: any) => l.lanname);
-        } catch (e) {
-          schema.languages = [];
-        }
-
-      } else if (["mysql", "mariadb"].includes(activeConnection.type)) {
-        const tables = await currentDb.select(`SHOW TABLES`);
-        schema.tables = tables.map((t: any) => Object.values(t)[0] as string);
-
-        const views = await currentDb.select(`SHOW FULL TABLES WHERE Table_type = 'VIEW'`);
-        schema.views = views.map((t: any) => Object.values(t)[0] as string);
-
-        // Fetch MySQL stored procedures
-        try {
-          const procedures = await currentDb.select(`
-            SELECT ROUTINE_NAME AS routine_name
-            FROM information_schema.ROUTINES
-            WHERE ROUTINE_SCHEMA = DATABASE() AND ROUTINE_TYPE = 'PROCEDURE'
-            ORDER BY ROUTINE_NAME
-          `);
-          schema.procedures = procedures.map((p: any) => p.routine_name);
-        } catch (err) {
-          console.error("Failed to fetch MySQL procedures:", err);
-          schema.procedures = [];
-        }
-
-        // Fetch Foreign Keys for MySQL completion
-        try {
-          const fks = await currentDb.select(`
-            SELECT 
-              kcu.TABLE_NAME AS source_table,
-              kcu.COLUMN_NAME AS source_column,
-              kcu.REFERENCED_TABLE_NAME AS target_table,
-              kcu.REFERENCED_COLUMN_NAME AS target_column
-            FROM information_schema.KEY_COLUMN_USAGE AS kcu
-            JOIN information_schema.TABLE_CONSTRAINTS AS tc 
-              ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME 
-              AND tc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA
-            WHERE tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
-              AND kcu.TABLE_SCHEMA = DATABASE()
-          `);
-          schema.foreignKeys = fks;
-        } catch (err) {
-          console.error("Failed to fetch MySQL Foreign Keys:", err);
-        }
-      }
-
-      setSchemaItems(prev => ({ 
+      // Introspection itself lives in fetchSchemaItems (shared with the
+      // per-tab background path `ensureSchemaFor`) so the explorer tree and
+      // tab-targeted completion always see identical data.
+      const schema = await fetchSchemaItems({
+        db: currentDb,
+        connType: activeConnection.type,
+        selectedSchemas,
+        onProgress: (s) => setSchemaProgress({
+          phase: s.phase as SchemaLoadingProgress["phase"],
+          current: s.current,
+          total: s.total,
+        }),
+      });
+      setSchemaItems(prev => ({
         ...prev,
-        ...schema, 
-        _ts: Date.now() 
+        ...schema,
+        _ts: Date.now()
       }));
       setSchemaProgress({ phase: "complete", current: 12, total: 12 });
     } catch (error) {
@@ -1073,29 +1017,59 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const buildRoleDDL = (role: any, isLogin: boolean): string => {
-    let ddl = `CREATE ROLE ${role.rolname} WITH`;
-    const opts: string[] = [];
-    opts.push(isLogin ? 'LOGIN' : 'NOLOGIN');
-    opts.push(role.rolsuper ? 'SUPERUSER' : 'NOSUPERUSER');
-    opts.push(role.rolcreatedb ? 'CREATEDB' : 'NOCREATEDB');
-    opts.push(role.rolcreaterole ? 'CREATEROLE' : 'NOCREATEROLE');
-    opts.push(role.rolinherit ? 'INHERIT' : 'NOINHERIT');
-    opts.push(role.rolreplication ? 'REPLICATION' : 'NOREPLICATION');
-    opts.push(role.rolbypassrls ? 'BYPASSRLS' : 'NOBYPASSRLS');
-    if (role.rolpassword) {
-      opts.push(`ENCRYPTED PASSWORD '${role.rolpassword}'`);
-    }
-    const connLimit = role.rolconnlimit ?? -1;
-    opts.push(`CONNECTION LIMIT ${connLimit}`);
-    if (role.rolvaliduntil) {
-      opts.push(`VALID UNTIL '${role.rolvaliduntil}'`);
-    } else {
-      opts.push("VALID UNTIL 'infinity'");
-    }
-    ddl += '\n  ' + opts.join('\n  ') + ';';
-    return ddl;
+  /**
+   * Background schema fetch for tab-targeted completion. Establishes the
+   * connection lazily (vault/SSH handled inside `ensureConnectionDb`),
+   * introspects via the shared `fetchSchemaItems`, and caches per
+   * connection+database. Never touches global tree state. Concurrent
+   * callers for the same key share one fetch; only the still-registered
+   * fetch may populate the cache (eviction during flight drops the result).
+   */
+  const ensureSchemaFor = async (connId: string, database?: string): Promise<SchemaItems | null> => {
+    const conn = connections.find((c) => c.id === connId);
+    if (!conn) return null;
+    const dbName = database || conn.database;
+    const key = `${connId}::${dbName}`;
+
+    const hit = schemaCacheRef.current.get(key);
+    if (hit) return hit;
+    const pending = schemaPendingRef.current.get(key);
+    if (pending) return pending;
+
+    // Holder for the in-flight promise so the async body can verify it is
+    // still the registered fetch (an eviction mid-flight must not resurrect
+    // stale data). Assigned synchronously below, before the body first runs.
+    const slot: { current: Promise<SchemaItems | null> | null } = { current: null };
+    const run: Promise<SchemaItems | null> = (async () => {
+      try {
+        const ensured = await ensureConnectionDb(connId, dbName);
+        const items = await fetchSchemaItems({
+          db: ensured.db,
+          connType: ensured.connection.type,
+          selectedSchemas: getSelectedSchemas(connId, dbName),
+        });
+        // An eviction that ran mid-flight already dropped our registration:
+        // don't resurrect stale data (the caller retries fresh).
+        if (schemaPendingRef.current.get(key) !== slot.current) return null;
+        schemaCacheRef.current.set(key, items);
+        return items;
+      } catch (e) {
+        logger.error("Background schema fetch failed:", e);
+        return null;
+      } finally {
+        if (schemaPendingRef.current.get(key) === slot.current) {
+          schemaPendingRef.current.delete(key);
+        }
+      }
+    })();
+    slot.current = run;
+    schemaPendingRef.current.set(key, run);
+    return run;
   };
+
+  // Role DDL lives in ddlBuilders.buildRoleDDL (pure + adversarially
+  // tested): role names/attributes come from pg_roles rows and must be
+  // quoted/escaped, never interpolated raw.
 
   const getDDL = async (type: string, name: string, schema?: string, table?: string): Promise<string> => {
     if (!activeConnection || !currentDb) return "";
@@ -1568,7 +1542,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
             if (!roleInfo || roleInfo.length === 0) {
               return `-- Role ${name} not found`;
             }
-            return buildRoleDDL(roleInfo[0], true);
+            return buildRoleDDL(roleInfo[0], true, activeConnection.type);
           } catch (e) {
             return `-- Could not get role definition: ${e}`;
           }
@@ -1594,7 +1568,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
             if (!roleInfo || roleInfo.length === 0) {
               return `-- Role ${name} not found`;
             }
-            return buildRoleDDL(roleInfo[0], false);
+            return buildRoleDDL(roleInfo[0], false, activeConnection.type);
           } catch (e) {
             return `-- Could not get role definition: ${e}`;
           }
@@ -1664,63 +1638,44 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     if (!activeConnection || !currentDb) return "-- Not connected to a database";
     
     try {
-      const parts = tableName.split('.');
-      const schemaPart = parts.length > 1 ? parts[0] : 'public';
-      const tablePart = parts.length > 1 ? parts.slice(1).join('.') : tableName;
-      
+      // Quote-aware split (`"my.schema"."my.table"` stays two parts).
+      const { schema: rawSchema, table: tablePart } = splitDisplayName(tableName);
+      const schemaPart = rawSchema ?? 'public';
+
       if (!["postgres", "supabase", "cockroach"].includes(activeConnection.type)) {
         return `-- COPY is only supported for PostgreSQL. Consider using INSERT statements for ${activeConnection.type}.`;
       }
-      
+
       // Get column names
       const cols = await currentDb.select(`
-        SELECT column_name, data_type FROM information_schema.columns 
+        SELECT column_name, data_type FROM information_schema.columns
         WHERE table_name = $1 AND table_schema = $2
         ORDER BY ordinal_position
       `, [tablePart, schemaPart]);
-      
+
       if (cols.length === 0) {
         return `-- No columns found for table ${tableName}`;
       }
-      
+
       const colNames = cols.map((c: any) => c.column_name);
-      const colList = colNames.join(", ");
-      
-      // Use COPY command for PostgreSQL - this is the fastest method
-      // Note: COPY requires both databases to be accessible
-      // We'll generate a script that uses \connect or pg_dump approach
-      
-      const copySQL = `
--- Fast data copy using PostgreSQL COPY command
--- This script will copy all data from ${tableName} to ${targetDB}.
 
--- Method 1: Using INSERT with SELECT (works across databases if same server)
-INSERT INTO ${targetDB}.${schemaPart}.${tablePart} (${colList})
-SELECT ${colList} FROM ${schemaPart}.${tablePart};
+      // Sample row for the preview INSERT. Column identifiers are quoted
+      // (catalog content must never be interpolated raw); values go through
+      // formatSqlLiteral inside the preview builder.
+      const quotedCols = colNames.map((c: string) => quoteIdentifier(c, activeConnection.type));
+      const sampleSelect = `SELECT ${quotedCols.join(", ")} FROM ${quoteIdentifier(`${schemaPart}.${tablePart}`, activeConnection.type)} LIMIT 1`;
+      const sampleRow = await currentDb.select(sampleSelect);
 
--- Note: For cross-server copying, use pg_dump/pg_restore:
--- pg_dump -t ${tablePart} ${selectedDatabase} | psql -h targethost -d ${targetDB}
-
--- Alternative: Generate batch INSERTs for safer cross-server copy
--- The following generates INSERT statements:
-`;
-      
-      // Also generate sample batch INSERT for verification
-      const sampleRow = await currentDb.select(`SELECT ${colList} FROM ${schemaPart}.${tablePart} LIMIT 1`);
-      
-      if (sampleRow.length > 0) {
-        const values = colNames.map((col: string) => {
-          const val = sampleRow[0][col];
-          if (val === null) return 'NULL';
-          if (typeof val === 'number') return val.toString();
-          if (typeof val === 'boolean') return val ? 'TRUE' : 'FALSE';
-          if (val instanceof Date) return `'${val.toISOString()}'`;
-          return `'${String(val).replace(/'/g, "''")}'`;
-        });
-        return copySQL + `\n-- Example INSERT:\nINSERT INTO ${targetDB}.${schemaPart}.${tablePart} (${colList}) VALUES (${values.join(", ")});`;
-      }
-      
-      return copySQL + `\n-- Table ${tableName} appears to be empty.`;
+      return buildCopyPreviewSql({
+        dbType: activeConnection.type,
+        tableDisplay: tableName,
+        targetDb: targetDB,
+        srcSchema: schemaPart,
+        srcTable: tablePart,
+        colNames,
+        sampleRow: sampleRow.length > 0 ? sampleRow[0] : null,
+        currentDbDisplay: selectedDatabase ?? "",
+      });
     } catch (e) {
       console.error("Failed to generate copy SQL:", e);
       return `-- Error generating copy SQL: ${e}`;
@@ -1754,9 +1709,9 @@ SELECT ${colList} FROM ${schemaPart}.${tablePart};
           // Force disconnect failed (maybe not enough permissions), proceeding anyway
         }
 
-        await currentDb.execute(`DROP DATABASE "${dbName}"`);
+        await currentDb.execute(buildDropDatabaseSql(activeConnection.type, dbName));
       } else if (["mysql", "mariadb"].includes(activeConnection.type)) {
-        await currentDb.execute(`DROP DATABASE \`${dbName}\``);
+        await currentDb.execute(buildDropDatabaseSql(activeConnection.type, dbName));
       } else {
         // SQLite doesn't really have "Drop Database" in the same way, but we could delete the file
         // For now, only support server-based DBs
@@ -1789,26 +1744,9 @@ SELECT ${colList} FROM ${schemaPart}.${tablePart};
     }
 
     try {
-      if (["postgres", "supabase", "cockroach"].includes(activeConnection.type)) {
-        let sql = `CREATE DATABASE "${payload.name}"`;
-        if (payload.owner) sql += ` OWNER = "${payload.owner}"`;
-        if (payload.template) sql += ` TEMPLATE = "${payload.template}"`;
-        if (payload.encoding) sql += ` ENCODING = '${payload.encoding}'`;
-        if (payload.lcCollate) sql += ` LC_COLLATE = '${payload.lcCollate}'`;
-        if (payload.lcCtype) sql += ` LC_CTYPE = '${payload.lcCtype}'`;
-        if (payload.tablespace) sql += ` TABLESPACE = "${payload.tablespace}"`;
-        if (payload.connectionLimit !== undefined) sql += ` CONNECTION_LIMIT = ${payload.connectionLimit}`;
-        if (payload.isTemplate !== undefined) sql += ` IS_TEMPLATE = ${payload.isTemplate ? 'TRUE' : 'FALSE'}`;
-
-        await currentDb.execute(sql);
-      } else if (["mysql", "mariadb"].includes(activeConnection.type)) {
-        let sql = `CREATE DATABASE \`${payload.name}\``;
-        if (payload.encoding) sql += ` CHARACTER SET ${payload.encoding}`;
-        if (payload.lcCollate) sql += ` COLLATE ${payload.lcCollate}`;
-        await currentDb.execute(sql);
-      } else {
-        throw new Error(`Create Database is not supported for ${activeConnection.type}`);
-      }
+      // DDL text comes from the pure, adversarially-tested builders
+      // (quoting/escaping included); unsupported engines throw there.
+      await currentDb.execute(buildCreateDatabaseSql(activeConnection.type, payload));
 
       // Refresh databases list
       if (["postgres", "supabase", "cockroach"].includes(activeConnection.type)) {
@@ -1981,68 +1919,85 @@ SELECT ${colList} FROM ${schemaPart}.${tablePart};
     }
     
     try {
-      const parts = sourceTable.split('.');
-      const schemaPart = parts.length > 1 ? parts[0] : 'public';
-      const tablePart = parts.length > 1 ? parts.slice(1).join('.') : sourceTable;
-      const targetParts = targetTable.split('.');
-      const targetSchemaPart = targetParts.length > 1 ? targetParts[0] : 'public';
-      const targetTablePart = targetParts.length > 1 ? targetParts.slice(1).join('.') : targetTable;
-      
+      // Quote-aware display-name split (`"my.schema"."my.table"` stays two
+      // parts); every identifier below is quoted by the builders, never
+      // interpolated raw.
+      const src = splitDisplayName(sourceTable);
+      const schemaPart = src.schema ?? 'public';
+      const tablePart = src.table;
+      const tgt = splitDisplayName(targetTable);
+      const targetSchemaPart = tgt.schema ?? 'public';
+      const targetTablePart = tgt.table;
+
       // Check if target table exists
       const checkTarget = await currentDb.select(`
         SELECT EXISTS (
-          SELECT FROM information_schema.tables 
+          SELECT FROM information_schema.tables
           WHERE table_schema = $1 AND table_name = $2
         ) as exists
       `, [targetSchemaPart, targetTablePart]);
-      
+
       if (!checkTarget[0]?.exists) {
         return { success: false, rowsCopied: 0, error: `Target table ${targetSchemaPart}.${targetTablePart} does not exist. Run DDL first.` };
       }
-      
+
       // Get row count before
-      const countBefore = await currentDb.select(`SELECT COUNT(*) as count FROM ${schemaPart}.${tablePart}`);
+      const countBefore = await currentDb.select(buildCountSql(activeConnection.type, schemaPart, tablePart));
       const sourceCount = countBefore[0]?.count || 0;
-      
+
       if (sourceCount === 0) {
         return { success: true, rowsCopied: 0, error: undefined };
       }
-      
+
       let rowsCopied = 0;
-      
+
       // Execute based on method
       if (method === "insert" || method === "copy") {
-        // For INSERT or COPY method, use INSERT...SELECT 
+        // For INSERT or COPY method, use INSERT...SELECT
         // (COPY via SQL requires file system access, so we use INSERT for safety)
-        const batchSize = options?.batchSize || 1000;
-        
+        const rawBatch = options?.batchSize;
+        const batchSize = rawBatch !== undefined && Number.isFinite(rawBatch) && rawBatch > 0
+          ? Math.floor(rawBatch)
+          : 1000;
+
         if (sourceCount <= batchSize) {
           // Direct insert for small tables
-          const result = await currentDb.execute(`
-            INSERT INTO ${targetDB}.${targetSchemaPart}.${targetTablePart}
-            SELECT * FROM ${schemaPart}.${tablePart}
-          `);
+          const result = await currentDb.execute(buildCopyInsertSql({
+            dbType: activeConnection.type,
+            targetDb: targetDB,
+            targetSchema: targetSchemaPart,
+            targetTable: targetTablePart,
+            srcSchema: schemaPart,
+            srcTable: tablePart,
+          }));
           rowsCopied = typeof result.rowsAffected === 'number' ? result.rowsAffected : sourceCount;
         } else {
           // Batch insert for large tables
-          const result = await currentDb.execute(`
-            INSERT INTO ${targetDB}.${targetSchemaPart}.${targetTablePart}
-            SELECT * FROM ${schemaPart}.${tablePart} LIMIT ${batchSize}
-          `);
+          const result = await currentDb.execute(buildCopyInsertSql({
+            dbType: activeConnection.type,
+            targetDb: targetDB,
+            targetSchema: targetSchemaPart,
+            targetTable: targetTablePart,
+            srcSchema: schemaPart,
+            srcTable: tablePart,
+            limit: batchSize,
+          }));
           rowsCopied = typeof result.rowsAffected === 'number' ? result.rowsAffected : batchSize;
         }
       } else if (method === "pgdump") {
         // pg_dump method - requires shell execution, return guidance
-        return { 
-          success: false, 
-          rowsCopied: 0, 
-          error: "pg_dump/pg_restore requires server-side execution. Use: pg_dump -t ${tablePart} -d ${selectedDatabase} | psql -d ${targetDB}" 
+        return {
+          success: false,
+          rowsCopied: 0,
+          error: "pg_dump/pg_restore requires server-side execution. Use: pg_dump -t ${tablePart} -d ${selectedDatabase} | psql -d ${targetDB}"
         };
       }
-      
+
       // Verify after if requested
       if (options?.verifyAfter) {
-        const countAfter = await currentDb.select(`SELECT COUNT(*) as count FROM ${targetDB}.${targetSchemaPart}.${targetTablePart}`);
+        const countAfter = await currentDb.select(
+          buildCountSql(activeConnection.type, targetSchemaPart, targetTablePart, targetDB)
+        );
         const targetCount = countAfter[0]?.count || 0;
         if (targetCount !== rowsCopied) {
           return { success: false, rowsCopied, error: `Verification failed: expected ${rowsCopied}, found ${targetCount}` };
@@ -2131,7 +2086,10 @@ SELECT ${colList} FROM ${schemaPart}.${tablePart};
         updateConnection,
         connectToDatabase,
         disconnectFromDatabase,
+        ensureConnectionDb,
+        dropCachedConnection,
         loadSchema,
+        ensureSchemaFor,
         getDDL,
         generateStatement,
         exportConnections,

@@ -63,10 +63,12 @@ export function isDateTimeType(
  * Returns true if the column should render with the boolean checkbox editor.
  *
  * Same strategy as {@link isDateTimeType}: authoritative SQL-type match first
- * (`boolean`, `bool`, `bit`), name heuristic (`active`, `is_*`, …) when the
- * type is unknown. Used for NULL cells on new rows, where there is no value
- * to infer the widget from — a new boolean starts unchecked but stays NULL
- * until the user toggles it.
+ * (`boolean`, `bool`), name heuristic (`active`, `is_*`, …) when the type is
+ * unknown. `BIT` is deliberately NOT a boolean: `BIT(8)` and wider bit
+ * fields would otherwise render as a checkbox, losing the real bit value on
+ * save. Used for NULL cells on new rows, where there is no value to infer
+ * the widget from — a new boolean starts unchecked but stays NULL until the
+ * user toggles it.
  */
 export function isBoolType(
   sqlType: string | undefined,
@@ -75,7 +77,7 @@ export function isBoolType(
   if (sqlType && sqlType.trim() !== "") {
     const normalized = sqlType.trim().toUpperCase();
     const head = normalized.split(/[(\s]/, 1)[0];
-    return head === "BOOL" || head === "BOOLEAN" || head === "BIT";
+    return head === "BOOL" || head === "BOOLEAN";
   }
   const low = columnName.toLowerCase();
   return (
@@ -155,6 +157,46 @@ export function isJsonType(
   }
   const low = columnName.toLowerCase();
   return ["json", "data", "metadata", "properties", "attributes"].some((k) => low.includes(k));
+}
+
+const INT_STRING_RE = /^[+-]?\d+$/;
+
+function asBigIntForCompare(val: unknown): bigint | null {
+  if (typeof val === "number") {
+    return Number.isSafeInteger(val) ? BigInt(val) : null;
+  }
+  if (typeof val === "string" && INT_STRING_RE.test(val.trim())) {
+    try {
+      return BigInt(val.trim());
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Total order for grid sorting that keeps #41 digit-exact strings exact.
+ *
+ * - number/number compares numerically (float64, unchanged);
+ * - integer-string/integer-string compares via BigInt, so
+ *   `9007199254740993` sorts before `10000000000000000` (localeCompare gets
+ *   that backwards) without ever coercing through lossy `Number()`;
+ * - safe-integer numbers sort against integer strings the same way;
+ * - everything else falls back to `localeCompare` on strings (unchanged).
+ *
+ * Null/undefined rank outside this function — callers handle those first.
+ */
+export function compareGridValues(a: unknown, b: unknown): number {
+  if (typeof a === "number" && typeof b === "number") {
+    return a - b;
+  }
+  const bigA = asBigIntForCompare(a);
+  const bigB = asBigIntForCompare(b);
+  if (bigA !== null && bigB !== null) {
+    return bigA < bigB ? -1 : bigA > bigB ? 1 : 0;
+  }
+  return String(a).localeCompare(String(b));
 }
 
 /**

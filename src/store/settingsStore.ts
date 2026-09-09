@@ -61,6 +61,9 @@ export interface DBSettings {
   // Vault
   hasVaultEnabled: boolean;
 
+  // Startup — reconnect the previously-active connection (best effort).
+  autoReconnect: boolean;
+
   // Updates
   updateChannel: "stable" | "beta";
 
@@ -143,6 +146,9 @@ const defaultSettings: Omit<DBSettings, "setSetting" | "resetSettings"> = {
   // Vault
   hasVaultEnabled: true,
 
+  // Startup — reconnect the previously-active connection (best effort).
+  autoReconnect: true,
+
   // Updates
   updateChannel: "stable",
 
@@ -167,6 +173,17 @@ function isTauri(): boolean {
   const w = window as Window & { __TAURI_INTERNALS__?: unknown; __TAURI__?: unknown };
   return !!w.__TAURI_INTERNALS__ || !!w.__TAURI__;
 }
+
+/**
+ * Resolves once the persisted settings file has been read (or the read was
+ * skipped/failed). Startup flows that depend on a user-toggled setting
+ * (e.g. auto-reconnect) must await this first — otherwise the default would
+ * win the race against the user's saved preference.
+ */
+let resolveSettingsReady: () => void = () => undefined;
+export const settingsReady: Promise<void> = new Promise<void>((res) => {
+  resolveSettingsReady = res;
+});
 
 const loadFromFile = async (): Promise<Partial<DBSettings>> => {
   if (!isTauri()) return {};
@@ -206,25 +223,29 @@ export const useSettings = create<DBSettings>()((set, get) => ({
 // Initialize settings from file
 if (typeof window !== "undefined") {
   (async () => {
-    // Load from encrypted Rust storage
-    const fileSettings = await loadFromFile();
-    if (fileSettings && Object.keys(fileSettings).length > 0) {
-      useSettings.setState({ ...defaultSettings, ...fileSettings });
-    }
-    
-    // Initialize vault state from loaded settings
-    const { useVault } = await import('./vaultStore');
-    useVault.getState().initFromSettings();
+    try {
+      // Load from encrypted Rust storage
+      const fileSettings = await loadFromFile();
+      if (fileSettings && Object.keys(fileSettings).length > 0) {
+        useSettings.setState({ ...defaultSettings, ...fileSettings });
+      }
 
-    // Sync persisted AI settings to aiStore
-    const s = useSettings.getState();
-    const { useAI } = await import('./aiStore');
-    useAI.setState({
-      provider: s.aiProvider,
-      apiKey: s.aiApiKey,
-      model: s.aiModel,
-      endpoint: s.aiEndpoint,
-      enabled: s.aiEnabled,
-    });
+      // Initialize vault state from loaded settings
+      const { useVault } = await import('./vaultStore');
+      useVault.getState().initFromSettings();
+
+      // Sync persisted AI settings to aiStore
+      const s = useSettings.getState();
+      const { useAI } = await import('./aiStore');
+      useAI.setState({
+        provider: s.aiProvider,
+        apiKey: s.aiApiKey,
+        model: s.aiModel,
+        endpoint: s.aiEndpoint,
+        enabled: s.aiEnabled,
+      });
+    } finally {
+      resolveSettingsReady();
+    }
   })();
 }

@@ -30,7 +30,7 @@ pub(crate) fn to_json(v: SqliteValueRef) -> Result<JsonValue, Error> {
         }
         "INTEGER" | "NUMERIC" => {
             if let Ok(v) = v.to_owned().try_decode::<i64>() {
-                JsonValue::Number(v.into())
+                super::int64_to_json(v)
             } else {
                 JsonValue::Null
             }

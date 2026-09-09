@@ -3,6 +3,10 @@ import {
   detectSchemaDotContext,
   detectAliasDotContext,
   matchesQualifiedOrBareName,
+  matchesStaticLabel,
+  pickCompletionSchema,
+  generateTableAlias,
+  extractExistingAliases,
 } from "./completionContext";
 
 const COLUMNS = [
@@ -289,5 +293,120 @@ describe("matchesQualifiedOrBareName — schema-qualified label prefilter", () =
     // the suffix after the first dot is `schema.table`, which `.startsWith("schema")` matches.
     expect(matchesQualifiedOrBareName("db.schema.table", "schema")).toBe(true);
     expect(matchesQualifiedOrBareName("db.schema.table", "table")).toBe(false);
+  });
+});
+
+describe("matchesStaticLabel (schema-free keyword/function fallback)", () => {
+  it("matches prefixes case-insensitively", () => {
+    expect(matchesStaticLabel("SELECT", "sel")).toBe(true);
+    expect(matchesStaticLabel("SELECT", "SEL")).toBe(true);
+    expect(matchesStaticLabel("COUNT", "cou")).toBe(true);
+  });
+
+  it("matches infixes so multi-word keywords survive (e.g. 'join' in 'LEFT JOIN')", () => {
+    expect(matchesStaticLabel("LEFT JOIN", "join")).toBe(true);
+    expect(matchesStaticLabel("ORDER BY", "by")).toBe(true);
+  });
+
+  it("rejects non-matching words", () => {
+    expect(matchesStaticLabel("SELECT", "xyz")).toBe(false);
+    expect(matchesStaticLabel("FROM", "sel")).toBe(false);
+  });
+
+  it("matches everything on empty input (trigger with no word)", () => {
+    expect(matchesStaticLabel("SELECT", "")).toBe(true);
+  });
+});
+
+describe("pickCompletionSchema — tab-aware schema source", () => {
+  const globalItems = { tables: ["users"], views: [], functions: [], columns: [], foreignKeys: [], _ts: 1 };
+  const tabItems = { tables: ["devops.deployments"], views: [], functions: [], columns: [], foreignKeys: [], _ts: 2 };
+
+  it("prefers the tab schema when the tab targets its connection", () => {
+    expect(pickCompletionSchema({
+      globalItems, globalConnId: "conn-a",
+      tabItems, tabConnId: "conn-b",
+      targetConnId: "conn-b",
+    })).toBe(tabItems);
+  });
+
+  it("prefers the global schema when the tab targets the active connection", () => {
+    expect(pickCompletionSchema({
+      globalItems, globalConnId: "conn-a",
+      tabItems, tabConnId: "conn-b",
+      targetConnId: "conn-a",
+    })).toBe(globalItems);
+  });
+
+  it("falls back to whichever schema exists when the target has none cached", () => {
+    expect(pickCompletionSchema({
+      globalItems, globalConnId: "conn-a",
+      tabItems: null, tabConnId: null,
+      targetConnId: "conn-b",
+    })).toBe(globalItems);
+    expect(pickCompletionSchema({
+      globalItems: null, globalConnId: null,
+      tabItems, tabConnId: "conn-b",
+      targetConnId: "conn-b",
+    })).toBe(tabItems);
+  });
+
+  it("returns null when nothing is cached", () => {
+    expect(pickCompletionSchema({
+      globalItems: null, globalConnId: null,
+      tabItems: null, tabConnId: null,
+      targetConnId: "conn-b",
+    })).toBeNull();
+  });
+
+  it("uses the global schema for untargeted tabs", () => {
+    expect(pickCompletionSchema({
+      globalItems, globalConnId: "conn-a",
+      tabItems, tabConnId: "conn-b",
+      targetConnId: undefined,
+    })).toBe(globalItems);
+  });
+});
+
+describe("generateTableAlias — degenerate names never crash", () => {
+  it("handles normal names", () => {
+    expect(generateTableAlias("users", new Set())).toBe("us");
+    expect(generateTableAlias("project_issue", new Set())).toBe("pi");
+    expect(generateTableAlias("devops.deployments", new Set())).toBe("de");
+  });
+
+  it("handles leading-underscore names without producing garbage", () => {
+    const alias = generateTableAlias("_migrations", new Set());
+    expect(alias).not.toContain("undefined");
+    expect(alias.length).toBeGreaterThan(0);
+  });
+
+  it("handles separator-only names without throwing", () => {
+    expect(() => generateTableAlias("_", new Set())).not.toThrow();
+    expect(() => generateTableAlias("__", new Set())).not.toThrow();
+    const alias = generateTableAlias("_", new Set());
+    expect(alias).not.toContain("undefined");
+    expect(alias.length).toBeGreaterThan(0);
+  });
+
+  it("handles empty names", () => {
+    expect(generateTableAlias("", new Set())).toBe("t");
+  });
+
+  it("dedupes against existing aliases", () => {
+    expect(generateTableAlias("users", new Set(["us"]))).toBe("us2");
+  });
+});
+
+describe("extractExistingAliases", () => {
+  it("extracts short aliases after FROM/JOIN", () => {
+    const found = extractExistingAliases("SELECT u.id FROM users u JOIN orders o ON o.user_id = u.id");
+    expect(found.has("u")).toBe(true);
+    expect(found.has("o")).toBe(true);
+  });
+
+  it("ignores long words that are clause keywords", () => {
+    const found = extractExistingAliases("SELECT * FROM users WHERE id = 1");
+    expect(found.size).toBe(0);
   });
 });

@@ -37,7 +37,7 @@ pub(crate) fn to_json(v: MySqlValueRef) -> Result<JsonValue, Error> {
         }
         "TINYINT" | "SMALLINT" | "INT" | "MEDIUMINT" | "BIGINT" => {
             if let Ok(v) = ValueRef::to_owned(&v).try_decode::<i64>() {
-                JsonValue::Number(v.into())
+                super::int64_to_json(v)
             } else {
                 JsonValue::Null
             }
@@ -45,7 +45,7 @@ pub(crate) fn to_json(v: MySqlValueRef) -> Result<JsonValue, Error> {
         "TINYINT UNSIGNED" | "SMALLINT UNSIGNED" | "INT UNSIGNED" | "MEDIUMINT UNSIGNED"
         | "BIGINT UNSIGNED" | "YEAR" => {
             if let Ok(v) = ValueRef::to_owned(&v).try_decode::<u64>() {
-                JsonValue::Number(v.into())
+                super::uint64_to_json(v)
             } else {
                 JsonValue::Null
             }

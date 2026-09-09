@@ -1,6 +1,12 @@
 import { useState, useMemo, useCallback } from "react";
 import { Search, CheckSquare, Square, Table, AlertCircle } from "lucide-react";
 import { cn } from "../../lib/cn";
+import { Select } from "../ui/Select";
+import {
+  ALL_SCHEMAS_VALUE,
+  decodeSchemaFilterValue,
+  encodeSchemaFilterValue,
+} from "../../utils/schemaFilterValue";
 
 interface TableSelectorDialogProps {
   tables: string[];
@@ -102,18 +108,16 @@ export function TableSelectorDialog({
             />
           </div>
           {schemas.length > 1 && (
-            <select
-              className="text-[11px] bg-[var(--surface-base)] border border-[var(--neutral-6)] rounded px-2 py-1.5 text-[var(--neutral-12)] outline-none"
-              value={schemaFilter ?? ""}
-              onChange={(e) => setSchemaFilter(e.target.value || undefined)}
-            >
-              <option value="">All Schemas</option>
-              {schemas.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
+            <Select
+              selectSize="sm"
+              className="w-36"
+              value={encodeSchemaFilterValue(schemaFilter)}
+              onValueChange={(v) => setSchemaFilter(decodeSchemaFilterValue(v))}
+              options={[
+                { label: "All Schemas", value: ALL_SCHEMAS_VALUE },
+                ...schemas.map((s) => ({ label: s, value: encodeSchemaFilterValue(s) })),
+              ]}
+            />
           )}
         </div>
 

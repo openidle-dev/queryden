@@ -2,6 +2,7 @@ import {
   cleanSqlForKeywords,
   isDoBlock,
   stripTrailingSemicolonAndComments,
+  type SqlLexerOptions,
 } from "./sqlDialect";
 
 /**
@@ -24,9 +25,14 @@ import {
  * All keyword checks run on lexer-stripped SQL (strings, dollar bodies and
  * comments blanked) so e.g. `SELECT 'LIMIT 10'` or `SELECT 'a -- b'` can't
  * fool detection or corrupt the tail-strip.
+ *
+ * Pass `{ hashComments: true }` for MySQL-family connections so `#`
+ * comments are blanked before LIMIT detection (`SELECT * FROM logs# LIMIT 1`
+ * must not look limited — MySQL ignores that comment). The default
+ * preserves PostgreSQL `#>`/`#>>` operators.
  */
-export function applyQueryLimit(query: string, maxRows: number): string {
-  const cleanQuery = cleanSqlForKeywords(query);
+export function applyQueryLimit(query: string, maxRows: number, opts?: SqlLexerOptions): string {
+  const cleanQuery = cleanSqlForKeywords(query, opts);
 
   // Skip PL/pgSQL anonymous blocks (DO $$ ... $$; or DO LANGUAGE plpgsql $$ ... $$;)
   if (isDoBlock(query)) {
@@ -58,6 +64,13 @@ export function applyQueryLimit(query: string, maxRows: number): string {
 
   if (isComplexQuery) {
     return query; // Don't modify complex queries
+  }
+
+  // A non-positive or non-numeric limit (the setting's number input
+  // accepts 0 / empty → NaN) would silently return zero rows (`LIMIT 0`)
+  // or a syntax error (`LIMIT NaN`). Treat as "no auto-limit" instead.
+  if (!Number.isFinite(maxRows) || maxRows <= 0) {
+    return query;
   }
 
   // Strip trailing whitespace/semicolons/comments in a lexer-aware way so

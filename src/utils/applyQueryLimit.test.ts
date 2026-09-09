@@ -135,4 +135,16 @@ $$;`;
       expect(applyQueryLimit(q, 1000)).toBe(q);
     });
   });
+
+  describe("invalid limit values (regression: silent zero rows)", () => {
+    // The setting's number input accepted 0/empty, producing `LIMIT 0`
+    // (silently zero rows — "query shows no records") or `LIMIT NaN`
+    // (syntax error). Non-positive/non-numeric limits now mean "no auto-limit".
+    it("returns the query unchanged for 0, negative, or NaN limits", () => {
+      const q = "SELECT * FROM users WHERE name = 'x'";
+      expect(applyQueryLimit(q, 0)).toBe(q);
+      expect(applyQueryLimit(q, -5)).toBe(q);
+      expect(applyQueryLimit(q, NaN)).toBe(q);
+    });
+  });
 });

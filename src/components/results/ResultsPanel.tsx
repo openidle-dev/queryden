@@ -15,6 +15,7 @@ import { CompactSelection } from "@glideapps/glide-data-grid";
 import "@glideapps/glide-data-grid/dist/index.css";
 import clsx from "clsx";
 import { FileType, toBlobUrl, revokeBlobUrl, formatFileSize, binaryToUtf8, isImageType, isPdfType, formatHexDump, formatHexCompact, toDataUrl } from "../../utils/binaryUtils";
+import { compareGridValues } from "../../utils/columnTypes";
 import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
 import { Input } from "../ui/Input";
@@ -161,10 +162,31 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
     return () => clearTimeout(handler);
   }, [columnFilters]);
 
+  // Column filters belong to the result set they were typed on. A filter
+  // left over from a previous query must not silently hide rows of the next
+  // one ("query runs but shows no records"). Reset on every fresh result set
+  // — including multi-statement runs and result-tab switches. (Inline
+  // row-edit refreshes also produce a new array and clear filters: the new
+  // data may not match the old filter text, so clearing is the honest
+  // choice — same as DataGrip.)
+  const resultIdentityRef = useRef<{ results: unknown; multi: unknown; multiIdx: number } | null>(null);
+  useEffect(() => {
+    const prev = resultIdentityRef.current;
+    resultIdentityRef.current = { results, multi: multiResults, multiIdx: selectedMultiResultIdx };
+    if (prev && (prev.results !== results || prev.multi !== multiResults || prev.multiIdx !== selectedMultiResultIdx)) {
+      setColumnFilters({});
+      setDebouncedColumnFilters({});
+    }
+  }, [results, multiResults, selectedMultiResultIdx]);
+
+  // Whether any column filter text is currently hiding (or able to hide) rows.
+  const hasActiveColumnFilter = Object.values(debouncedColumnFilters).some((t) => !!t);
+
   // Compute sorted/filtered data — uses displayResults so multi-statement
   // and row-editing overrides are respected.
+  const baseRows = displayResults.length > 0 ? displayResults : results;
   const _sortedResults = useMemo(() => {
-    let finalData = displayResults.length > 0 ? displayResults : results;
+    let finalData = baseRows;
     if (Object.keys(debouncedColumnFilters).length > 0) {
       finalData = finalData.filter(row => {
         return Object.entries(debouncedColumnFilters).every(([col, filterText]) => {
@@ -182,14 +204,14 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
         if (va === vb) return 0;
         if (va == null) return sortDir === "asc" ? -1 : 1;
         if (vb == null) return sortDir === "asc" ? 1 : -1;
-        const comparison = typeof va === "number" && typeof vb === "number"
-          ? va - vb
-          : String(va).localeCompare(String(vb));
+        // Numeric-aware: exact-digit BIGINT strings (#41) sort by value via
+        // BigInt, never lossy Number() coercion; text keeps localeCompare.
+        const comparison = compareGridValues(va, vb);
         return sortDir === "asc" ? comparison : -comparison;
       });
     }
     return finalData;
-  }, [displayResults, results, debouncedColumnFilters, sortCol, sortDir]);
+  }, [baseRows, debouncedColumnFilters, sortCol, sortDir]);
 
   // Defer grid updates so the UI stays responsive on large result sets
   const sortedResults = useDeferredValue(_sortedResults);
@@ -1121,7 +1143,7 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
               />
             </div>
             <div className="h-8 border-t flex items-center px-4 gap-4 text-[10px] text-[var(--neutral-11)] bg-[var(--surface-panel)] shrink-0 select-none">
-               <div className="flex items-center gap-1.5"><Table2 className="w-3 h-3 opacity-50" /> <b>{sortedResults.length}</b> rows</div>
+               <div className="flex items-center gap-1.5" title={hasActiveColumnFilter ? "Column filter active — clear the Filter inputs above the grid to show all rows" : undefined}><Table2 className="w-3 h-3 opacity-50" /> <b>{sortedResults.length}</b>{hasActiveColumnFilter && sortedResults.length !== baseRows.length ? ` of ${baseRows.length}` : ""} rows{hasActiveColumnFilter ? (<span className="flex items-center gap-1 text-[var(--accent-11)]"><Filter className="w-3 h-3" />filtered</span>) : null}</div>
                <div className="h-3 w-px bg-[var(--neutral-6)] opacity-20" />
                <div className="flex items-center gap-1.5"><Clock className="w-3 h-3 opacity-50" /> {executionTime}ms</div>
                <div className="flex-1" />

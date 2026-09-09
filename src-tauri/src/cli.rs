@@ -465,18 +465,80 @@ impl CliManager {
 
 // ─── Output parser ─────────────────────────────────────────────────────────────
 
+fn looks_like_command_tag(line: &str) -> bool {
+    let t = line.trim();
+    if t.is_empty() {
+        return false;
+    }
+    // Fixed multi-word tags whose verb takes no object kind.
+    if t == "START TRANSACTION" || t == "SECURITY LABEL" {
+        return true;
+    }
+    if let Some((verb, rest)) = t.split_once(' ') {
+        // DML tags: verb + ASCII row counts only.
+        if matches!(verb, "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "MERGE" | "COPY" | "MOVE" | "FETCH") {
+            return !rest.is_empty()
+                && rest.split_whitespace().all(|p| p.bytes().all(|c| c.is_ascii_digit()));
+        }
+        // DDL tags: verb + object kind (`CREATE TABLE`, `DROP INDEX`,
+        // `DISCARD ALL`, …). Real psql tags never carry anything else.
+        const DDL_VERBS: [&str; 6] = [
+            "CREATE", "DROP", "ALTER", "TRUNCATE", "REFRESH", "DISCARD",
+        ];
+        return DDL_VERBS.contains(&verb);
+    }
+    // Bare single-word tags (`COMMIT`, `GRANT`, `DO`, `VACUUM`, …). Matching
+    // is case-sensitive, so only an all-caps header collides — and that
+    // requires a quoted reserved word used as a column name on a zero-row
+    // result, which is vanishingly rare versus the certainty of tags.
+    const BARE_TAGS: [&str; 23] = [
+        "COMMIT", "ROLLBACK", "BEGIN", "DO", "SET", "RESET", "ABORT", "END",
+        "CALL", "VACUUM", "ANALYZE", "CHECKPOINT", "REINDEX", "GRANT",
+        "REVOKE", "COMMENT", "LISTEN", "UNLISTEN", "NOTIFY", "CLUSTER",
+        "PREPARE", "EXECUTE", "DEALLOCATE",
+    ];
+    if BARE_TAGS.contains(&t) {
+        return true;
+    }
+    false
+}
+
 /// Parse raw psql stdout into structured columns + rows.
 ///
 /// The execute path runs psql unaligned (`-A -F|`) WITH the header row and
 /// the footer suppressed (`-P footer=off`), so `lines[0]` is always the
-/// header — including single-column results like `SELECT 1` (`?column?`).
+/// header — including single-column results like `SELECT 1` (`?column?`)
+/// and empty result sets like `SELECT id FROM t WHERE false` (header with
+/// zero data rows, which must keep its header).
 /// (The old code passed `-t`, which drops the header, so the first data
 /// row was misread as the header and single-column results vanished.)
-/// Meta-command output (`\d`, `\dt`, …) has no single header line: when the
-/// first line has no pipes and no data row matches, we return empty and the
-/// frontend renders the raw stdout instead.
-fn parse_psql_output(lines: &[String]) -> (Vec<String>, Vec<Vec<String>>) {
+/// Meta-command output (`\d`, `\dt`, …) has no result-set shape: the query
+/// itself starts with `\`, so we return empty and the frontend renders the
+/// raw stdout instead. The query text — not a one-column heuristic — is the
+/// signal, because a single-column SELECT with zero rows must keep its
+/// header.
+///
+/// Only call this for psql output. MySQL runs with `-N` (no header row),
+/// so its first data row would be mistaken for a header and dropped;
+/// MongoDB output is not pipe-separated at all. Both return raw stdout.
+fn parse_psql_output(lines: &[String], query: &str) -> (Vec<String>, Vec<Vec<String>>) {
     if lines.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+
+    // psql meta-commands (`\d`, `\dt`, …) bypass grid parsing — the
+    // frontend shows their raw stdout.
+    if query.trim_start().starts_with('\\') {
+        return (Vec::new(), Vec::new());
+    }
+
+    // Successful non-SELECT commands emit a lone command tag (`CREATE TABLE`,
+    // `UPDATE 5`, `COMMIT`, …) with no header row. Without this check the tag
+    // would be returned as a one-column result and the frontend would paint
+    // a bogus grid instead of the raw status line. A genuine header-only
+    // result (`SELECT id … WHERE false` → `["id"]`) never matches the tag
+    // shape (see `looks_like_command_tag`), so it keeps its header below.
+    if lines.len() == 1 && looks_like_command_tag(&lines[0]) {
         return (Vec::new(), Vec::new());
     }
 
@@ -503,12 +565,10 @@ fn parse_psql_output(lines: &[String]) -> (Vec<String>, Vec<Vec<String>>) {
         }
     }
 
-    // Single header-looking line with zero matching rows is meta-command
-    // output (e.g. `\dt`'s "List of relations"), not a result set — let the
-    // frontend show the raw text instead of a bogus one-column grid.
-    if header.len() == 1 && data_rows.is_empty() {
-        return (Vec::new(), Vec::new());
-    }
+    // NOTE: no one-column/empty heuristic here — meta-commands are detected
+    // from the query text (leading `\`) and command tags by shape above. A
+    // header-only result is a genuine empty result set
+    // (`SELECT … WHERE false`) and must keep its header.
 
     (header, data_rows)
 }
@@ -1076,11 +1136,17 @@ pub async fn cli_execute_query(
     let stdout_text = String::from_utf8_lossy(&output.stdout);
     let stdout_lines: Vec<String> = stdout_text.lines().map(|l| l.to_string()).collect();
 
-    // Parse stdout into columns + rows if this looks like a SELECT result
+    // Parse stdout into columns + rows for regular psql results only.
+    // MySQL runs with `-N` (no header) and MongoDB output is not
+    // pipe-separated — sending either through the psql grid parser drops
+    // the first data row / produces a bogus grid. Both render raw stdout.
     let (columns, rows): (Vec<String>, Vec<Vec<String>>) = if expanded_display {
         (Vec::new(), Vec::new())
     } else {
-        parse_psql_output(&stdout_lines)
+        match kind {
+            ToolKind::Psql => parse_psql_output(&stdout_lines, &query),
+            ToolKind::MySql | ToolKind::Mongo => (Vec::new(), Vec::new()),
+        }
     };
 
     Ok(serde_json::json!({
@@ -1168,7 +1234,7 @@ mod tests {
 
     #[test]
     fn parses_multi_column_select_with_header() {
-        let (cols, rows) = parse_psql_output(&lines(&["id|name", "1|Alice", "2|Bob"]));
+        let (cols, rows) = parse_psql_output(&lines(&["id|name", "1|Alice", "2|Bob"]), "SELECT id, name FROM t");
         assert_eq!(cols, vec!["id", "name"]);
         assert_eq!(rows, vec![vec!["1".to_string(), "Alice".to_string()], vec!["2".to_string(), "Bob".to_string()]]);
     }
@@ -1176,27 +1242,79 @@ mod tests {
     #[test]
     fn parses_single_column_select() {
         // `SELECT 1` yields header `?column?` + one data line (no pipes).
-        let (cols, rows) = parse_psql_output(&lines(&["?column?", "1"]));
+        let (cols, rows) = parse_psql_output(&lines(&["?column?", "1"]), "SELECT 1");
         assert_eq!(cols, vec!["?column?"]);
         assert_eq!(rows, vec![vec!["1".to_string()]]);
     }
 
     #[test]
     fn meta_command_output_falls_back_to_raw() {
-        // \dt-style output: first line has no pipes and nothing matches a
-        // single-column shape, so the frontend renders raw stdout instead.
+        // Meta-commands are detected from the query text (leading `\`),
+        // not from the output shape — a header-only single-column SELECT
+        // must keep its header (see empty-result test below).
         let (cols, rows) = parse_psql_output(&lines(&[
             "List of relations",
             "Schema|Name|Type|Owner",
             "public|foo|table|user",
-        ]));
+        ]), "\\dt");
         assert!(cols.is_empty() && rows.is_empty());
     }
 
     #[test]
+    fn empty_result_keeps_header() {
+        // `SELECT id FROM t WHERE false`: header + zero rows is a genuine
+        // empty result set, not meta-command output.
+        let (cols, rows) = parse_psql_output(&lines(&["id"]), "SELECT id FROM t WHERE false");
+        assert_eq!(cols, vec!["id"]);
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn command_tags_fall_back_to_raw() {
+        // Successful non-SELECT commands emit a lone status tag with no
+        // header row — the frontend must render stdout, not a grid.
+        for tag in [
+            "CREATE TABLE",
+            "DROP TABLE",
+            "ALTER TABLE",
+            "CREATE INDEX",
+            "TRUNCATE TABLE",
+            "GRANT",
+            "COMMIT",
+            "ROLLBACK",
+            "BEGIN",
+            "DO",
+            "SET",
+            "VACUUM",
+            "START TRANSACTION",
+            "SELECT 1",
+            "INSERT 0 1",
+            "UPDATE 5",
+            "DELETE 3",
+            "COPY 10",
+        ] {
+            let (cols, rows) = parse_psql_output(&lines(&[tag]), "CREATE TABLE t (id int)");
+            assert!(cols.is_empty() && rows.is_empty(), "tag rendered as grid: {tag}");
+        }
+    }
+
+    #[test]
+    fn header_shaped_like_words_still_grids() {
+        // A header-only result whose text is ordinary words is a genuine
+        // empty result set — only command-tag shapes go raw.
+        let (cols, rows) = parse_psql_output(&lines(&["status"]), "SELECT status FROM t WHERE false");
+        assert_eq!(cols, vec!["status"]);
+        assert!(rows.is_empty());
+        // Case-sensitive: a quoted lowercase column never matches a tag.
+        let (cols, rows) = parse_psql_output(&lines(&["commit"]), "SELECT \"commit\" FROM t WHERE false");
+        assert_eq!(cols, vec!["commit"]);
+        assert!(rows.is_empty());
+    }
+
+    #[test]
     fn empty_and_header_only_input() {
-        assert_eq!(parse_psql_output(&[]), (Vec::new(), Vec::new()));
-        let (cols, rows) = parse_psql_output(&lines(&["id|name"]));
+        assert_eq!(parse_psql_output(&[], "SELECT 1"), (Vec::new(), Vec::new()));
+        let (cols, rows) = parse_psql_output(&lines(&["id|name"]), "SELECT id, name FROM t WHERE false");
         assert_eq!(cols, vec!["id", "name"]);
         assert!(rows.is_empty());
     }

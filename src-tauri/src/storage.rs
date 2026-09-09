@@ -1411,13 +1411,20 @@ pub struct SessionTabDto {
 pub struct SessionsData {
     pub tabs: Vec<SessionTabDto>,
     pub active_tab_id: Option<String>,
+    /// Connection that was globally active at save time (auto-reconnect).
+    /// `#[serde(default)]` keeps pre-existing sessions.json files readable.
+    #[serde(default)]
+    pub active_connection_id: Option<String>,
+    /// Database selected on the active connection at save time.
+    #[serde(default)]
+    pub active_database: Option<String>,
     pub version: u32,
 }
 
 #[tauri::command]
-pub fn save_sessions(app: tauri::AppHandle, tabs: Vec<SessionTabDto>, active_tab_id: Option<String>) -> Result<(), String> {
+pub fn save_sessions(app: tauri::AppHandle, tabs: Vec<SessionTabDto>, active_tab_id: Option<String>, active_connection_id: Option<String>, active_database: Option<String>) -> Result<(), String> {
     let dir = ensure_app_dir(&app)?;
-    let data = SessionsData { tabs, active_tab_id, version: 1 };
+    let data = SessionsData { tabs, active_tab_id, active_connection_id, active_database, version: 1 };
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
     let path = dir.join("sessions.json");
     fs::write(&path, json).map_err(|e| e.to_string())?;
@@ -1430,7 +1437,7 @@ pub fn load_sessions(app: tauri::AppHandle) -> Result<SessionsData, String> {
     let dir = get_app_data_dir(&app);
     let path = dir.join("sessions.json");
     if !path.exists() {
-        return Ok(SessionsData { tabs: vec![], active_tab_id: None, version: 1 });
+        return Ok(SessionsData { tabs: vec![], active_tab_id: None, active_connection_id: None, active_database: None, version: 1 });
     }
     let json = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     serde_json::from_str(&json).map_err(|e| e.to_string())

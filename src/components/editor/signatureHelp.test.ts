@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { countActiveParameter, parseCallTarget, splitTopLevelArgs } from "./signatureHelp";
+import { countActiveParameter, getSignaturePrefix, parseCallTarget, splitTopLevelArgs } from "./signatureHelp";
 
 describe("parseCallTarget", () => {
   it("finds a bare function call", () => {
@@ -37,8 +37,45 @@ describe("parseCallTarget", () => {
     expect(parseCallTarget("SELECT 1; SELECT (")).toBeNull();
   });
 
+  it("semicolon guard blocks the previous statement's call", () => {
+    // Without the `;` guard this would return `f` as a false target and
+    // fire a catalog lookup for the previous statement.
+    expect(parseCallTarget("SELECT f(1; SELECT 2")).toBeNull();
+  });
+
+  it("folds unquoted identifiers to lower case, keeps quoted case", () => {
+    expect(parseCallTarget("SELECT MY_FUNC(")?.parts).toEqual(["my_func"]);
+    expect(parseCallTarget("SELECT Public.My_Func(")?.parts).toEqual(["public", "my_func"]);
+    expect(parseCallTarget('SELECT "My Func"(')?.parts).toEqual(["My Func"]);
+  });
+
+  it("splits qualified names only outside quoted identifiers", () => {
+    const t = parseCallTarget('SELECT "my.schema"."my.func"(');
+    expect(t?.parts).toEqual(["my.schema", "my.func"]);
+  });
+
   it("skips balanced inner parens to the outer call", () => {
     const t = parseCallTarget("SELECT outer(inner(1), ");
     expect(t?.parts).toEqual(["outer"]);
+  });
+});
+
+describe("getSignaturePrefix", () => {
+  it("returns only the current statement's prefix", () => {
+    const text = "SELECT f(1); SELECT my_func(1, ";
+    const caretOffset = text.length;
+    let captured: unknown = null;
+    const model = {
+      getOffsetAt: () => caretOffset,
+      getPositionAt: (off: number) => ({ lineNumber: 1, column: off + 1 }),
+      getValueInRange: (range: { startColumn: number; endColumn: number }) => {
+        captured = range;
+        return text.slice(range.startColumn - 1, range.endColumn - 1);
+      },
+    };
+    const prefix = getSignaturePrefix(model, { lineNumber: 1, column: caretOffset + 1 });
+    expect(captured).not.toBeNull();
+    expect(prefix).toBe(" SELECT my_func(1, ");
+    expect(parseCallTarget(prefix)?.parts).toEqual(["my_func"]);
   });
 });

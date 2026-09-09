@@ -60,7 +60,7 @@ pub(crate) fn to_json(v: PgValueRef) -> Result<JsonValue, Error> {
         }
         "INT8" => {
             if let Ok(v) = ValueRef::to_owned(&v).try_decode::<i64>() {
-                JsonValue::Number(v.into())
+                super::int64_to_json(v)
             } else {
                 JsonValue::Null
             }
@@ -81,12 +81,10 @@ pub(crate) fn to_json(v: PgValueRef) -> Result<JsonValue, Error> {
             }
         }
         "INT8[]" => {
-            // Mirror scalar INT8: emit each element as a JSON Number. Postgres
-            // BIGINT fits i64 by definition, so serde_json::Number::from(i64)
-            // always succeeds — JS consumers needing full 64-bit precision parse
-            // the result through their own bignum logic (same as the scalar arm).
+            // Elements beyond JS safe-integer range become digit-exact
+            // strings (see `super::int64_to_json`); SQL NULLs stay JSON null.
             if let Ok(v) = ValueRef::to_owned(&v).try_decode::<Vec<Option<i64>>>() {
-                JsonValue::Array(int_vec_to_json(v))
+                JsonValue::Array(int64_vec_to_json(v))
             } else {
                 JsonValue::Null
             }
@@ -283,6 +281,19 @@ pub(crate) fn to_json(v: PgValueRef) -> Result<JsonValue, Error> {
     Ok(res)
 }
 
+/// Convert a `Vec<Option<i64>>` into a `Vec<JsonValue>`, preserving the
+/// #41 safe-integer contract per element (out-of-range → exact string).
+/// SQL NULL elements survive as JSON null.
+fn int64_vec_to_json(values: Vec<Option<i64>>) -> Vec<JsonValue> {
+    values
+        .into_iter()
+        .map(|opt| match opt {
+            Some(n) => super::int64_to_json(n),
+            None => JsonValue::Null,
+        })
+        .collect()
+}
+
 /// Convert a `Vec<Option<T>>` of any integer that fits into `serde_json::Number`
 /// into a `Vec<JsonValue>` for use with `JsonValue::Array`.
 ///
@@ -342,16 +353,19 @@ mod tests {
     }
 
     #[test]
-    fn int8_array_preserves_full_i64_range() {
-        // Includes a value beyond JS safe-integer range (2^53). serde_json::Number
-        // can hold the full i64 — this mirrors what the scalar INT8 arm does and
-        // matches how QueryDen consumers handle bignums for scalar INT8 today.
+    fn int8_array_applies_safe_integer_contract_per_element() {
+        // In-range elements stay JSON numbers; beyond-2^53 elements become
+        // digit-exact strings (#41); NULLs stay JSON null.
         let big = 1_i64 << 60;
-        let out = int_vec_to_json::<i64>(some(&[i64::MIN, -1, 0, 1, big, i64::MAX]));
-        assert_eq!(out.len(), 6);
-        assert_eq!(out[0].as_i64(), Some(i64::MIN));
-        assert_eq!(out[4].as_i64(), Some(big));
-        assert_eq!(out[5].as_i64(), Some(i64::MAX));
+        let out = int64_vec_to_json(some(&[0, big, i64::MIN]));
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].as_i64(), Some(0));
+        assert_eq!(out[1].as_str(), Some(big.to_string()).as_deref());
+        assert_eq!(out[2].as_str(), Some(i64::MIN.to_string()).as_deref());
+
+        let out = int64_vec_to_json(vec![Some(7), None]);
+        assert_eq!(out[0].as_i64(), Some(7));
+        assert!(out[1].is_null());
     }
 
     #[test]

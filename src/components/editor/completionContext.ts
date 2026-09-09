@@ -169,6 +169,17 @@ export function detectAliasDotContext(
   };
 }
 
+// Static (schema-free) suggestion matching for SQL keywords and builtin
+// functions. Disconnected users still get these, so the predicate is shared
+// between the no-schema fallback and the connected pre-filter in
+// QueryEditor.tsx. Case-insensitive; empty input matches everything.
+export function matchesStaticLabel(label: string, word: string): boolean {
+  if (!word) return true;
+  const labelLower = label.toLowerCase();
+  const wordLower = word.toLowerCase();
+  return labelLower.startsWith(wordLower) || labelLower.includes(wordLower);
+}
+
 // Issue #97: when a suggestion label is schema-qualified (e.g. `app.users`) and the user types a
 // bare table name (e.g. `users`), a strict `label.startsWith(currentWord)` pre-filter rejects it
 // before Monaco's matcher ever sees the suggestion. This predicate accepts both the qualified
@@ -184,4 +195,97 @@ export function matchesQualifiedOrBareName(
   if (labelLower.startsWith(wordLower)) return true;
   const dotIdx = labelLower.indexOf(".");
   return dotIdx >= 0 && labelLower.substring(dotIdx + 1).startsWith(wordLower);
+}
+
+// Minimal structural contract the completion provider needs. `SchemaItems`
+// (ConnectionContext) satisfies this; keeping it structural avoids importing
+// the context (and its Tauri/IPC chain) into the unit-testable helper layer.
+export interface CompletionSchemaLike {
+  tables?: string[];
+  views?: string[];
+  functions?: string[];
+  columns?: { table_name: string; column_name: string }[];
+  foreignKeys?: { source_table: string; source_column: string; target_table: string; target_column: string }[];
+  _ts?: number;
+}
+
+export interface CompletionSchemaSource {
+  /** Schema of the globally-active (sidebar-connected) connection, if any. */
+  globalItems: CompletionSchemaLike | null;
+  globalConnId: string | null;
+  /** Background-fetched schema for the tab's own target connection, if any. */
+  tabItems: CompletionSchemaLike | null;
+  tabConnId: string | null;
+  /** Connection the active editor tab targets (`undefined` = no explicit target). */
+  targetConnId: string | null | undefined;
+}
+
+// DataGrip rule: an editor tab completes against ITS OWN connection, not
+// whatever happens to be sidebar-active. When the tab targets a connection
+// whose schema was background-fetched, that wins; when the tab targets the
+// globally-active connection, the global schema wins (no duplicate fetch);
+// with no usable cache for the target, fall back to whichever schema exists
+// rather than completing against nothing.
+export function pickCompletionSchema(src: CompletionSchemaSource): CompletionSchemaLike | null {
+  const { globalItems, globalConnId, tabItems, tabConnId, targetConnId } = src;
+  if (targetConnId) {
+    if (tabConnId === targetConnId && tabItems) return tabItems;
+    if (globalConnId === targetConnId && globalItems) return globalItems;
+    return tabItems ?? globalItems ?? null;
+  }
+  return globalItems ?? tabItems ?? null;
+}
+
+// Smart alias generation - like DataGrip/DBeaver
+// Generates alias from table name: "users" -> "u", "user_roles" -> "ur", "project_issue" -> "pi"
+export function generateTableAlias(tableName: string, existingAliases: Set<string>): string {
+  if (!tableName) return "t";
+  // Remove schema prefix if present (e.g., "public.users" -> "users")
+  const cleanName = tableName.includes('.') ? tableName.split('.').pop() || tableName : tableName;
+
+  // Split by underscore or use first letters
+  const words = cleanName.split(/[_-]/);
+
+  // First character of a word, tolerating empty segments from leading or
+  // repeated separators (e.g. "_migrations" -> ["", "migrations"]). Indexing
+  // an empty string yields `undefined`, and `undefined + undefined` is NaN —
+  // whose `.toLowerCase()` throws and kills the whole completion provider.
+  const firstChar = (w: string | undefined): string => (w && w[0] ? w[0] : "");
+
+  let alias: string;
+  if (words.length >= 2) {
+    // Multi-word: take first letter of first two words (e.g., "project_issue" -> "pi")
+    alias = (firstChar(words[0]) + firstChar(words[1])).toLowerCase();
+  } else if (cleanName.length >= 2) {
+    // Single word: first 2 characters
+    alias = cleanName.substring(0, 2).toLowerCase();
+  } else {
+    alias = cleanName.toLowerCase();
+  }
+  if (!alias) alias = "t";
+
+  // If alias already exists, append number (like DBeaver: u, u2, u3)
+  if (existingAliases.has(alias)) {
+    let counter = 2;
+    while (existingAliases.has(alias + counter)) {
+      counter++;
+    }
+    alias = alias + counter;
+  }
+
+  return alias;
+}
+
+// Extract all aliases currently used in the query
+export function extractExistingAliases(query: string): Set<string> {
+  const aliases = new Set<string>();
+  // Match patterns like "table_name AS alias" or "table_name alias" after FROM/JOIN
+  const aliasPattern = /(?:FROM|JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|INNER\s+JOIN|CROSS\s+JOIN)\s+[\w"]+\.?\w+\s+(?:AS\s+)?(\w+)/gi;
+  let match;
+  while ((match = aliasPattern.exec(query)) !== null) {
+    if (match[1] && match[1].length <= 3) {  // Short aliases only
+      aliases.add(match[1].toLowerCase());
+    }
+  }
+  return aliases;
 }

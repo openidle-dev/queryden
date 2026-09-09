@@ -26,7 +26,7 @@ const categories: { id: SettingsCategory; label: string; icon: any; keywords: st
   { id: "keymap", label: "Keymap", icon: Keyboard, keywords: ["shortcut", "keyboard", "hotkey", "binding", "preset", "keymap", "shortcuts", "actions"] },
   { id: "sqlCompletion", label: "SQL Code Completion", icon: Zap, keywords: ["completion", "suggest", "alias", "case", "join", "sql", "qualify", "objects", "keyword case", "foreign keys"] },
   { id: "queryExecution", label: "Query Execution", icon: Play, keywords: ["enter", "max rows", "commit", "prefetch", "execute", "run", "auto-commit", "inline", "results"] },
-  { id: "explorer", label: "Database Explorer", icon: Database, keywords: ["view", "function", "trigger", "index", "constraint", "schema", "namespace", "tree", "explorer", "foreign tables", "empty groups"] },
+  { id: "explorer", label: "Database Explorer", icon: Database, keywords: ["view", "function", "trigger", "index", "constraint", "schema", "namespace", "tree", "explorer", "foreign tables", "empty groups", "startup", "reconnect", "reopen", "restore", "session", "connection", "launch", "open"] },
   { id: "copyTransfer", label: "Copy/Transfer", icon: Copy, keywords: ["copy", "transfer", "merge", "schema", "data", "method", "batch size", "parallel", "threads", "compression", "logging", "pg_dump"] },
   { id: "permissions", label: "Permissions & Rules", icon: Shield, keywords: ["drop", "truncate", "delete", "warn", "bypass", "rules", "safety", "guru", "dangerous"] },
   { id: "ai", label: "AI Assistant", icon: Sparkles, keywords: ["ai", "assistant", "openai", "gemini", "anthropic", "llm", "api", "key", "model", "ollama", "gpt-4", "claude"] },
@@ -402,6 +402,7 @@ function QueryExecutionSettings() {
             <label className="block text-xs font-medium mb-1.5">Max rows to display</label>
             <input
               type="number"
+              min={1}
               value={settings.maxRowsToDisplay}
               onChange={(e) => settings.setSetting("maxRowsToDisplay", parseInt(e.target.value))}
               className="w-24 px-2 py-1.5 text-sm rounded bg-[var(--surface-base)] border border-[var(--neutral-6)] outline-none focus:border-[var(--accent-8)] text-[var(--neutral-12)]"
@@ -439,6 +440,18 @@ function ExplorerSettings() {
 
   return (
     <div className="space-y-4">
+      <div>
+        <label className="block text-xs font-semibold mb-3 text-[var(--neutral-11)] uppercase tracking-wider">Startup</label>
+        <div className="space-y-4">
+          <ToggleOption
+            label="Reconnect previous connection on startup"
+            description="Automatically reconnect the connection that was active when the app closed (best effort, never prompts)"
+            checked={settings.autoReconnect}
+            onChange={(checked) => settings.setSetting("autoReconnect", checked)}
+          />
+        </div>
+      </div>
+
       <div>
         <label className="block text-xs font-semibold mb-3 text-[var(--neutral-11)] uppercase tracking-wider">Object Visibility</label>
         <div className="grid grid-cols-2 gap-x-8 gap-y-1 bg-[var(--surface-base)]/30 border border-[var(--neutral-6)] rounded-lg p-3">

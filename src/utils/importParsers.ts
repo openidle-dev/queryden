@@ -256,31 +256,82 @@ function parseDBeaverCredentialsConfig(content: string): ParseResult | null {
 
 // ── DataGrip format ────────────────────────────────────────────────────────
 
+/**
+ * Decode XML character data in a single pass: predefined entities (`&amp;`
+ * etc.) plus decimal and hexadecimal numeric references. One combined
+ * pattern replaces each *original* match exactly once, so `&#38;lt;`
+ * (numeric `&` + literal `lt;`) decodes to the literal text `&lt;` — the
+ * old chained replaces decoded the generated `&lt;` a second time into
+ * `<`, corrupting values on the DataGrip import path. Out-of-range code
+ * points keep their original text instead of throwing.
+ */
+const NAMED_XML_ENTITIES: Record<string, string> = {
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  amp: "&",
+};
+
+function decodeXmlEntities(text: string): string {
+  return text.replace(/&#(\d+);|&#x([0-9a-fA-F]+);|&(lt|gt|quot|apos|amp);/g,
+    (m, dec: string | undefined, hex: string | undefined, named: string | undefined) => {
+      if (named !== undefined) return NAMED_XML_ENTITIES[named];
+      try {
+        return String.fromCodePoint(
+          dec !== undefined ? parseInt(dec, 10) : parseInt(hex as string, 16),
+        );
+      } catch {
+        return m;
+      }
+    });
+}
+
+function extractXmlTag(block: string, tags: string[]): string {
+  for (const tag of tags) {
+    const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i");
+    const m = block.match(re);
+    if (m) {
+      const raw = (m[1] || "").trim();
+      // CDATA sections are literal character data: unwrap without entity
+      // decoding (`<![CDATA[a&amp;b]]>` means the seven characters `a&amp;b`).
+      // A CDATA-wrapped JDBC URL would otherwise fail the URL matcher on `&`.
+      if (raw.startsWith("<![CDATA[") && raw.endsWith("]]>")) {
+        return raw.slice(9, -3);
+      }
+      return decodeXmlEntities(raw);
+    }
+  }
+  return "";
+}
+
 function parseDataGripXML(content: string): ParseResult | null {
   try {
-    if (!content.includes("<data-source") && !content.includes("<dataSources")) return null;
+    if (!content.includes("<data-source") && !content.includes("<dataSources") && !content.includes("<dataSource")) return null;
 
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(content, "text/xml");
-    if (!doc || doc.querySelector("parsererror")) return null;
-
-    const dataSources = doc.querySelectorAll("data-source, dataSource");
-    if (dataSources.length === 0) return null;
+    // Regex-based extraction (works in Node tests and browsers without a
+    // DOMParser dependency). Matches <data-source name="…">…</data-source>
+    // and camelCase <dataSource> variants.
+    const blocks: Array<{ name: string; body: string }> = [];
+    const dsRe = /<(?:data-source|dataSource)\b([^>]*)>([\s\S]*?)<\/(?:data-source|dataSource)>/gi;
+    let m: RegExpExecArray | null;
+    while ((m = dsRe.exec(content)) !== null) {
+      const attrs = m[1] || "";
+      const body = m[2] || "";
+      const nameM = attrs.match(/\bname\s*=\s*"([^"]*)"/i);
+      // Attribute values are XML character data too (`name="a &amp; b"`).
+      blocks.push({ name: nameM ? decodeXmlEntities(nameM[1]) : "", body });
+    }
+    if (blocks.length === 0) return null;
 
     const connections: StoredConnectionDto[] = [];
     const vaultCreds: VaultCredentialDto[] = [];
 
-    for (const ds of dataSources) {
-      const name = ds.getAttribute("name") || "";
-
-      const urlEl = ds.querySelector("database-url, databaseUrl");
-      const url = urlEl?.textContent?.trim() || "";
-
-      const userEl = ds.querySelector("user-name, userName");
-      const user = userEl?.textContent?.trim() || "";
-
-      const driverEl = ds.querySelector("driver");
-      const driver = driverEl?.textContent?.trim() || "";
+    for (const ds of blocks) {
+      const name = ds.name || "";
+      const url = extractXmlTag(ds.body, ["database-url", "databaseUrl"]);
+      const user = extractXmlTag(ds.body, ["user-name", "userName"]);
+      const driver = extractXmlTag(ds.body, ["driver"]);
 
       let host = "localhost";
       let port: number | null = null;
@@ -288,23 +339,31 @@ function parseDataGripXML(content: string): ParseResult | null {
       let dbType = "postgres";
 
       if (url) {
-        const m = url.match(/jdbc:(\w+):\/\/([^:/]+)(?::(\d+))?(?:\/([^?]+))?/);
-        if (m) {
-          if (m[1]) {
-            dbType = mapProvider(m[1]);
+        const um = url.match(/jdbc:(\w+):\/\/([^:/]+)(?::(\d+))?(?:\/([^?]+))?/);
+        if (um) {
+          if (um[1]) {
+            dbType = mapProvider(um[1]);
           }
-          if (m[2]) host = m[2];
-          if (m[3]) port = parsePort(m[3]);
-          if (m[4]) dbName = m[4];
+          if (um[2]) host = um[2];
+          if (um[3]) port = parsePort(um[3]);
+          if (um[4]) dbName = um[4];
+        }
+      }
+
+      // Resolve the driver type BEFORE assigning the default port — a
+      // driver-only MySQL source has no URL, so dbType would still be the
+      // "postgres" default and receive 5432 instead of 3306.
+      if (driver && !url) {
+        const mapped = mapProvider(driver);
+        // mapProvider falls back to "postgres" for unknown drivers; only
+        // override when it recognized something (or mysql explicitly).
+        if (mapped !== "postgres" || driver.toLowerCase().includes("mysql")) {
+          dbType = mapped;
         }
       }
 
       if (!port) {
         port = getDefaultPort(dbType);
-      }
-
-      if (driver && !url) {
-        if (driver.toLowerCase().includes("mysql")) dbType = "mysql";
       }
 
       if (user) {

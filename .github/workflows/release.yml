@@ -32,14 +32,14 @@ jobs:
               src-tauri/target/release/bundle/nsis/*.exe
               src-tauri/target/release/bundle/msi/*.msi
           - platform: macos-latest
-            target: aarch64-apple-darwin
+            target: universal-apple-darwin
+            # Universal (fat) binary: Tauri builds both arch slices on the
+            # Apple Silicon runner and lipos them, so one artifact runs
+            # natively on Intel + ARM Macs (issue #7). Requires BOTH rust
+            # std targets installed (dtolnay takes a comma list).
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
             artifact_glob: |
               src-tauri/target/release/bundle/dmg/*.dmg
-          # NOTE: macos-13 (Intel) runners are heavily rate-limited on the free
-          # GitHub Actions plan and routinely queue for hours. Intel macOS
-          # support deliberately omitted from v1.0.5; planned for v1.0.6 as a
-          # universal-apple-darwin build that produces a single fat binary on
-          # the Apple Silicon runner.
 
     runs-on: ${{ matrix.platform }}
 
@@ -53,7 +53,9 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          # Universal macOS needs both arch slices; every other entry falls
+          # back to its own target triple.
+          targets: ${{ matrix.rust_targets || matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -172,21 +174,28 @@ jobs:
               '. + {"windows-x86_64": {signature: $sig, url: $url}}' <<<"$PLATFORMS")
           fi
 
-          # macOS Apple Silicon — .app.tar.gz + .sig (the .dmg stays on the
-          # release for first-install downloads, but the updater channel
-          # uses the tar.gz of the .app bundle).
+          # macOS universal (Intel + ARM in one fat binary, issue #7) —
+          # .app.tar.gz + .sig (the .dmg stays on the release for
+          # first-install downloads, but the updater channel uses the tar.gz
+          # of the .app bundle).
           # Tauri's macOS update bundle is named `QueryDen.app.tar.gz`
           # — no architecture in the filename. We only build one macOS
-          # target today (aarch64), so a wildcard without arch is safe
+          # target today (universal), so a wildcard without arch is safe
           # and correct. The old `*aarch64.app.tar.gz` glob silently
           # dropped macOS from latest.json (see #112).
+          # The same universal tarball serves BOTH updater platform keys:
+          # ARM updaters look up `darwin-aarch64`, Intel updaters look up
+          # `darwin-x86_64` — a fat binary satisfies both.
           MAC_TGZ=$(first '*.app.tar.gz')
           MAC_SIG=$(first '*.app.tar.gz.sig')
           if [ -n "$MAC_TGZ" ] && [ -n "$MAC_SIG" ]; then
-            PLATFORMS=$(jq \
-              --arg sig "$(cat "$MAC_SIG")" \
-              --arg url "$BASE_URL/$(basename "$MAC_TGZ")" \
-              '. + {"darwin-aarch64": {signature: $sig, url: $url}}' <<<"$PLATFORMS")
+            for MAC_PLATFORM in darwin-aarch64 darwin-x86_64; do
+              PLATFORMS=$(jq \
+                --arg sig "$(cat "$MAC_SIG")" \
+                --arg url "$BASE_URL/$(basename "$MAC_TGZ")" \
+                --arg platform "$MAC_PLATFORM" \
+                '. + {($platform): {signature: $sig, url: $url}}' <<<"$PLATFORMS")
+            done
           fi
 
           # Linux x86_64 — AppImage + .sig (.deb has no updater path).

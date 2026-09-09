@@ -12,9 +12,15 @@ import {
   detectSchemaDotContext,
   detectAliasDotContext,
   matchesQualifiedOrBareName,
+  matchesStaticLabel,
+  pickCompletionSchema,
+  generateTableAlias,
+  extractExistingAliases,
+  type CompletionSchemaLike,
 } from "./completionContext";
 import { resolveStatementAtOffset } from "../../utils/statementAtCursor";
 import { splitStatements } from "../../utils/splitStatements";
+import { resolveTabHashComments } from "../../utils/sqlDialect";
 import {
   clearSignatureHelpCache,
   registerSignatureHelp,
@@ -26,8 +32,21 @@ let sqlProviderDisposable: any = null;
 let sqlFormatterDisposable: any = null;
 let sqlHoverProviderDisposable: any = null;
 let globalSchemaItems: any = null;
+// Connection id that owns `globalSchemaItems` (null when disconnected).
+let globalSchemaConnId: string | null = null;
+// Background-fetched schema for the active tab's own target connection (see
+// `ensureSchemaFor`). Lets tabs complete against their own connection when it
+// was never sidebar-connected. Only one editor is mounted at a time (the
+// active tab, keyed by tab id), so a module singleton is safe here.
+let tabSchemaItems: CompletionSchemaLike | null = null;
+let tabSchemaConnId: string | null = null;
+// Explicit target of the mounted editor tab (`undefined` = no target).
+let tabTargetConnId: string | null | undefined = undefined;
 let cachedSuggestions: any[] = [];
 let lastSchemaHash: string = "";
+// Which schema source the cache was built from — a new source forces a
+// rebuild even if the array lengths + timestamp hash happens to collide.
+let lastSchemaSourceKey: string = "";
 // Latest live-connection snapshot for the signature-help provider (which is
 // registered once globally and therefore can't close over component state).
 let globalConnCtx: SignatureConnCtx = { db: null, connectionId: null, dbType: "", database: "" };
@@ -39,8 +58,13 @@ let globalConnCtx: SignatureConnCtx = { db: null, connectionId: null, dbType: ""
  */
 export function resetEditorSchemaCache(): void {
   globalSchemaItems = null;
+  globalSchemaConnId = null;
+  tabSchemaItems = null;
+  tabSchemaConnId = null;
+  tabTargetConnId = undefined;
   cachedSuggestions = [];
   lastSchemaHash = "";
+  lastSchemaSourceKey = "";
   globalConnCtx = { db: null, connectionId: null, dbType: "", database: "" };
   clearSignatureHelpCache();
 }
@@ -52,57 +76,35 @@ if (typeof window !== "undefined") {
   window.addEventListener("connection-disconnected", resetEditorSchemaCache);
 }
 
-// Smart alias generation - like DataGrip/DBeaver
-// Generates alias from table name: "users" -> "u", "user_roles" -> "ur", "project_issue" -> "pi"
-const generateTableAlias = (tableName: string, existingAliases: Set<string>): string => {
-  // Remove schema prefix if present (e.g., "public.users" -> "users")
-  const cleanName = tableName.includes('.') ? tableName.split('.').pop() || tableName : tableName;
-  
-  // Split by underscore or use first letters
-  const words = cleanName.split(/[_-]/);
-  
-  let alias: string;
-  if (words.length >= 2) {
-    // Multi-word: take first letter of first two words (e.g., "project_issue" -> "pi")
-    alias = (words[0][0] + words[1][0]).toLowerCase();
-  } else if (cleanName.length >= 2) {
-    // Single word: first 2 characters
-    alias = cleanName.substring(0, 2).toLowerCase();
-  } else {
-    alias = cleanName.toLowerCase();
-  }
-  
-  // If alias already exists, append number (like DBeaver: u, u2, u3)
-  if (existingAliases.has(alias)) {
-    let counter = 2;
-    while (existingAliases.has(alias + counter)) {
-      counter++;
-    }
-    alias = alias + counter;
-  }
-  
-  return alias;
-};
-
-// Extract all aliases currently used in the query
-const extractExistingAliases = (query: string): Set<string> => {
-  const aliases = new Set<string>();
-  // Match patterns like "table_name AS alias" or "table_name alias" after FROM/JOIN
-  const aliasPattern = /(?:FROM|JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|INNER\s+JOIN|CROSS\s+JOIN)\s+[\w"]+\.?\w+\s+(?:AS\s+)?(\w+)/gi;
-  let match;
-  while ((match = aliasPattern.exec(query)) !== null) {
-    if (match[1] && match[1].length <= 3) {  // Short aliases only
-      aliases.add(match[1].toLowerCase());
-    }
-  }
-  return aliases;
-};
-
 // Statement execution status for inline indicators
 export interface StatementStatus {
   lineNumber: number;
   status: 'running' | 'success' | 'error';
   statementText: string;
+}
+
+/**
+ * Static completion entries: SQL keywords + builtin functions. These need no
+ * database schema, so they are suggested even when disconnected (a previous
+ * version only built them inside the schema gate, leaving disconnected users
+ * with zero suggestions of any kind). The schema-backed path reuses the same
+ * lists so both stay in lockstep.
+ */
+const STATIC_KEYWORDS = [
+  "SELECT", "FROM", "WHERE", "JOIN", "LEFT JOIN", "RIGHT JOIN", "INNER JOIN", "CROSS JOIN",
+  "ON", "ORDER BY", "GROUP BY", "HAVING", "INSERT INTO", "VALUES", "UPDATE",
+  "SET", "DELETE FROM", "CREATE TABLE", "ALTER TABLE", "DROP TABLE",
+  "CREATE INDEX", "DROP INDEX", "AS", "DISTINCT", "LIMIT", "OFFSET",
+  "IN", "NOT IN", "LIKE", "ILIKE", "IS NULL", "IS NOT NULL", "AND", "OR", "NOT", "EXISTS", "BETWEEN",
+  "WITH", "RECURSIVE", "UNION", "ALL", "EXCEPT", "INTERSECT"
+];
+
+const STATIC_FUNCTIONS = [
+  "COUNT", "SUM", "AVG", "MAX", "MIN", "NOW", "COALESCE", "NULLIF", "CASE", "RANK", "ROW_NUMBER", "TO_CHAR", "EXTRACT"
+];
+
+function staticFunctionInsertText(fn: string): string {
+  return fn === "CASE" ? "CASE WHEN $1 THEN $2 ELSE $3 END" : fn + "($1)";
 }
 
 interface QueryEditorProps {
@@ -111,6 +113,14 @@ interface QueryEditorProps {
   onRun?: (query?: any, statementInfo?: { lineNumber: number; statementText: string }) => void;
   connectionName?: string;
   databaseName?: string;
+  /**
+   * Explicit connection/database this tab targets. Completion (and hover)
+   * resolve against this connection's schema — background-fetching it when
+   * the tab was never sidebar-connected — instead of only the globally
+   * active connection. `undefined` = untargeted (global schema applies).
+   */
+  targetConnectionId?: string;
+  targetDatabase?: string;
   isExecuting?: boolean;
   hasError?: boolean;
   hasSuccess?: boolean;
@@ -121,6 +131,13 @@ interface QueryEditorProps {
     status: 'running' | 'success' | 'error';
   };
   statementResults?: StatementResult[];
+  /**
+   * Writeback for glyph line tracking (#223). The editor moves gutter glyphs
+   * live as text shifts (sticky Monaco decorations) and prunes glyphs whose
+   * block was cut/blanked; it reports the resulting set so tab state stays
+   * in sync across tab switches and remounts.
+   */
+  onStatementResultsChange?: (results: StatementResult[]) => void;
 }
 
 export interface StatementResult {
@@ -244,19 +261,22 @@ const showIntentionActions = (editor: any, monaco: any, onRunRef: React.MutableR
 };
 
 // Memoize to prevent unnecessary re-renders when parent state changes
-export const QueryEditor = memo(function QueryEditor({ 
-  value, 
-  onChange, 
+export const QueryEditor = memo(function QueryEditor({
+  value,
+  onChange,
   onRun,
   connectionName,
   databaseName,
+  targetConnectionId,
+  targetDatabase,
   tabId,
   tabName,
   isExecuting,
   hasError,
   hasSuccess,
   lastExecutedStatement: _lastExecutedStatement,
-  statementResults
+  statementResults,
+  onStatementResultsChange,
 }: QueryEditorProps) {
   const { theme } = useTheme();
   const settings = useSettings();
@@ -266,7 +286,15 @@ export const QueryEditor = memo(function QueryEditor({
   const onRunRef = useRef<any>(null);
   const lastSnapshotRef = useRef<string>("");
   const snapshotTimerRef = useRef<any>(null);
-  const { schemaItems, currentDb, activeConnection, selectedDatabase } = useConnections();
+  const { schemaItems, currentDb, activeConnection, selectedDatabase, ensureSchemaFor, connections, vaultCredentials } = useConnections();
+  // `#` comment handling follows the TAB's target connection dialect: a tab
+  // on PostgreSQL must keep `#>` operators intact even when the sidebar sits
+  // on MySQL (and vice versa). Untargeted tabs fall back to the active
+  // connection. A ref because handleEditorMount's handlers outlive renders —
+  // reading the prop directly would pin the dialect from mount time across
+  // connection switches.
+  const hashOptsRef = useRef<{ hashComments: boolean }>({ hashComments: false });
+  hashOptsRef.current = resolveTabHashComments(targetConnectionId, connections, activeConnection?.type);
   
   onRunRef.current = onRun;
 
@@ -289,9 +317,70 @@ export const QueryEditor = memo(function QueryEditor({
 
   useEffect(() => {
     globalSchemaItems = schemaItems;
+    globalSchemaConnId = activeConnection?.id ?? null;
     cachedSuggestions = [];  // Clear cached suggestions
     lastSchemaHash = "";      // Force cache miss
-  }, [schemaItems]);
+    lastSchemaSourceKey = "";
+  }, [schemaItems, activeConnection?.id]);
+
+  // Tab-targeted schema: when this tab targets a connection that is NOT the
+  // globally-active one (fresh tabs inheriting the previous connection,
+  // restored sessions, multi-connection work), background-fetch its schema
+  // so completion, hover and JOIN suggestions work without a sidebar click.
+  // Results land in the module `tabSchemaItems` the provider reads; the
+  // explorer tree (global schema) is never touched. Suggestions simply
+  // appear once the fetch resolves. The fetch establishes a connection, so
+  // it honors the "Reconnect previous connection on startup" setting: users
+  // who disabled all automatic connections keep them off. `vaultCredentials`
+  // in deps retries after a vault-profile pick (background fetches can't
+  // prompt, so the first attempt with a locked vault fails by design).
+  useEffect(() => {
+    tabTargetConnId = targetConnectionId ?? undefined;
+    if (!targetConnectionId || settings.autoReconnect === false) {
+      if (tabSchemaItems !== null || tabSchemaConnId !== null) {
+        tabSchemaItems = null;
+        tabSchemaConnId = null;
+        lastSchemaHash = "";
+        lastSchemaSourceKey = "";
+      }
+      return;
+    }
+    // Tab targets the globally-active connection: the global schema covers
+    // it — no background fetch, and any stale tab cache is dropped.
+    if (activeConnection?.id === targetConnectionId && schemaItems) {
+      if (tabSchemaItems !== null || tabSchemaConnId !== null) {
+        tabSchemaItems = null;
+        tabSchemaConnId = null;
+        lastSchemaHash = "";
+        lastSchemaSourceKey = "";
+      }
+      return;
+    }
+    let cancelled = false;
+    tabSchemaConnId = targetConnectionId;
+    // Always resolve through the context cache (hit = same ref, no work):
+    // it was possibly evicted by a disconnect since our last run, and only
+    // a fresh resolve observes that instead of serving stale module state.
+    ensureSchemaFor(targetConnectionId, targetDatabase)
+      .then((items) => {
+        if (cancelled) return;
+        if (tabSchemaItems !== items) {
+          tabSchemaItems = items;
+          lastSchemaHash = ""; // Force the provider to rebuild from the new source
+          lastSchemaSourceKey = "";
+        }
+      })
+      .catch(() => {
+        if (!cancelled && tabSchemaConnId === targetConnectionId) tabSchemaItems = null;
+      });
+    return () => {
+      cancelled = true;
+    };
+    // ensureSchemaFor identity changes per render (plain context closure);
+    // depending on it would refire every render, so depend on the stable
+    // inputs instead — cache hits make refires cheap and idempotent.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetConnectionId, targetDatabase, activeConnection?.id, schemaItems, connections, vaultCredentials, settings.autoReconnect]);
 
   // Keep the signature-help provider's connection snapshot current.
   useEffect(() => {
@@ -310,69 +399,123 @@ export const QueryEditor = memo(function QueryEditor({
     return statementResults.map(r => `${r.lineNumber}:${r.status}:${r.executionTime || 0}`).join(',');
   }, [statementResults]);
 
-  // Effect to update Monaco decorations when statementResults changes (DataGrip-style gutter glyphs)
+  // Live mirror for the throttled prune listener registered at mount (it
+  // outlives renders, so it must not close over stale props).
+  const onGlyphChangeRef = useRef(onStatementResultsChange);
+  onGlyphChangeRef.current = onStatementResultsChange;
+
+  // Gutter glyph bookkeeping (#223): decoration id -> { line, status, result }.
+  // Decorations are sticky (NeverGrowsWhenTypingAtEdges), so survivors ride
+  // along as text shifts without being re-pinned. The result snapshot is
+  // stored per decoration so the throttled prune never reads stale props
+  // (two prunes can fire before the parent re-renders with written-back
+  // lines — looking the result up by line in current props would miss and
+  // wrongly drop the glyph).
+  const glyphMetaRef = useRef(new Map<string, { lineNumber: number; status: string; result: StatementResult }>());
+
+  const glyphClassFor = (result: StatementResult): { cls: string; hover: string; tooltip: string } => {
+    const { status, rowCount, rowsAffected, error, executionTime } = result;
+    if (status === 'success') {
+      let tooltip = '';
+      if (rowCount !== undefined) {
+        tooltip = `${rowCount} row${rowCount !== 1 ? 's' : ''} retrieved`;
+      } else if (rowsAffected !== undefined) {
+        tooltip = `${rowsAffected} row${rowsAffected !== 1 ? 's' : ''} affected`;
+      }
+      if (executionTime !== undefined && executionTime > 0) {
+        tooltip += tooltip ? ` in ${executionTime}ms` : `${executionTime}ms`;
+      }
+      return { cls: 'statement-glyph-success', hover: 'Query succeeded', tooltip };
+    }
+    if (status === 'error') {
+      return { cls: 'statement-glyph-error', hover: 'Query failed', tooltip: error || 'Error executing query' };
+    }
+    return { cls: 'statement-glyph-running', hover: 'Query running...', tooltip: '' };
+  };
+
+  // Reconcile Monaco gutter glyphs with statementResults (DataGrip-style).
+  // Only creates new / removes gone glyphs — survivors keep their live,
+  // Monaco-tracked decorations, so marks follow in-place edits instead of
+  // snapping back to frozen lines.
   useEffect(() => {
     if (!editorRef.current || !monacoRef.current) return;
-    
+
     const editor = editorRef.current;
     const monaco = monacoRef.current;
-    
-    // Always clear existing decorations first
-    if (decorationsRef.current.length > 0) {
-      decorationsRef.current = editor.deltaDecorations(decorationsRef.current, []);
-    }
-    
+
+    const clearAllGlyphs = () => {
+      const ids = [...glyphMetaRef.current.keys()];
+      if (ids.length > 0) {
+        editor.deltaDecorations(ids, []);
+        glyphMetaRef.current.clear();
+      }
+      decorationsRef.current = [];
+    };
+
     // During execution, show no glyph — wait for results
-    if (isExecuting) return;
-    
-    // Only create gutter glyphs when statementResults has data (after execution completes)
-    if (!statementResults || statementResults.length === 0) {
+    if (isExecuting) {
+      clearAllGlyphs();
       return;
     }
-    
-    // Create decorations for all statement results (DataGrip-style)
-    const decorations: any[] = [];
-    
-    statementResults.forEach((result) => {
-      const { lineNumber, status, rowCount, rowsAffected, error, executionTime } = result;
-      
-      let glyphClassName = 'statement-glyph-running';
-      let hoverMessage = 'Query running...';
-      let tooltip = '';
-      
-      if (status === 'success') {
-        glyphClassName = 'statement-glyph-success';
-        hoverMessage = 'Query succeeded';
-        if (rowCount !== undefined) {
-          tooltip = `${rowCount} row${rowCount !== 1 ? 's' : ''} retrieved`;
-        } else if (rowsAffected !== undefined) {
-          tooltip = `${rowsAffected} row${rowsAffected !== 1 ? 's' : ''} affected`;
-        }
-        if (executionTime !== undefined && executionTime > 0) {
-          tooltip += tooltip ? ` in ${executionTime}ms` : `${executionTime}ms`;
-        }
-      } else if (status === 'error') {
-        glyphClassName = 'statement-glyph-error';
-        hoverMessage = 'Query failed';
-        tooltip = error || 'Error executing query';
+
+    // Only create gutter glyphs when statementResults has data (after execution completes)
+    if (!statementResults || statementResults.length === 0) {
+      clearAllGlyphs();
+      return;
+    }
+
+    const desired = new Map<number, StatementResult>();
+    for (const r of statementResults) desired.set(r.lineNumber, r);
+
+    const removals: string[] = [];
+    for (const [id, meta] of glyphMetaRef.current) {
+      const want = desired.get(meta.lineNumber);
+      // Remove glyphs whose block is gone or whose status changed (re-added below).
+      if (!want || want.status !== meta.status) removals.push(id);
+    }
+
+    const additions: any[] = [];
+    const additionLines: number[] = [];
+    // TrackedRangeStickiness lives under monaco.editor.* (NOT top-level
+    // monaco.* — that path is undefined and crashed the app on mount).
+    // Resolve defensively: numeric 1 === NeverGrowsWhenTypingAtEdges and is
+    // stable across monaco versions, so decorations still work even if the
+    // enum moves again instead of throwing.
+    const stickiness: number =
+      (monaco.editor?.TrackedRangeStickiness as any)?.NeverGrowsWhenTypingAtEdges ??
+      (monaco as any)?.TrackedRangeStickiness?.NeverGrowsWhenTypingAtEdges ??
+      1;
+    for (const [line, result] of desired) {
+      let alive = false;
+      for (const [id, meta] of glyphMetaRef.current) {
+        if (removals.includes(id)) continue;
+        if (meta.lineNumber === line && meta.status === result.status) { alive = true; break; }
       }
-      
-      // Add gutter glyph decoration
-      decorations.push({
-        range: new monaco.Range(lineNumber, 1, lineNumber, 1),
+      if (alive) continue;
+      const { cls, hover, tooltip } = glyphClassFor(result);
+      additions.push({
+        range: new monaco.Range(line, 1, line, 1),
         options: {
           isWholeLine: false,
-          glyphMarginClassName: glyphClassName,
-          glyphMarginHoverMessage: { value: tooltip || hoverMessage },
+          glyphMarginClassName: cls,
+          glyphMarginHoverMessage: { value: tooltip || hover },
+          stickiness,
         }
       });
-    });
-    
-    // Apply all decorations
-    if (decorations.length > 0) {
-      decorationsRef.current = editor.deltaDecorations([], decorations);
+      additionLines.push(line);
     }
-    
+
+    if (removals.length > 0 || additions.length > 0) {
+      const newIds: string[] = additions.length > 0 ? editor.deltaDecorations(removals, additions) : editor.deltaDecorations(removals, []);
+      for (const id of removals) glyphMetaRef.current.delete(id);
+      newIds.forEach((id, idx) => {
+        const line = additionLines[idx];
+        const result = desired.get(line);
+        if (result) glyphMetaRef.current.set(id, { lineNumber: line, status: result.status, result });
+      });
+      decorationsRef.current = [...glyphMetaRef.current.keys()];
+    }
+
     // Scroll the last statement into view if there are errors
     const hasErrors = statementResults.some(r => r.status === 'error');
     if (hasErrors) {
@@ -381,7 +524,7 @@ export const QueryEditor = memo(function QueryEditor({
         editor.revealLineInCenter(lastError.lineNumber);
       }
     }
-    
+
   }, [statementResultsFingerprint, isExecuting]);
 
   const handleEditorMount: OnMount = (editor, monaco) => {
@@ -443,6 +586,76 @@ export const QueryEditor = memo(function QueryEditor({
     updateVarDecorations();
     const contentChangeDisposable = editor.onDidChangeModelContent(() => throttledVarDecorations());
 
+    // ─── Run-status glyph pruning (#223) ───────────────────────────────────────
+    // Sticky decorations follow the text automatically, but nothing removes a
+    // glyph whose block was cut away. On content change (throttled), read each
+    // glyph's live position: drop glyphs whose decoration is gone or whose
+    // anchor line is now blank (block cut/pasted away), and write back fresh
+    // line numbers for survivors so tab state survives switches/remounts.
+    let glyphPruneTimer: ReturnType<typeof setTimeout> | null = null;
+    const pruneGlyphs = () => {
+      const model = editor.getModel();
+      if (!model || glyphMetaRef.current.size === 0) return;
+
+      let changed = false;
+      const next: StatementResult[] = [];
+      const deadIds: string[] = [];
+      for (const [id, meta] of glyphMetaRef.current) {
+        let range: any = null;
+        try {
+          range = model.getDecorationRange(id);
+        } catch {
+          range = null;
+        }
+        if (!range) {
+          deadIds.push(id);
+          changed = true;
+          continue;
+        }
+        const liveLine = range.startLineNumber;
+        let lineText = "";
+        try {
+          lineText = model.getLineContent(liveLine);
+        } catch {
+          lineText = "";
+        }
+        if (lineText.trim().length === 0) {
+          // Anchor line blanked — the block was cut or deleted.
+          deadIds.push(id);
+          changed = true;
+          continue;
+        }
+        if (liveLine !== meta.lineNumber) {
+          meta.lineNumber = liveLine;
+          meta.result = { ...meta.result, lineNumber: liveLine };
+          changed = true;
+        }
+        next.push(meta.result);
+      }
+      if (deadIds.length > 0) {
+        try {
+          editor.deltaDecorations(deadIds, []);
+        } catch {
+          /* editor tearing down */
+        }
+        for (const id of deadIds) glyphMetaRef.current.delete(id);
+        decorationsRef.current = [...glyphMetaRef.current.keys()];
+      }
+      if (changed) {
+        next.sort((a, b) => a.lineNumber - b.lineNumber);
+        try {
+          onGlyphChangeRef.current?.(next);
+        } catch {
+          /* parent unmounted */
+        }
+      }
+    };
+    const throttledPruneGlyphs = () => {
+      if (glyphPruneTimer) clearTimeout(glyphPruneTimer);
+      glyphPruneTimer = setTimeout(pruneGlyphs, 500);
+    };
+    const glyphPruneDisposable = editor.onDidChangeModelContent(() => throttledPruneGlyphs());
+
     // ─── "Will run" statement highlight ────────────────────────────────────────
     // DataGrip-style affordance: persistently highlight the statement the caret
     // sits in, so the user can see which block Ctrl+Enter (run-at-cursor) will
@@ -467,7 +680,7 @@ export const QueryEditor = memo(function QueryEditor({
       }
 
       const text = model.getValue();
-      const target = resolveStatementAtOffset(text, model.getOffsetAt(position));
+      const target = resolveStatementAtOffset(text, model.getOffsetAt(position), hashOptsRef.current);
       // Don't bother highlighting when the whole buffer is a single statement —
       // there's nothing to disambiguate and a full-editor band is just noise.
       if (!target || text.trim() === target.text) {
@@ -611,7 +824,7 @@ export const QueryEditor = memo(function QueryEditor({
       // paint under the cursor (updateCursorStatementHighlight, below) is the
       // exact same statement we execute here — the highlight can never lie
       // about what Ctrl+Enter will run.
-      const targetStatement = resolveStatementAtOffset(text, offset);
+      const targetStatement = resolveStatementAtOffset(text, offset, hashOptsRef.current);
 
       if (targetStatement) {
         const startPos = model.getPositionAt(targetStatement.start);
@@ -642,7 +855,7 @@ export const QueryEditor = memo(function QueryEditor({
       // Collect all statements with their line numbers
       // Use the untrimmed text so splitStatements' line number computation
       // matches Monaco's 1-based line numbering (trim loses leading blanks).
-      const parsed = splitStatements(rawText);
+      const parsed = splitStatements(rawText, hashOptsRef.current);
       const allStatements = parsed.map(s => ({ text: s.text, lineNumber: s.lineNumber }));
       
       // Run all statements - pass special flag to executeQuery
@@ -670,12 +883,14 @@ export const QueryEditor = memo(function QueryEditor({
       contentChangeDisposable?.dispose();
       cursorMoveDisposable?.dispose();
       cursorContentDisposable?.dispose();
+      glyphPruneDisposable?.dispose();
       window.removeEventListener("focus-editor", focusHandler);
       window.removeEventListener("format-sql", formatHandler);
       window.removeEventListener("run-query-smart", handleRunSmart);
       window.removeEventListener("run-query-all", handleRunAll);
       if (domNode) domNode.removeEventListener("contextmenu", handleContextMenu);
       if (varDecoThrottle !== null) clearTimeout(varDecoThrottle);
+      if (glyphPruneTimer !== null) clearTimeout(glyphPruneTimer);
     });
 
     // NOTE: Ctrl+Shift+F is intentionally NOT bound to formatDocument here.
@@ -706,17 +921,25 @@ export const QueryEditor = memo(function QueryEditor({
           if (!word) return null;
           
           let contents = [];
-          
-          if (globalSchemaItems && word.word) {
+
+          // Hover follows the same tab-aware schema source as completion.
+          const hoverItems = pickCompletionSchema({
+            globalItems: globalSchemaItems,
+            globalConnId: globalSchemaConnId,
+            tabItems: tabSchemaItems,
+            tabConnId: tabSchemaConnId,
+            targetConnId: tabTargetConnId,
+          });
+          if (hoverItems && word.word) {
             const token = word.word.toLowerCase();
-            const isTable = globalSchemaItems.tables?.includes(token) || globalSchemaItems.tables?.some((t: string) => t.endsWith(`.${token}`));
-            const isView = globalSchemaItems.views?.includes(token) || globalSchemaItems.views?.some((v: string) => v.endsWith(`.${token}`));
+            const isTable = hoverItems.tables?.includes(token) || hoverItems.tables?.some((t: string) => t.endsWith(`.${token}`));
+            const isView = hoverItems.views?.includes(token) || hoverItems.views?.some((v: string) => v.endsWith(`.${token}`));
 
             if (isTable || isView) {
-              const tableCols = globalSchemaItems.columns?.filter((c: any) => 
+              const tableCols = hoverItems.columns?.filter((c: any) =>
                 c.table_name === token || c.table_name.endsWith(`.${token}`)
               ) || [];
-              
+
               if (tableCols.length > 0) {
                 let schemaDef = `\`\`\`sql\nCREATE ${isTable ? 'TABLE' : 'VIEW'} ${token} (\n`;
                 schemaDef += tableCols.map((c: any) => `  ${c.column_name}`).join(',\n');
@@ -725,7 +948,7 @@ export const QueryEditor = memo(function QueryEditor({
               } else {
                  contents.push({ value: `**${isTable ? 'Table' : 'View'}**: \`${token}\`` });
               }
-            } else if (globalSchemaItems.functions?.includes(token) || globalSchemaItems.functions?.some((f: string) => f.endsWith(`.${token}`))) {
+            } else if (hoverItems.functions?.includes(token) || hoverItems.functions?.some((f: string) => f.endsWith(`.${token}`))) {
                contents.push({ value: `**Function**: \`${token}()\`` });
             }
           }
@@ -737,7 +960,13 @@ export const QueryEditor = memo(function QueryEditor({
     // DataGrip-style parameter hints: `my_func(` shows `my_func(a int, b text)`
     // with the active argument highlighted. Registered once globally; the
     // provider reads the live connection from `globalConnCtx`.
-    registerSignatureHelp(monaco, () => globalConnCtx);
+    // Isolated from the completion provider below: a signature-help failure
+    // must never prevent table/column/keyword suggestions from registering.
+    try {
+      registerSignatureHelp(monaco, () => globalConnCtx);
+    } catch (e) {
+      console.error("Signature-help provider registration failed (completion unaffected):", e);
+    }
 
     editor.onMouseDown((e) => {
       if ((e.event.ctrlKey || e.event.metaKey) && e.target.position) {
@@ -779,45 +1008,52 @@ export const QueryEditor = memo(function QueryEditor({
             endColumn: word.endColumn,
           };
 
-          const items = globalSchemaItems;
-          
+          // Tab-aware schema source: the tab's own connection wins over the
+          // globally-active one (see pickCompletionSchema). Tabs on lazy
+          // connections get their background-fetched schema here.
+          const items = pickCompletionSchema({
+            globalItems: globalSchemaItems,
+            globalConnId: globalSchemaConnId,
+            tabItems: tabSchemaItems,
+            tabConnId: tabSchemaConnId,
+            targetConnId: tabTargetConnId,
+          });
+
 // Re-compute suggestions only if schema has changed
             // Use a hash of key arrays for more reliable cache invalidation
             const schemaHash = items ? `${items.tables?.length || 0}-${items.views?.length || 0}-${items.columns?.length || 0}-${items.foreignKeys?.length || 0}-${items._ts || 0}` : "";
-            
-            if (items && schemaHash !== lastSchemaHash) {
+            const sourceKey = tabTargetConnId ?? `global:${globalSchemaConnId ?? ""}`;
+
+            if (items && (schemaHash !== lastSchemaHash || sourceKey !== lastSchemaSourceKey)) {
               const rawSuggestions: any[] = [];
               const rawSeen = new Set();
-              
-              const addRaw = (label: string, kind: any, insertText: string, detail?: string, documentation?: any) => {
+
+              const addRaw = (label: string, kind: any, insertText: string, detail?: string, documentation?: any, snippet?: boolean) => {
+                 if (label == null) return;
                  if (!rawSeen.has(label + kind)) {
-                   rawSuggestions.push({ 
-                     label, 
-                     kind, 
-                     insertText, 
+                   rawSuggestions.push({
+                     label,
+                     kind,
+                     insertText,
                      detail,
                      documentation,
-                     range 
+                     // `$1` tab-stop placeholders only expand when flagged.
+                     ...(snippet ? { insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet } : {}),
+                     range
                    });
                    rawSeen.add(label + kind);
                  }
               };
 
-              // Keywords
-              const keywords = [
-                "SELECT", "FROM", "WHERE", "JOIN", "LEFT JOIN", "RIGHT JOIN", "INNER JOIN", "CROSS JOIN",
-                "ON", "ORDER BY", "GROUP BY", "HAVING", "INSERT INTO", "VALUES", "UPDATE", 
-                "SET", "DELETE FROM", "CREATE TABLE", "ALTER TABLE", "DROP TABLE", 
-                "CREATE INDEX", "DROP INDEX", "AS", "DISTINCT", "LIMIT", "OFFSET", 
-                "IN", "NOT IN", "LIKE", "ILIKE", "IS NULL", "IS NOT NULL", "AND", "OR", "NOT", "EXISTS", "BETWEEN",
-                "WITH", "RECURSIVE", "UNION", "ALL", "EXCEPT", "INTERSECT"
-              ];
-              keywords.forEach(k => addRaw(k, monaco.languages.CompletionItemKind.Keyword, k + " "));
+              // Keywords (shared static list — also used for the no-schema fallback below)
+              STATIC_KEYWORDS.forEach(k => addRaw(k, monaco.languages.CompletionItemKind.Keyword, k + " "));
 
-              // Functions
-              const functions = ["COUNT", "SUM", "AVG", "MAX", "MIN", "NOW", "COALESCE", "NULLIF", "CASE", "RANK", "ROW_NUMBER", "TO_CHAR", "EXTRACT"];
-              functions.forEach(f => addRaw(f, monaco.languages.CompletionItemKind.Function, f === "CASE" ? "CASE WHEN $1 THEN $2 ELSE $3 END" : f + "($1)"));
+              // Functions (shared static list — also used for the no-schema fallback below)
+              STATIC_FUNCTIONS.forEach(f => addRaw(f, monaco.languages.CompletionItemKind.Function, staticFunctionInsertText(f), undefined, undefined, true));
 
+              // Schema-backed entries. Guarded: a malformed catalog row must
+              // never throw out of the provider and kill ALL suggestions.
+              try {
               // Tables & Views with smart aliases in JOIN context
               const existingAliases = extractExistingAliases(model.getValue());
               if (items.tables) items.tables.forEach((t: string) => {
@@ -836,15 +1072,16 @@ export const QueryEditor = memo(function QueryEditor({
                    const targetAlias = generateTableAlias(fk.target_table, existingAliases);
                    const label = `JOIN ${fk.target_table} ON ${fk.source_column} = ${fk.target_column}`;
                    const insertText = `${fk.target_table} ${targetAlias} ON \${1:${fk.source_table}.${fk.source_column}} = \${2:${fk.target_table}.${fk.target_column}}`;
-                   const suggestion = { 
-                     label, 
-                     kind: monaco.languages.CompletionItemKind.Snippet, 
-                     insertText, 
-                     detail: "Join via Foreign Key",
-                     documentation: { value: `Smart Join between **${fk.source_table}** and **${fk.target_table}**` },
-                     range,
-                     isForeignKey: true
-                   };
+                    const suggestion = { 
+                      label, 
+                      kind: monaco.languages.CompletionItemKind.Snippet, 
+                      insertText, 
+                      insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                      detail: "Join via Foreign Key",
+                      documentation: { value: `Smart Join between **${fk.source_table}** and **${fk.target_table}**` },
+                      range,
+                      isForeignKey: true
+                    };
                    fkSuggestions.push(suggestion);
                   });
                 // Add FK suggestions to main list
@@ -862,10 +1099,17 @@ export const QueryEditor = memo(function QueryEditor({
                 });
               }
 
-              if (items.functions) items.functions.forEach((f: string) => addRaw(f, monaco.languages.CompletionItemKind.Method, f.includes('.') ? f + "($1)" : f + "($1)"));
-              
+              if (items.functions) items.functions.forEach((f: string) => addRaw(f, monaco.languages.CompletionItemKind.Method, f.includes('.') ? f + "($1)" : f + "($1)", undefined, undefined, true));
+              } catch (rebuildErr) {
+                // Keywords + builtin functions above are already queued and the
+                // schema-dot / alias-dot paths below read `items` directly, so
+                // completion degrades instead of dying on malformed catalog data.
+                console.error("Schema suggestion rebuild failed (static suggestions kept):", rebuildErr);
+              }
+
               cachedSuggestions = rawSuggestions;
               lastSchemaHash = schemaHash;
+              lastSchemaSourceKey = sourceKey;
             }
 
             // FILTER logic for specific context (JOIN, ON, etc.)
@@ -927,6 +1171,7 @@ const isInJoinContext = /(\b|^)(JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|INNER\s+JOIN|CROSS
                     label: bare,
                     kind: monaco.languages.CompletionItemKind.Method,
                     insertText: `${bare}($1)`,
+                    insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
                     detail: `${anyMatch.schema}.${bare}()`,
                     range: schemaRange,
                     sortText: `2${String(idx).padStart(4, "0")}`,
@@ -964,6 +1209,30 @@ const isInJoinContext = /(\b|^)(JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|INNER\s+JOIN|CROSS
               }
             }
 
+            // No-schema fallback: with no connection there is no catalog, but
+            // SQL keywords and builtin functions are static — suggest those
+            // instead of an empty list so completion never goes fully dead.
+            if (!items) {
+              const wordLower = word.word.toLowerCase();
+              return {
+                suggestions: [
+                  ...STATIC_KEYWORDS.filter((k) => matchesStaticLabel(k, wordLower)).map((k) => ({
+                    label: k,
+                    kind: monaco.languages.CompletionItemKind.Keyword,
+                    insertText: k + " ",
+                    range,
+                  })),
+                  ...STATIC_FUNCTIONS.filter((f) => matchesStaticLabel(f, wordLower)).map((f) => ({
+                    label: f,
+                    kind: monaco.languages.CompletionItemKind.Function,
+                    insertText: staticFunctionInsertText(f),
+                    insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                    range,
+                  })),
+                ],
+              };
+            }
+
             // Dynamic filtering based on context
             let contextSuggestions = [...cachedSuggestions];
 
@@ -978,7 +1247,7 @@ const isInJoinContext = /(\b|^)(JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|INNER\s+JOIN|CROSS
                 // Always include keywords and functions (they're important)
                 if (s.kind === monaco.languages.CompletionItemKind.Keyword ||
                     s.kind === monaco.languages.CompletionItemKind.Function) {
-                  return label.startsWith(currentWord) || label.includes(currentWord);
+                  return matchesStaticLabel(label, currentWord);
                 }
                 return matchesQualifiedOrBareName(label, currentWord);
               });

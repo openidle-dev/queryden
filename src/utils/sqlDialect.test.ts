@@ -10,6 +10,7 @@ import {
   isPgLike,
   isSelectLike,
   quoteIdentifierPart,
+  resolveTabHashComments,
   splitDottedIdentifier,
   stripSqlToCode,
   stripTrailingSemicolonAndComments,
@@ -94,6 +95,29 @@ describe("sqlDialect — isSelectLike", () => {
     expect(isSelectLike("UPDATE t SET x = 1 -- RETURNING")).toBe(false);
     expect(isSelectLike("DELETE FROM t")).toBe(false);
   });
+
+  it("does NOT treat DML with a subquery (no RETURNING) as a select", () => {
+    expect(isSelectLike("DELETE FROM t WHERE id IN (SELECT id FROM archived)")).toBe(false);
+    expect(isSelectLike("UPDATE t SET a = 1 WHERE id IN (SELECT id FROM s)")).toBe(false);
+    expect(isSelectLike("INSERT INTO t (a) SELECT a FROM s")).toBe(false);
+  });
+
+  it("treats every top-level # as a MySQL comment (opt-in)", () => {
+    // `# LIMIT 1` glued to an identifier must still hide the limit, or the
+    // safety-limit check sees a limit MySQL ignores.
+    const mysql = { hashComments: true };
+    expect(stripSqlToCode("SELECT * FROM logs# LIMIT 1", mysql)).not.toContain("LIMIT");
+    expect(cleanSqlForKeywords("SELECT * FROM logs# LIMIT 1", mysql)).not.toContain("LIMIT");
+  });
+
+  it("preserves PostgreSQL # JSON operators by default", () => {
+    // `UPDATE t SET doc = doc #> '{a}' RETURNING doc` must keep RETURNING
+    // visible so it routes via db.select() and the row is displayed.
+    expect(stripSqlToCode("SELECT doc#>'{a}' FROM t")).toContain("#>");
+    expect(isSelectLike("UPDATE t SET doc = doc #> '{a}' RETURNING doc")).toBe(true);
+    // ...while the same text under the MySQL rule hides everything past `#`.
+    expect(isSelectLike("UPDATE t SET doc = doc #> '{a}' RETURNING doc", { hashComments: true })).toBe(false);
+  });
 });
 
 describe("sqlDialect — classifyDestructive", () => {
@@ -166,5 +190,30 @@ describe("sqlDialect — strip helpers", () => {
     // Literal tail must survive intact.
     expect(stripTrailingSemicolonAndComments("SELECT 'a -- b'")).toBe("SELECT 'a -- b'");
     expect(stripSqlToCode("SELECT 'a -- b'")).not.toContain("-- b");
+  });
+});
+
+describe("sqlDialect — resolveTabHashComments", () => {
+  // Regression: the editor derived `#` handling from the globally-active
+  // connection, so a PostgreSQL tab corrupted `#>` operators (or a MySQL tab
+  // missed `#` comments) whenever the sidebar sat on the other dialect.
+  const conns = [
+    { id: "pg", type: "postgres" },
+    { id: "my", type: "mysql" },
+  ];
+
+  it("uses the tab target's dialect over the active connection", () => {
+    expect(resolveTabHashComments("pg", conns, "mysql")).toEqual({ hashComments: false });
+    expect(resolveTabHashComments("my", conns, "postgres")).toEqual({ hashComments: true });
+  });
+
+  it("falls back to the active connection for untargeted tabs", () => {
+    expect(resolveTabHashComments(undefined, conns, "mysql")).toEqual({ hashComments: true });
+    expect(resolveTabHashComments(undefined, conns, "postgres")).toEqual({ hashComments: false });
+  });
+
+  it("falls back safely for unknown targets and no connection", () => {
+    expect(resolveTabHashComments("gone", conns, "mysql")).toEqual({ hashComments: true });
+    expect(resolveTabHashComments(undefined, [], null)).toEqual({ hashComments: false });
   });
 });
