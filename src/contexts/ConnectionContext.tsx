@@ -105,7 +105,7 @@ export interface SchemaItems {
 }
 
 interface SchemaLoadingProgress {
-  phase: "idle" | "initializing" | "connecting" | "tables" | "views" | "functions" | "procedures" | "triggers" | "indexes" | "types" | "operators" | "foreign_tables" | "columns" | "foreign_keys" | "complete";
+  phase: "idle" | "initializing" | "connecting" | "objects" | "tables" | "views" | "functions" | "procedures" | "triggers" | "indexes" | "types" | "operators" | "foreign_tables" | "columns" | "foreign_keys" | "complete";
   current: number;
   total: number;
 }
@@ -151,6 +151,12 @@ export interface CreateRolePayload {
 
 interface ConnectionContextType {
   connections: DatabaseConnection[];
+  /**
+   * Per-connection live state, keyed by connection id. Read this rather than
+   * the active-connection projections anywhere that shows more than one
+   * connection at a time -- the sidebar tree, most obviously.
+   */
+  sessions: Record<string, ConnSession>;
   activeConnection: DatabaseConnection | null;
   selectedDatabase: string | null;
   databases: string[];
@@ -186,7 +192,14 @@ interface ConnectionContextType {
   ensureConnectionDb: (connId: string, database?: string) => Promise<EnsuredConnection>;
   /** Close + evict all cached lazy handles for a connection. */
   dropCachedConnection: (connId: string) => Promise<void>;
-  loadSchema: (database: string, overrideSchemas?: string[]) => Promise<void>;
+  /**
+   * True when `connectionString` is backed by a pool this app is actively
+   * using. Pools are keyed by connection string on the Rust side and reused,
+   * so a throwaway caller (the connection tester) can be handed the very pool
+   * a live connection is running on, and must not close it.
+   */
+  hasLivePool: (connectionString: string) => boolean;
+  loadSchema: (database: string, overrideSchemas?: string[], force?: boolean) => Promise<void>;
   /**
    * Fetch (or reuse a cached) schema snapshot for ANY saved connection —
    * backing tab-targeted completion for tabs whose connection was never
@@ -344,24 +357,117 @@ function folderToDto(f: Folder): FolderDto {
   };
 }
 
+/**
+ * Everything QueryDen displays for one *connected* connection.
+ *
+ * This used to be a handful of singular `useState` slots, so connecting to a
+ * second server overwrote the first one's database list, catalogue, roles and
+ * tablespaces. The first connection's tree did not collapse so much as cease
+ * to exist, and switching back re-ran the whole catalogue scan.
+ *
+ * `activeConnection` and `currentDb` stay singular, which is correct -- there
+ * genuinely is one active connection. It was only ever the *data* that needed
+ * to be per-connection.
+ */
+export interface ConnSession {
+  connectionId: string;
+  /** Database currently selected *on this connection*. */
+  selectedDatabase: string | null;
+  /** `pg_database` / `SHOW DATABASES` listing for this connection. */
+  databases: string[];
+  /** Catalogue per database. This is what removes the rescan on switch back. */
+  schemaByDb: Record<string, SchemaItems>;
+  roles: { login: string[]; group: string[] };
+  tablespaces: { name: string; owner: string; location: string | null; size: string | null }[];
+  isLoadingSchema: boolean;
+  schemaProgress: SchemaLoadingProgress;
+}
+
+function blankSession(connectionId: string): ConnSession {
+  return {
+    connectionId,
+    selectedDatabase: null,
+    databases: [],
+    schemaByDb: {},
+    roles: { login: [], group: [] },
+    tablespaces: [],
+    isLoadingSchema: false,
+    schemaProgress: { phase: "idle", current: 0, total: 0 },
+  };
+}
+
+// Frozen fallbacks, so the derived reads below do not mint a fresh object on
+// every provider render: the explorer's tree-building effect lists these in
+// its dependency array, and inline `?? []` literals would rebuild the entire
+// tree on each progress tick of a schema load.
+const EMPTY_STRINGS: string[] = Object.freeze([]) as unknown as string[];
+const EMPTY_ROLES = Object.freeze({ login: EMPTY_STRINGS, group: EMPTY_STRINGS });
+const EMPTY_TABLESPACES = Object.freeze([]) as unknown as ConnSession["tablespaces"];
+const IDLE_PROGRESS: SchemaLoadingProgress = Object.freeze({ phase: "idle", current: 0, total: 0 });
+
 export function ConnectionProvider({ children }: { children: ReactNode }) {
   const schemaStore = useSettings();
   
   const [connections, setConnections] = useState<DatabaseConnection[]>([]);
   const [activeConnection, setActiveConnection] = useState<DatabaseConnection | null>(null);
-  const [selectedDatabase, setSelectedDatabase] = useState<string | null>(null);
-  const [databases, setDatabases] = useState<string[]>([]);
-  const [schemaItems, setSchemaItems] = useState<SchemaItems | null>(null);
+  const [sessions, setSessions] = useState<Record<string, ConnSession>>({});
+  const sessionsRef = useRef<Record<string, ConnSession>>({});
+  const activeConnIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    activeConnIdRef.current = activeConnection?.id ?? null;
+  }, [activeConnection]);
+
+  /** Apply a patch to one connection's session, creating it if absent. */
+  const patchSession = (
+    connId: string | null | undefined,
+    patch: Partial<ConnSession> | ((s: ConnSession) => Partial<ConnSession>),
+  ) => {
+    if (!connId) return;
+    setSessions((prev) => {
+      const base = prev[connId] ?? blankSession(connId);
+      const applied = typeof patch === "function" ? patch(base) : patch;
+      const next = { ...prev, [connId]: { ...base, ...applied } };
+      sessionsRef.current = next;
+      return next;
+    });
+  };
   const [currentDb, setCurrentDb] = useState<any>(null);
-  const [isLoadingSchema, setIsLoadingSchema] = useState(false);
+  // ── Derived "active connection" view ──────────────────────────────────────
+  // Consumers keep reading exactly the same names; these are a projection of
+  // the active session rather than a second copy of it, so a switch has
+  // nothing left to overwrite.
+  const activeSession = activeConnection ? sessions[activeConnection.id] ?? null : null;
+  const selectedDatabase = activeSession?.selectedDatabase ?? null;
+  const databases = activeSession?.databases ?? EMPTY_STRINGS;
+  const schemaItems =
+    activeSession && activeSession.selectedDatabase
+      ? activeSession.schemaByDb[activeSession.selectedDatabase] ?? null
+      : null;
+  const isLoadingSchema = activeSession?.isLoadingSchema ?? false;
+
+  // Compatibility setters: route each write into the active session so the
+  // existing call sites stay unchanged.
+  const setSelectedDatabase = (v: string | null) =>
+    patchSession(activeConnIdRef.current, { selectedDatabase: v });
+  const setDatabases = (v: string[]) => patchSession(activeConnIdRef.current, { databases: v });
+  const setRoles = (v: { login: string[]; group: string[] }) =>
+    patchSession(activeConnIdRef.current, { roles: v });
+  const setSchemaItems = (v: SchemaItems | null) =>
+    patchSession(activeConnIdRef.current, (prev) => {
+      if (!prev.selectedDatabase) return {};
+      const next = { ...prev.schemaByDb };
+      if (v === null) delete next[prev.selectedDatabase];
+      else next[prev.selectedDatabase] = v;
+      return { schemaByDb: next };
+    });
   const [initialLoadDone, setInitialLoadDone] = useState(false);
-  const [schemaProgress, setSchemaProgress] = useState<SchemaLoadingProgress>({ phase: "idle", current: 0, total: 0 });
+  const schemaProgress = activeSession?.schemaProgress ?? IDLE_PROGRESS;
   const [vaultCredentials, setVaultCredentials] = useState<VaultCredential[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   /** Selected schemas per database: { "connectionId:databaseName": string[] } */
   const [selectedSchemasByDatabase, setSelectedSchemasByDatabase] = useState<Record<string, string[]>>({});
-  const [roles, setRoles] = useState<{ login: string[], group: string[] }>({ login: [], group: [] });
-  const [tablespaces, setTablespaces] = useState<{ name: string; owner: string; location: string | null; size: string | null }[]>([]);
+  const roles = activeSession?.roles ?? EMPTY_ROLES;
+  const tablespaces = activeSession?.tablespaces ?? EMPTY_TABLESPACES;
 
   // Lazy per-connection handles for `ensureConnectionDb` (multi-connection
   // startup connects nothing, so tab-target queries establish their own).
@@ -742,18 +848,26 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       // Update the connection in state so every component sees the server version
       updateConnection(conn.id, updatedConn);
       setActiveConnection(updatedConn);
-      setSelectedDatabase(targetDb);
+      // Scoped to this connection by name: the compatibility setters resolve
+      // the active connection through a ref that React updates only on the
+      // next render, so a bare call here would write to the previous one.
+      const setDatabasesFor = (v: string[]) => patchSession(conn.id, { databases: v });
+      const setRolesFor = (v: { login: string[]; group: string[] }) =>
+        patchSession(conn.id, { roles: v });
+      const setTablespacesFor = (v: ConnSession["tablespaces"]) =>
+        patchSession(conn.id, { tablespaces: v });
+      patchSession(conn.id, { selectedDatabase: targetDb });
       
       // Get available databases list if it's the first connection or if requested
       if (!databaseName) {
         if (["postgres", "supabase", "cockroach"].includes(conn.type)) {
           const result = await db.select<any[]>("SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname");
-          setDatabases(result.map((r: any) => r.datname));
+          setDatabasesFor(result.map((r: any) => r.datname));
         } else if (["mysql", "mariadb"].includes(conn.type)) {
           const result = await db.select<any[]>("SHOW DATABASES");
-          setDatabases(result.map((r: any) => r.Database));
+          setDatabasesFor(result.map((r: any) => r.Database));
         } else {
-          setDatabases([conn.database]);
+          setDatabasesFor([conn.database]);
         }
       }
 
@@ -767,20 +881,20 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
             if (r.rolcanlogin) login.push(r.rolname);
             else group.push(r.rolname);
           }
-          setRoles({ login, group });
+          setRolesFor({ login, group });
         } catch (e) {
           console.error("Failed to load roles:", e);
-          setRoles({ login: [], group: [] });
+          setRolesFor({ login: [], group: [] });
         }
         // Load tablespaces
         try {
           const tsRows = await db.select<any[]>(
             "SELECT spcname, spcowner::regrole AS owner, pg_tablespace_location(oid) AS location, COALESCE(pg_size_pretty(NULLIF(pg_tablespace_size(oid), 0)), '0 bytes') AS size FROM pg_tablespace ORDER BY spcname"
           );
-          setTablespaces(tsRows.map((r: any) => ({ name: r.spcname, owner: r.owner, location: r.location, size: r.size })));
+          setTablespacesFor(tsRows.map((r: any) => ({ name: r.spcname, owner: r.owner, location: r.location, size: r.size })));
         } catch (e) {
           console.error("Failed to load tablespaces:", e);
-          setTablespaces([]);
+          setTablespacesFor([]);
         }
       }
     } catch (error: any) {
@@ -802,18 +916,27 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     }
     if (currentDb) {
       try {
-        await currentDb.close();
+        // Name the pool. `close()` with no argument closes *every* pool in the
+        // process -- the JS plugin forwards `undefined` and the Rust side reads
+        // that as "all" -- so disconnecting one server dropped the rest.
+        await currentDb.close(currentDb.path);
       } catch (e) {
         console.error("Failed to close database connection:", e);
       }
     }
     setCurrentDb(null);
+    // Drop only this connection's session. Other connected connections keep
+    // their database list, catalogue and tree.
+    if (activeConnection) {
+      const goneId = activeConnection.id;
+      setSessions((prev) => {
+        const next = { ...prev };
+        delete next[goneId];
+        sessionsRef.current = next;
+        return next;
+      });
+    }
     setActiveConnection(null);
-    setSelectedDatabase(null);
-    setDatabases([]);
-    setSchemaItems(null);
-    setRoles({ login: [], group: [] });
-    setTablespaces([]);
     // Notify the Monaco editor (if loaded) to drop its module-level schema cache.
     window.dispatchEvent(new CustomEvent("connection-disconnected"));
   };
@@ -825,6 +948,14 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
    * snapshots for the connection are evicted too so a later reconnect
    * re-introspects instead of completing against stale catalog data.
    */
+  const hasLivePool = (connectionString: string) => {
+    if (currentDb?.path === connectionString) return true;
+    for (const db of lazyHandlesRef.current.values()) {
+      if (db?.path === connectionString) return true;
+    }
+    return false;
+  };
+
   const dropCachedConnection = async (connId: string) => {
     const prefix = `${connId}::`;
     for (const key of [...schemaCacheRef.current.keys()]) {
@@ -841,7 +972,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           pending
             .then((db: any) => {
               try {
-                const r = db?.close?.();
+                // Named: a bare close() would take every other connection's
+                // pool down with this one.
+                const r = db?.close?.(db?.path);
                 if (r && typeof r.then === "function") return r;
               } catch {
                 /* already dead */
@@ -858,7 +991,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         closes.push(
           (async () => {
             try {
-              await db?.close?.();
+              await db?.close?.(db?.path);
             } catch {
               /* already dead */
             }
@@ -975,45 +1108,71 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const loadSchema = async (_database: string, overrideSchemas?: string[]) => {
-    if (!activeConnection || !currentDb) {
-      setSchemaItems(null);
+  const loadSchema = async (database: string, overrideSchemas?: string[], force = false) => {
+    if (!activeConnection || !currentDb) return;
+
+    const connId = activeConnection.id;
+    const db = currentDb;
+    const connType = activeConnection.type;
+
+    // Serve from cache unless the caller wants a refresh or is narrowing the
+    // schema selection. Without this, merely switching back to a connection
+    // re-ran the whole catalogue scan -- several network round trips, which is
+    // seconds against a distant server.
+    if (
+      !force &&
+      overrideSchemas === undefined &&
+      sessionsRef.current[connId]?.schemaByDb[database]
+    ) {
       return;
     }
 
-    setIsLoadingSchema(true);
-    setSchemaProgress({ phase: "initializing", current: 0, total: 12 });
+    // Scoped writers. A scan is long enough that the user can switch
+    // connections part-way through it, and its results must land on the
+    // session it was started for rather than on whichever is active when it
+    // finishes.
+    const setProgress = (v: SchemaLoadingProgress) =>
+      patchSession(connId, { schemaProgress: v });
+    const setLoading = (v: boolean) => patchSession(connId, { isLoadingSchema: v });
+
+    setLoading(true);
+    setProgress({ phase: "initializing", current: 0, total: 3 });
 
     // Use overrideSchemas if provided (from SchemaSelectionDialog), otherwise read from state
     const selectedSchemas = overrideSchemas !== undefined
       ? overrideSchemas
-      : getSelectedSchemas(activeConnection.id, _database);
+      : getSelectedSchemas(connId, database);
 
     try {
       // Introspection itself lives in fetchSchemaItems (shared with the
       // per-tab background path `ensureSchemaFor`) so the explorer tree and
       // tab-targeted completion always see identical data.
       const schema = await fetchSchemaItems({
-        db: currentDb,
-        connType: activeConnection.type,
+        db,
+        connType,
         selectedSchemas,
-        onProgress: (s) => setSchemaProgress({
+        onProgress: (s) => setProgress({
           phase: s.phase as SchemaLoadingProgress["phase"],
           current: s.current,
           total: s.total,
         }),
       });
-      setSchemaItems(prev => ({
-        ...prev,
-        ...schema,
-        _ts: Date.now()
+      patchSession(connId, (prev) => ({
+        schemaByDb: {
+          ...prev.schemaByDb,
+          [database]: { ...(prev.schemaByDb[database] ?? {}), ...schema, _ts: Date.now() },
+        },
       }));
-      setSchemaProgress({ phase: "complete", current: 12, total: 12 });
+      setProgress({ phase: "complete", current: 3, total: 3 });
     } catch (error) {
       console.error("Failed to load schema:", error);
-      setSchemaItems(null);
+      patchSession(connId, (prev) => {
+        const next = { ...prev.schemaByDb };
+        delete next[database];
+        return { schemaByDb: next };
+      });
     } finally {
-      setIsLoadingSchema(false);
+      setLoading(false);
     }
   };
 
@@ -2068,6 +2227,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     <ConnectionContext.Provider
       value={{
         connections,
+        sessions,
         activeConnection,
         selectedDatabase,
         databases,
@@ -2088,6 +2248,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         disconnectFromDatabase,
         ensureConnectionDb,
         dropCachedConnection,
+        hasLivePool,
         loadSchema,
         ensureSchemaFor,
         getDDL,

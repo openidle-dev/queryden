@@ -226,6 +226,14 @@ export function MainContent() {
   // Dedicated db connection for the active transaction
   const txDbRef = useRef<any>(null);
   const txContextRef = useRef<{ connectionId: string; database: string } | null>(null);
+  // `executeQuery` and the tx-action handler both read transaction state, and
+  // neither can list it as a dependency without being rebuilt -- invalidating
+  // everything downstream -- on every statement. Read it through a ref that is
+  // refreshed each render instead. Without this, `txState.active` was always
+  // the pre-BEGIN snapshot, so BEGIN/COMMIT/ROLLBACK silently did nothing
+  // while the toolbar showed a transaction open.
+  const txStateRef = useRef(txState);
+  useEffect(() => { txStateRef.current = txState; });
 
   // Auto-rollback when connection changes during an active transaction
   useEffect(() => {
@@ -1774,7 +1782,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         const duration = Date.now() - startTime;
         setExecutionTime(duration);
         window.dispatchEvent(new CustomEvent("status-bar-update", {
-          detail: { rows: isSelect ? rowsAffected : rowsAffected, time: duration, txActive: txState.active, txStatements: txState.statementCount }
+          detail: { rows: isSelect ? rowsAffected : rowsAffected, time: duration, txActive: txStateRef.current.active, txStatements: txStateRef.current.statementCount }
         }));
         if (currentTabId) {
           // Create a psql console entry from the current output
@@ -1813,7 +1821,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       
       // ── Default: libpq path ──────────────────────────────────────────────────
       // Use the transaction-scoped connection if a transaction is active for this connection
-      if (txState.active && txDbRef.current && txContextRef.current?.connectionId === actualConnection.id && txContextRef.current?.database === actualDatabase) {
+      if (txStateRef.current.active && txDbRef.current && txContextRef.current?.connectionId === actualConnection.id && txContextRef.current?.database === actualDatabase) {
         db = txDbRef.current;
       } else if (ensured) {
         // Tab-target (or unconnected-global) run: the lazily-established
@@ -1987,11 +1995,11 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         }
 
         // Update transaction statement count if in an active transaction
-        if (txState.active) {
+        if (txStateRef.current.active) {
           const numStatements = isRunAll ? statementsToRun.length : 1;
           setTxState(prev => ({ ...prev, statementCount: prev.statementCount + numStatements }));
           window.dispatchEvent(new CustomEvent("tx-state-changed", {
-            detail: { active: true, statementCount: txState.statementCount + numStatements }
+            detail: { active: true, statementCount: txStateRef.current.statementCount + numStatements }
           }));
         }
       } finally {
@@ -2148,7 +2156,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       
       // Update status bar
       window.dispatchEvent(new CustomEvent("status-bar-update", {
-        detail: { rows: isSelect ? rowsAffected : rowsAffected, time: duration, txActive: txState.active, txStatements: txState.statementCount }
+        detail: { rows: isSelect ? rowsAffected : rowsAffected, time: duration, txActive: txStateRef.current.active, txStatements: txStateRef.current.statementCount }
       }));
       
       // Persist successful execution to the query tab
@@ -2424,11 +2432,11 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         // Notify toolbar of state change
         const newTxStatements = action === "rollback" || action === "commit" ? 0
           : action === "begin" ? 0
-          : txState.statementCount;
+          : txStateRef.current.statementCount;
         window.dispatchEvent(new CustomEvent("tx-state-changed", {
           detail: {
-            active: action === "commit" || action === "rollback" ? false : txState.active || action === "begin",
-            isolationLevel: action === "begin" ? (isolation || "READ COMMITTED") : txState.isolationLevel,
+            active: action === "commit" || action === "rollback" ? false : txStateRef.current.active || action === "begin",
+            isolationLevel: action === "begin" ? (isolation || "READ COMMITTED") : txStateRef.current.isolationLevel,
             statementCount: newTxStatements,
           }
         }));
@@ -2837,42 +2845,41 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       // ─── Step 2: Validate NOT NULL + FK constraints (all providers) ───
       const rowsWithMissing: { rowIndex: number; missing: string[] }[] = [];
 
+      // Which columns are required depends only on the table, so ask once.
+      // This used to sit inside the per-row loop with identical parameters on
+      // every iteration: saving twenty rows meant twenty identical round
+      // trips, which against a distant server is most of a minute spent
+      // re-reading the same answer.
+      let requiredColumns: string[] = [];
+      if (["postgres", "supabase", "cockroach", "mysql", "mariadb"].includes(saveType)) {
+        // Placeholders are dialect-specific: $1/$2 on PostgreSQL-wire
+        // engines, ? on MySQL/MariaDB (sqlx does not understand $n there).
+        const ph1 = isPgLikeSave ? "$1" : "?";
+        const ph2 = isPgLikeSave ? "$2" : "?";
+        const notNullCols = await db.select(`
+          SELECT column_name
+          FROM information_schema.columns
+          WHERE table_schema = ${ph1} AND table_name = ${ph2}
+            AND is_nullable = 'NO'
+            AND column_default IS NULL
+          ORDER BY ordinal_position
+        `, [schemaName, tableName]);
+        requiredColumns = notNullCols.map((c: any) => c.column_name);
+      } else if (saveType === "sqlite") {
+        const sqliteCols = await db.select(`PRAGMA table_info("${tableName.replace(/"/g, '""')}")`);
+        requiredColumns = sqliteCols
+          .filter((c: any) => c.notnull === 1 && (c.dflt_value === null || c.dflt_value === undefined))
+          .map((c: any) => c.name);
+      }
+
       for (let i = 0; i < newRows.length; i++) {
         const { _isNew, ...data } = newRows[i];
         const missing: string[] = [];
 
-        // Check NOT NULL columns that don't have a DEFAULT (these must be provided).
-        // Placeholders are dialect-specific: $1/$2 on PostgreSQL-wire
-        // engines, ? on MySQL/MariaDB (sqlx does not understand $n there).
-        if (["postgres", "supabase", "cockroach", "mysql", "mariadb"].includes(saveType)) {
-          const ph1 = isPgLikeSave ? "$1" : "?";
-          const ph2 = isPgLikeSave ? "$2" : "?";
-          const notNullCols = await db.select(`
-            SELECT column_name
-            FROM information_schema.columns
-            WHERE table_schema = ${ph1} AND table_name = ${ph2}
-              AND is_nullable = 'NO'
-              AND column_default IS NULL
-            ORDER BY ordinal_position
-          `, [schemaName, tableName]);
-
-          for (const col of notNullCols) {
-            const colName = col.column_name;
-            const val = data[colName];
-            if (val === null || val === undefined || String(val).trim() === "") {
-              missing.push(colName);
-            }
-          }
-        } else if (saveType === "sqlite") {
-          const sqliteCols = await db.select(`PRAGMA table_info("${tableName.replace(/"/g, '""')}")`);
-          for (const col of sqliteCols) {
-            if (col.notnull === 1 && (col.dflt_value === null || col.dflt_value === undefined)) {
-              const colName = col.name;
-              const val = data[colName];
-              if (val === null || val === undefined || String(val).trim() === "") {
-                missing.push(colName);
-              }
-            }
+        for (const colName of requiredColumns) {
+          const val = data[colName];
+          if (val === null || val === undefined || String(val).trim() === "") {
+            missing.push(colName);
           }
         }
 
