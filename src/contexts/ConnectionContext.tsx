@@ -438,8 +438,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     patchSession(activeConnectionIdRef.current, { selectedDatabase: v });
   const setRoles = (v: { login: string[]; group: string[] }) =>
     patchSession(activeConnectionIdRef.current, { roles: v });
-  const setTablespaces = (v: ConnSession["tablespaces"]) =>
-    patchSession(activeConnectionIdRef.current, { tablespaces: v });
   const [vaultCredentials, setVaultCredentials] = useState<VaultCredential[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   /** Selected schemas per database: { "connectionId:databaseName": string[] } */
@@ -874,16 +872,21 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         })();
       }
 
+      // Scoped to this connection rather than to whichever session is active
+      // when the query returns: the user can switch connections while it is in
+      // flight.
+      const setDatabasesFor = (v: string[]) => patchSession(conn.id, { databases: v });
+
       // Get available databases list if it's the first connection or if requested
       if (!databaseName) {
         if (["postgres", "supabase", "cockroach"].includes(conn.type)) {
           const result = await db.select<any[]>("SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname");
-          setDatabases(result.map((r: any) => r.datname));
+          setDatabasesFor(result.map((r: any) => r.datname));
         } else if (["mysql", "mariadb"].includes(conn.type)) {
           const result = await db.select<any[]>("SHOW DATABASES");
-          setDatabases(result.map((r: any) => r.Database));
+          setDatabasesFor(result.map((r: any) => r.Database));
         } else {
-          setDatabases([conn.database]);
+          setDatabasesFor([conn.database]);
         }
       }
 
@@ -893,6 +896,10 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       // round trips between pressing Connect and being able to type. Fire them
       // off and let them land when they land.
       if (["postgres", "supabase", "cockroach"].includes(conn.type)) {
+        const setRoles = (v: { login: string[]; group: string[] }) =>
+          patchSession(conn.id, { roles: v });
+        const setTablespaces = (v: ConnSession["tablespaces"]) =>
+          patchSession(conn.id, { tablespaces: v });
         void (async () => {
         try {
           const roleRows = await db.select<any[]>("SELECT rolname, rolcanlogin FROM pg_roles WHERE rolname !~ '^pg_' ORDER BY rolname");
