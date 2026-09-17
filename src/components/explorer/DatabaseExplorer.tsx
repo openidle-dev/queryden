@@ -48,7 +48,7 @@ interface DatabaseExplorerProps {
 }
 
 export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: DatabaseExplorerProps = {}) {
-  const { connections, activeConnection, selectedDatabase, databases, removeConnection, updateConnection, connectToDatabase, schemaItems, loadSchema, getDDL, generateStatement, isLoadingSchema, currentDb, schemaProgress, dropDatabase, createDatabase, createRole, createTable, vaultCredentials, initialLoadDone, getSelectedSchemas, folders, addFolder, renameFolder, removeFolder, moveConnectionToFolder, moveFolder, roles, dropRole, tablespaces } = useConnections();
+  const { connections, sessions, activeConnection, selectedDatabase, removeConnection, updateConnection, connectToDatabase, schemaItems, loadSchema, getDDL, generateStatement, isLoadingSchema, currentDb, schemaProgress, dropDatabase, createDatabase, createRole, createTable, vaultCredentials, initialLoadDone, getSelectedSchemas, folders, addFolder, renameFolder, removeFolder, moveConnectionToFolder, moveFolder, dropRole } = useConnections();
   // Ref keeps the latest activeConnection so server-node action() closures
   // always see the current value, not the one captured at tree-build time.
   const activeConnectionRef = useRef(activeConnection);
@@ -216,13 +216,34 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
 
   useEffect(() => {
     if (activeConnection && selectedDatabase) {
+      // Cached by (connection, database) inside loadSchema, so re-firing this
+      // on a reconnect or a tab switch costs nothing.
       loadSchema(selectedDatabase);
     }
-  }, [activeConnection, selectedDatabase]);
+    // Keyed on the connection *id*, not the object: `activeConnection` is
+    // derived from `connections`, so editing any field of the connected
+    // connection (its colour, its name) would otherwise change identity here
+    // and re-download the entire catalogue.
+  }, [activeConnection?.id, selectedDatabase]);
 
   useEffect(() => {
     const buildConnNode = (conn: DatabaseConnection): TreeNode => {
-      const isConnected = activeConnectionRef.current?.id === conn.id;
+      // Everything below is read from *this* connection's session rather than
+      // from the active-connection projection, so every connected connection
+      // renders its own children. Connecting to a second server used to
+      // overwrite one shared set of values, which blanked the first server's
+      // tree. These deliberately shadow the outer names so the rest of the
+      // builder is unchanged.
+      const session = sessions[conn.id];
+      const isConnected = !!session;
+      const databases = session?.databases ?? [];
+      const selectedDatabase = session?.selectedDatabase ?? null;
+      const isLoadingSchema = session?.isLoadingSchema ?? false;
+      const roles = session?.roles ?? { login: [], group: [] };
+      const tablespaces = session?.tablespaces ?? [];
+      const schemaItems = selectedDatabase
+        ? session?.schemaByDb[selectedDatabase] ?? null
+        : null;
 
       let connChildren: TreeNode[] = [];
       if (isConnected && databases.length > 0) {
@@ -536,7 +557,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
     }
 
     setSchemaTree(tree);
-  }, [connections, activeConnection, selectedDatabase, settings, schemaItems, databases, isLoadingSchema, loadingDatabases, tableDetails, loadingTableDetails, viewMode, folders, roles, tablespaces]);
+  }, [connections, sessions, activeConnection, selectedDatabase, settings, schemaItems, isLoadingSchema, loadingDatabases, tableDetails, loadingTableDetails, viewMode, folders]);
 
   const toggleExpand = async (nodeId: string) => {
     const wasExpanded = expandedNodes.has(nodeId);
