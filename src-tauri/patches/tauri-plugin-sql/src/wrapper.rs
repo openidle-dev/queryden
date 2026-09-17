@@ -8,7 +8,17 @@ use std::fs::create_dir_all;
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
 #[cfg(any(feature = "sqlite", feature = "mysql", feature = "postgres"))]
-use sqlx::{migrate::MigrateDatabase, Column, Executor, Pool, Row};
+use sqlx::{Column, Executor, Pool, Row};
+#[cfg(feature = "sqlite")]
+use sqlx::migrate::MigrateDatabase;
+#[cfg(any(feature = "mysql", feature = "postgres"))]
+use sqlx::Connection;
+#[cfg(any(feature = "mysql", feature = "postgres"))]
+use std::time::Duration;
+#[cfg(feature = "mysql")]
+use sqlx::mysql::{MySqlConnectOptions, MySqlPoolOptions};
+#[cfg(feature = "postgres")]
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 #[cfg(any(feature = "sqlite", feature = "mysql", feature = "postgres"))]
 use tauri::Manager;
 use tauri::{AppHandle, Runtime};
@@ -63,6 +73,76 @@ pub enum DbPool {
     }
 } */
 
+// ── QueryDen: pool settings tuned for high-latency links ────────────────────
+//
+// QueryDen is routinely pointed at servers on another continent (a ~300ms
+// round trip is normal). At that distance the dominant cost of every operation
+// is the *number of sequential network round trips*, not bandwidth or server
+// time, so the pool is configured to spend as few as possible.
+//
+// Re-establishing one Postgres connection costs roughly six sequential round
+// trips (TCP, the SSLRequest probe, the TLS handshake, then the SCRAM
+// exchange) — close to two seconds on such a link. Keeping an established
+// connection alive is therefore worth far more than any resource it holds.
+
+/// Shared rationale for the per-driver builders below.
+///
+/// * `acquire_timeout` — sqlx defaults to 30s. A genuinely dead link should
+///   surface as an error in 10s instead of appearing to hang.
+/// * `idle_timeout` / `max_lifetime` — never reap a warm connection out from
+///   under an idle user. `max_lifetime` **must** stay `Some(..)`: if both it
+///   and `idle_timeout` are `None`, sqlx's `spawn_maintenance_tasks` takes its
+///   `(None, None)` branch, fires a single one-shot task and returns, leaving
+///   the pool with no recurring maintenance at all.
+/// * `test_before_acquire` — sqlx defaults this to `true`, which spends a full
+///   round trip pinging the server before *every* query. On a 300ms link that
+///   silently doubles the cost of each statement. It is replaced by an
+///   idle-gated `before_acquire` hook: back-to-back queries pay nothing, while
+///   a connection dropped by a NAT or a connection pooler is still detected and
+///   transparently replaced. The hook is not optional — sqlx does not retry a
+///   query on a connection that dies between validation and execution, so
+///   without it a silently-dropped socket becomes a hard error in the UI.
+///   The 5s threshold is deliberately short: managed poolers (Supabase, RDS
+///   Proxy, pgbouncer's `server_idle_timeout`) commonly cut well inside 20s.
+#[cfg(feature = "postgres")]
+fn pg_pool_options() -> PgPoolOptions {
+    PgPoolOptions::new()
+        .max_connections(10)
+        .min_connections(0)
+        .acquire_timeout(Duration::from_secs(10))
+        .idle_timeout(None)
+        .max_lifetime(Some(Duration::from_secs(4 * 60 * 60)))
+        .test_before_acquire(false)
+        .before_acquire(|conn, meta| {
+            Box::pin(async move {
+                if meta.idle_for >= Duration::from_secs(5) {
+                    conn.ping().await?;
+                }
+                Ok(true)
+            })
+        })
+}
+
+/// MySQL counterpart of [`pg_pool_options`]; see that function for rationale.
+#[cfg(feature = "mysql")]
+fn mysql_pool_options() -> MySqlPoolOptions {
+    MySqlPoolOptions::new()
+        .max_connections(10)
+        .min_connections(0)
+        .acquire_timeout(Duration::from_secs(10))
+        .idle_timeout(None)
+        .max_lifetime(Some(Duration::from_secs(4 * 60 * 60)))
+        .test_before_acquire(false)
+        .before_acquire(|conn, meta| {
+            Box::pin(async move {
+                if meta.idle_for >= Duration::from_secs(5) {
+                    conn.ping().await?;
+                }
+                Ok(true)
+            })
+        })
+}
+
 // private methods
 impl DbPool {
     pub(crate) async fn connect<R: Runtime>(
@@ -92,17 +172,21 @@ impl DbPool {
             }
             #[cfg(feature = "mysql")]
             "mysql" => {
-                if !MySql::database_exists(conn_url).await.unwrap_or(false) {
-                    MySql::create_database(conn_url).await?;
-                }
-                Ok(Self::MySql(Pool::connect(conn_url).await?))
+                let opts: MySqlConnectOptions = conn_url.parse()?;
+                Ok(Self::MySql(
+                    mysql_pool_options().connect_with(opts).await?,
+                ))
             }
             #[cfg(feature = "postgres")]
             "postgres" => {
-                if !Postgres::database_exists(conn_url).await.unwrap_or(false) {
-                    Postgres::create_database(conn_url).await?;
-                }
-                Ok(Self::Postgres(Pool::connect(conn_url).await?))
+                // `application_name` rides along in the Postgres startup packet,
+                // so naming the session costs no extra round trip (a `SET` in
+                // `after_connect` would cost one).
+                let opts: PgConnectOptions = conn_url.parse()?;
+                let opts = opts.application_name("queryden");
+                Ok(Self::Postgres(
+                    pg_pool_options().connect_with(opts).await?,
+                ))
             }
             #[cfg(not(any(feature = "sqlite", feature = "postgres", feature = "mysql")))]
             _ => Err(crate::Error::InvalidDbUrl(format!(
