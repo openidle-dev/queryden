@@ -74,7 +74,7 @@ export interface SchemaItems {
 }
 
 interface SchemaLoadingProgress {
-  phase: "idle" | "initializing" | "connecting" | "tables" | "views" | "functions" | "procedures" | "triggers" | "indexes" | "types" | "operators" | "foreign_tables" | "columns" | "foreign_keys" | "complete";
+  phase: "idle" | "initializing" | "connecting" | "objects" | "tables" | "views" | "functions" | "procedures" | "triggers" | "indexes" | "types" | "operators" | "foreign_tables" | "columns" | "foreign_keys" | "complete";
   current: number;
   total: number;
 }
@@ -1003,7 +1003,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       });
 
     setIsLoadingSchema(true);
-    setSchemaProgress({ phase: "initializing", current: 0, total: 12 });
+    setSchemaProgress({ phase: "initializing", current: 0, total: 3 });
     
     // Use overrideSchemas if provided (from SchemaSelectionDialog), otherwise read from state
     const selectedSchemas = overrideSchemas !== undefined 
@@ -1034,181 +1034,327 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       };
 
       if (["postgres", "supabase", "cockroach"].includes(activeConnection.type)) {
-        setSchemaProgress({ phase: "tables", current: 1, total: 12 });
+        // ── One round trip for every object list ────────────────────────────
+        // These thirteen lists used to be thirteen separate queries, run one
+        // after another. Each one costs a full network round trip, so against a
+        // server on another continent the catalogue scan alone took roughly as
+        // many seconds. They are the same shape -- a kind, a schema and a name
+        // -- so they fold into a single UNION ALL.
+        //
+        // Columns and foreign keys keep their own queries below: their shapes
+        // differ, and issuing the three concurrently would be slower rather than
+        // faster, since a second concurrent query on an idle pool opens a whole
+        // new connection (another six round trips) instead of reusing the one
+        // already established.
+        const EXCLUDED_SCHEMAS = "'information_schema', 'pg_catalog', 'topology'";
+        // Single-quotes are doubled: a schema name is an identifier chosen by
+        // the user and reaches this string unparameterised.
+        const schemaIn = (col: string) =>
+          selectedSchemas.length > 0
+            ? `AND ${col} IN (${selectedSchemas.map(sc => `'${sc.replace(/'/g, "''")}'`).join(',')})`
+            : '';
+
+        let objectRows: any[] | null = null;
         try {
-          const tables = await currentDb.select(`
-            SELECT table_schema as table_schema, table_name as table_name 
-            FROM information_schema.tables
-            WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
-              AND table_type = 'BASE TABLE'
-              ${schemaFilter}
-            ORDER BY table_schema, table_name
+          setSchemaProgress({ phase: "objects", current: 1, total: 3 });
+          objectRows = await currentDb.select(`
+            SELECT 'tables' AS kind, table_schema::text AS sch, table_name::text AS nm
+              FROM information_schema.tables
+             WHERE table_schema NOT IN (${EXCLUDED_SCHEMAS})
+               AND table_type = 'BASE TABLE' ${schemaIn('table_schema')}
+            UNION ALL
+            SELECT 'views', table_schema::text, table_name::text
+              FROM information_schema.views
+             WHERE table_schema NOT IN (${EXCLUDED_SCHEMAS}) ${schemaIn('table_schema')}
+            UNION ALL
+            SELECT 'functions', routine_schema::text, routine_name::text
+              FROM information_schema.routines
+             WHERE routine_schema NOT IN (${EXCLUDED_SCHEMAS})
+               AND routine_type = 'FUNCTION' ${schemaIn('routine_schema')}
+            UNION ALL
+            SELECT 'procedures', routine_schema::text, routine_name::text
+              FROM information_schema.routines
+             WHERE routine_schema NOT IN (${EXCLUDED_SCHEMAS})
+               AND routine_type = 'PROCEDURE' ${schemaIn('routine_schema')}
+            UNION ALL
+            SELECT DISTINCT 'triggers', trigger_schema::text, trigger_name::text
+              FROM information_schema.triggers
+             WHERE trigger_schema NOT IN (${EXCLUDED_SCHEMAS}) ${schemaIn('trigger_schema')}
+            UNION ALL
+            SELECT 'indexes', schemaname::text, indexname::text
+              FROM pg_indexes
+             WHERE schemaname NOT IN (${EXCLUDED_SCHEMAS}) ${schemaIn('schemaname')}
+            UNION ALL
+            SELECT 'sequences', sequence_schema::text, sequence_name::text
+              FROM information_schema.sequences
+             WHERE sequence_schema NOT IN (${EXCLUDED_SCHEMAS}) ${schemaIn('sequence_schema')}
+            UNION ALL
+            SELECT 'types', n.nspname::text, t.typname::text
+              FROM pg_type t
+              JOIN pg_namespace n ON t.typnamespace = n.oid
+             WHERE n.nspname NOT IN (${EXCLUDED_SCHEMAS})
+               AND t.typtype IN ('d', 'e', 'c', 'r', 'm')
+               AND t.typrelid = 0
+            UNION ALL
+            SELECT 'operators', n.nspname::text, o.oprname::text
+              FROM pg_operator o
+              JOIN pg_namespace n ON o.oprnamespace = n.oid
+             WHERE n.nspname NOT IN (${EXCLUDED_SCHEMAS})
+            UNION ALL
+            SELECT 'foreignTables', foreign_table_schema::text, foreign_table_name::text
+              FROM information_schema.foreign_tables
+             WHERE foreign_table_schema NOT IN (${EXCLUDED_SCHEMAS})
+                   ${schemaIn('foreign_table_schema')}
+            UNION ALL
+            SELECT 'extensions', NULL::text, extname::text FROM pg_extension
+            UNION ALL
+            SELECT 'eventTriggers', NULL::text, evtname::text FROM pg_event_trigger
+            UNION ALL
+            SELECT 'languages', NULL::text, lanname::text FROM pg_language WHERE lanispl = true
+            ORDER BY 1, 2, 3
           `);
-          schema.tables = tables.length > 0 ? tables.map((t: any) => 
-            t.table_schema === 'public' ? t.table_name : `${t.table_schema}.${t.table_name}`
-          ) : [];
         } catch (e) {
-          console.error("Failed to fetch tables:", e);
+          // One unsupported catalogue view (an older server, or CockroachDB's
+          // partial catalogue) would fail the whole union. Fall back to asking
+          // for each list separately, where a single failure costs only that
+          // one list.
+          logger.warn("Consolidated catalogue query failed; falling back to per-object queries", e);
+          objectRows = null;
         }
 
-        setSchemaProgress({ phase: "views", current: 2, total: 12 });
-        try {
-          const views = await currentDb.select(`
-            SELECT table_schema as table_schema, table_name as table_name 
-            FROM information_schema.views
-            WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
-              ${schemaFilter}
-            ORDER BY table_schema, table_name
-          `);
-          schema.views = views.length > 0 ? views.map((v: any) => 
-            v.table_schema === 'public' ? v.table_name : `${v.table_schema}.${v.table_name}`
-          ) : [];
-        } catch (e) {
-          console.error("Failed to fetch views:", e);
+        if (objectRows) {
+          const byKind: Record<string, string[]> = {};
+          for (const row of objectRows) {
+            const qualified =
+              row.sch && row.sch !== 'public' ? `${row.sch}.${row.nm}` : row.nm;
+            (byKind[row.kind] ||= []).push(qualified);
+          }
+          schema.tables = byKind.tables ?? [];
+          schema.views = byKind.views ?? [];
+          schema.functions = byKind.functions ?? [];
+          schema.procedures = byKind.procedures ?? [];
+          schema.triggers = byKind.triggers ?? [];
+          schema.indexes = byKind.indexes ?? [];
+          schema.sequences = byKind.sequences ?? [];
+          schema.types = byKind.types ?? [];
+          schema.operators = byKind.operators ?? [];
+          schema.foreignTables = byKind.foreignTables ?? [];
+          schema.extensions = byKind.extensions ?? [];
+          schema.eventTriggers = byKind.eventTriggers ?? [];
+          schema.languages = byKind.languages ?? [];
+
+          // Publish the object lists now. The tree and autocomplete can render
+          // from these while the two remaining queries are still in flight.
+          setSchemaItems(prev => ({ ...prev, ...schema, _ts: Date.now() }));
+        } else {
+          setSchemaProgress({ phase: "tables", current: 1, total: 12 });
+          try {
+            const tables = await currentDb.select(`
+              SELECT table_schema as table_schema, table_name as table_name 
+              FROM information_schema.tables
+              WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
+                AND table_type = 'BASE TABLE'
+                ${schemaFilter}
+              ORDER BY table_schema, table_name
+            `);
+            schema.tables = tables.length > 0 ? tables.map((t: any) => 
+              t.table_schema === 'public' ? t.table_name : `${t.table_schema}.${t.table_name}`
+            ) : [];
+          } catch (e) {
+            console.error("Failed to fetch tables:", e);
+          }
+
+          setSchemaProgress({ phase: "views", current: 2, total: 12 });
+          try {
+            const views = await currentDb.select(`
+              SELECT table_schema as table_schema, table_name as table_name 
+              FROM information_schema.views
+              WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
+                ${schemaFilter}
+              ORDER BY table_schema, table_name
+            `);
+            schema.views = views.length > 0 ? views.map((v: any) => 
+              v.table_schema === 'public' ? v.table_name : `${v.table_schema}.${v.table_name}`
+            ) : [];
+          } catch (e) {
+            console.error("Failed to fetch views:", e);
+          }
+
+          setSchemaProgress({ phase: "functions", current: 3, total: 12 });
+          try {
+            const functions = await currentDb.select(`
+              SELECT routine_schema as routine_schema, routine_name as routine_name 
+              FROM information_schema.routines
+              WHERE routine_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
+                ${schemaFilter}
+              ORDER BY routine_schema, routine_name
+            `);
+            schema.functions = functions.length > 0 ? functions.map((f: any) => 
+              f.routine_schema === 'public' ? f.routine_name : `${f.routine_schema}.${f.routine_name}`
+            ) : [];
+          } catch (e) {
+            console.error("Failed to fetch functions:", e);
+          }
+
+          setSchemaProgress({ phase: "triggers", current: 4, total: 12 });
+          try {
+            const triggers = await currentDb.select(`
+              SELECT trigger_schema as trigger_schema, trigger_name as trigger_name 
+              FROM information_schema.triggers
+              WHERE trigger_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
+                ${schemaFilter}
+              ORDER BY trigger_schema, trigger_name
+            `);
+            schema.triggers = triggers.length > 0 ? triggers.map((t: any) => 
+              t.trigger_schema === 'public' ? t.trigger_name : `${t.trigger_schema}.${t.trigger_name}`
+            ) : [];
+          } catch (e) {
+            schema.triggers = [];
+          }
+
+          setSchemaProgress({ phase: "indexes", current: 5, total: 12 });
+          try {
+            const indexes = await currentDb.select(`
+              SELECT schemaname as schemaname, indexname as indexname 
+              FROM pg_indexes
+              WHERE schemaname NOT IN ('information_schema', 'pg_catalog', 'topology')
+                ${schemaFilter.replace('table_schema', 'schemaname')}
+              ORDER BY schemaname, indexname
+            `);
+            schema.indexes = indexes.length > 0 ? indexes.map((i: any) => 
+              i.schemaname === 'public' ? i.indexname : `${i.schemaname}.${i.indexname}`
+            ) : [];
+          } catch (e) {
+            console.error("Failed to fetch indexes:", e);
+          }
+
+          // Fetch Sequences
+          setSchemaProgress({ phase: "indexes", current: 6, total: 12 });
+          try {
+            const sequences = await currentDb.select(`
+              SELECT sequence_schema as sequence_schema, sequence_name as sequence_name 
+              FROM information_schema.sequences 
+              WHERE sequence_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
+                ${schemaFilter.replace('table_schema', 'sequence_schema')}
+              ORDER BY sequence_schema, sequence_name
+            `);
+            schema.sequences = sequences.length > 0 ? sequences.map((s: any) => 
+              s.sequence_schema === 'public' ? s.sequence_name : `${s.sequence_schema}.${s.sequence_name}`
+            ) : [];
+          } catch (e) {
+            schema.sequences = [];
+          }
+
+          // Fetch user-defined types (domains, enums, composites, ranges)
+          setSchemaProgress({ phase: "types", current: 7, total: 12 });
+          try {
+            const types = await currentDb.select(`
+              SELECT n.nspname AS type_schema, t.typname AS type_name
+              FROM pg_type t
+              JOIN pg_namespace n ON t.typnamespace = n.oid
+              WHERE n.nspname NOT IN ('information_schema', 'pg_catalog', 'topology')
+                AND t.typtype IN ('d', 'e', 'c', 'r', 'm')
+                AND t.typrelid = 0
+              ORDER BY n.nspname, t.typname
+            `);
+            schema.types = types.length > 0 ? types.map((t: any) =>
+              t.type_schema === 'public' ? t.type_name : `${t.type_schema}.${t.type_name}`
+            ) : [];
+          } catch (e) {
+            console.error("Failed to fetch types:", e);
+            schema.types = [];
+          }
+
+          // Fetch procedures (stored procedures, distinct from functions)
+          setSchemaProgress({ phase: "procedures", current: 8, total: 12 });
+          try {
+            const procedures = await currentDb.select(`
+              SELECT routine_schema as routine_schema, routine_name as routine_name
+              FROM information_schema.routines
+              WHERE routine_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
+                AND routine_type = 'PROCEDURE'
+                ${schemaFilter}
+              ORDER BY routine_schema, routine_name
+            `);
+            schema.procedures = procedures.length > 0 ? procedures.map((p: any) =>
+              p.routine_schema === 'public' ? p.routine_name : `${p.routine_schema}.${p.routine_name}`
+            ) : [];
+          } catch (e) {
+            console.error("Failed to fetch procedures:", e);
+            schema.procedures = [];
+          }
+
+          // Fetch operators
+          setSchemaProgress({ phase: "operators", current: 9, total: 12 });
+          try {
+            const operators = await currentDb.select(`
+              SELECT n.nspname AS operator_schema, o.oprname AS operator_name
+              FROM pg_operator o
+              JOIN pg_namespace n ON o.oprnamespace = n.oid
+              WHERE n.nspname NOT IN ('information_schema', 'pg_catalog', 'topology')
+              ORDER BY n.nspname, o.oprname
+            `);
+            schema.operators = operators.length > 0 ? operators.map((o: any) =>
+              o.operator_schema === 'public' ? o.operator_name : `${o.operator_schema}.${o.operator_name}`
+            ) : [];
+          } catch (e) {
+            console.error("Failed to fetch operators:", e);
+            schema.operators = [];
+          }
+
+          // Fetch foreign tables
+          setSchemaProgress({ phase: "foreign_tables", current: 10, total: 12 });
+          try {
+            const foreignTables = await currentDb.select(`
+              SELECT foreign_table_schema, foreign_table_name
+              FROM information_schema.foreign_tables
+              WHERE foreign_table_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
+                ${schemaFilter}
+              ORDER BY foreign_table_schema, foreign_table_name
+            `);
+            schema.foreignTables = foreignTables.length > 0 ? foreignTables.map((ft: any) =>
+              ft.foreign_table_schema === 'public' ? ft.foreign_table_name : `${ft.foreign_table_schema}.${ft.foreign_table_name}`
+            ) : [];
+          } catch (e) {
+            console.error("Failed to fetch foreign tables:", e);
+            schema.foreignTables = [];
+          }
+
+          // Fetch columns for IntelliSense
+          // Fetch extensions
+          try {
+            const extensions = await currentDb.select(`
+              SELECT extname FROM pg_extension ORDER BY extname
+            `);
+            schema.extensions = extensions.map((e: any) => e.extname);
+          } catch (e) {
+            schema.extensions = [];
+          }
+
+          // Fetch event triggers
+          try {
+            const eventTriggers = await currentDb.select(`
+              SELECT evtname FROM pg_event_trigger ORDER BY evtname
+            `);
+            schema.eventTriggers = eventTriggers.map((t: any) => t.evtname);
+          } catch (e) {
+            schema.eventTriggers = [];
+          }
+
+          // Fetch procedural languages
+          try {
+            const languages = await currentDb.select(`
+              SELECT lanname FROM pg_language WHERE lanispl = true ORDER BY lanname
+            `);
+            schema.languages = languages.map((l: any) => l.lanname);
+          } catch (e) {
+            schema.languages = [];
+          }
         }
 
-        setSchemaProgress({ phase: "functions", current: 3, total: 12 });
-        try {
-          const functions = await currentDb.select(`
-            SELECT routine_schema as routine_schema, routine_name as routine_name 
-            FROM information_schema.routines
-            WHERE routine_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
-              ${schemaFilter}
-            ORDER BY routine_schema, routine_name
-          `);
-          schema.functions = functions.length > 0 ? functions.map((f: any) => 
-            f.routine_schema === 'public' ? f.routine_name : `${f.routine_schema}.${f.routine_name}`
-          ) : [];
-        } catch (e) {
-          console.error("Failed to fetch functions:", e);
-        }
-
-        setSchemaProgress({ phase: "triggers", current: 4, total: 12 });
-        try {
-          const triggers = await currentDb.select(`
-            SELECT trigger_schema as trigger_schema, trigger_name as trigger_name 
-            FROM information_schema.triggers
-            WHERE trigger_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
-              ${schemaFilter}
-            ORDER BY trigger_schema, trigger_name
-          `);
-          schema.triggers = triggers.length > 0 ? triggers.map((t: any) => 
-            t.trigger_schema === 'public' ? t.trigger_name : `${t.trigger_schema}.${t.trigger_name}`
-          ) : [];
-        } catch (e) {
-          schema.triggers = [];
-        }
-
-        setSchemaProgress({ phase: "indexes", current: 5, total: 12 });
-        try {
-          const indexes = await currentDb.select(`
-            SELECT schemaname as schemaname, indexname as indexname 
-            FROM pg_indexes
-            WHERE schemaname NOT IN ('information_schema', 'pg_catalog', 'topology')
-              ${schemaFilter.replace('table_schema', 'schemaname')}
-            ORDER BY schemaname, indexname
-          `);
-          schema.indexes = indexes.length > 0 ? indexes.map((i: any) => 
-            i.schemaname === 'public' ? i.indexname : `${i.schemaname}.${i.indexname}`
-          ) : [];
-        } catch (e) {
-          console.error("Failed to fetch indexes:", e);
-        }
-
-        // Fetch Sequences
-        setSchemaProgress({ phase: "indexes", current: 6, total: 12 });
-        try {
-          const sequences = await currentDb.select(`
-            SELECT sequence_schema as sequence_schema, sequence_name as sequence_name 
-            FROM information_schema.sequences 
-            WHERE sequence_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
-              ${schemaFilter.replace('table_schema', 'sequence_schema')}
-            ORDER BY sequence_schema, sequence_name
-          `);
-          schema.sequences = sequences.length > 0 ? sequences.map((s: any) => 
-            s.sequence_schema === 'public' ? s.sequence_name : `${s.sequence_schema}.${s.sequence_name}`
-          ) : [];
-        } catch (e) {
-          schema.sequences = [];
-        }
-
-        // Fetch user-defined types (domains, enums, composites, ranges)
-        setSchemaProgress({ phase: "types", current: 7, total: 12 });
-        try {
-          const types = await currentDb.select(`
-            SELECT n.nspname AS type_schema, t.typname AS type_name
-            FROM pg_type t
-            JOIN pg_namespace n ON t.typnamespace = n.oid
-            WHERE n.nspname NOT IN ('information_schema', 'pg_catalog', 'topology')
-              AND t.typtype IN ('d', 'e', 'c', 'r', 'm')
-              AND t.typrelid = 0
-            ORDER BY n.nspname, t.typname
-          `);
-          schema.types = types.length > 0 ? types.map((t: any) =>
-            t.type_schema === 'public' ? t.type_name : `${t.type_schema}.${t.type_name}`
-          ) : [];
-        } catch (e) {
-          console.error("Failed to fetch types:", e);
-          schema.types = [];
-        }
-
-        // Fetch procedures (stored procedures, distinct from functions)
-        setSchemaProgress({ phase: "procedures", current: 8, total: 12 });
-        try {
-          const procedures = await currentDb.select(`
-            SELECT routine_schema as routine_schema, routine_name as routine_name
-            FROM information_schema.routines
-            WHERE routine_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
-              AND routine_type = 'PROCEDURE'
-              ${schemaFilter}
-            ORDER BY routine_schema, routine_name
-          `);
-          schema.procedures = procedures.length > 0 ? procedures.map((p: any) =>
-            p.routine_schema === 'public' ? p.routine_name : `${p.routine_schema}.${p.routine_name}`
-          ) : [];
-        } catch (e) {
-          console.error("Failed to fetch procedures:", e);
-          schema.procedures = [];
-        }
-
-        // Fetch operators
-        setSchemaProgress({ phase: "operators", current: 9, total: 12 });
-        try {
-          const operators = await currentDb.select(`
-            SELECT n.nspname AS operator_schema, o.oprname AS operator_name
-            FROM pg_operator o
-            JOIN pg_namespace n ON o.oprnamespace = n.oid
-            WHERE n.nspname NOT IN ('information_schema', 'pg_catalog', 'topology')
-            ORDER BY n.nspname, o.oprname
-          `);
-          schema.operators = operators.length > 0 ? operators.map((o: any) =>
-            o.operator_schema === 'public' ? o.operator_name : `${o.operator_schema}.${o.operator_name}`
-          ) : [];
-        } catch (e) {
-          console.error("Failed to fetch operators:", e);
-          schema.operators = [];
-        }
-
-        // Fetch foreign tables
-        setSchemaProgress({ phase: "foreign_tables", current: 10, total: 12 });
-        try {
-          const foreignTables = await currentDb.select(`
-            SELECT foreign_table_schema, foreign_table_name
-            FROM information_schema.foreign_tables
-            WHERE foreign_table_schema NOT IN ('information_schema', 'pg_catalog', 'topology')
-              ${schemaFilter}
-            ORDER BY foreign_table_schema, foreign_table_name
-          `);
-          schema.foreignTables = foreignTables.length > 0 ? foreignTables.map((ft: any) =>
-            ft.foreign_table_schema === 'public' ? ft.foreign_table_name : `${ft.foreign_table_schema}.${ft.foreign_table_name}`
-          ) : [];
-        } catch (e) {
-          console.error("Failed to fetch foreign tables:", e);
-          schema.foreignTables = [];
-        }
-
-        // Fetch columns for IntelliSense
-        setSchemaProgress({ phase: "columns", current: 11, total: 12 }); 
+        // Columns and foreign keys are fetched on both paths: their shapes do
+        // not fit the object-list union, and autocomplete needs them.
+        setSchemaProgress({ phase: "columns", current: 2, total: 3 }); 
         try {
           const cols = await currentDb.select(`
               SELECT 
@@ -1226,7 +1372,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
               ORDER BY n.nspname, c.relname, a.attnum
               LIMIT 50000
           `);
-          
+        
           schema.columns = cols.map((c: any) => ({
             table_name: c.table_schema === 'public' ? c.table_name : `${c.table_schema}.${c.table_name}`,
             column_name: c.column_name
@@ -1236,7 +1382,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         }
 
         // Fetch Foreign Keys for smart completion
-        setSchemaProgress({ phase: "foreign_keys", current: 12, total: 12 });
+        setSchemaProgress({ phase: "foreign_keys", current: 3, total: 3 });
         try {
           const fks = await currentDb.select(`
               SELECT
@@ -1254,36 +1400,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           schema.foreignKeys = fks;
         } catch (err) {
           console.error("Failed to fetch Foreign Keys:", err);
-        }
-
-        // Fetch extensions
-        try {
-          const extensions = await currentDb.select(`
-            SELECT extname FROM pg_extension ORDER BY extname
-          `);
-          schema.extensions = extensions.map((e: any) => e.extname);
-        } catch (e) {
-          schema.extensions = [];
-        }
-
-        // Fetch event triggers
-        try {
-          const eventTriggers = await currentDb.select(`
-            SELECT evtname FROM pg_event_trigger ORDER BY evtname
-          `);
-          schema.eventTriggers = eventTriggers.map((t: any) => t.evtname);
-        } catch (e) {
-          schema.eventTriggers = [];
-        }
-
-        // Fetch procedural languages
-        try {
-          const languages = await currentDb.select(`
-            SELECT lanname FROM pg_language WHERE lanispl = true ORDER BY lanname
-          `);
-          schema.languages = languages.map((l: any) => l.lanname);
-        } catch (e) {
-          schema.languages = [];
         }
 
       } else if (["mysql", "mariadb"].includes(activeConnection.type)) {
@@ -1333,7 +1449,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         ...schema, 
         _ts: Date.now() 
       }));
-      setSchemaProgress({ phase: "complete", current: 12, total: 12 });
+      setSchemaProgress({ phase: "complete", current: 3, total: 3 });
     } catch (error) {
       console.error("Failed to load schema:", error);
       setSchemaItems(null);
