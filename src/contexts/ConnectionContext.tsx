@@ -150,6 +150,12 @@ interface ConnectionContextType {
    * connection is running on. Such a caller must not close it.
    */
   hasLivePool: (connectionString: string) => boolean;
+  /**
+   * Resolve a live pool for (connection, database), honouring SSH tunnels and
+   * vault credentials and reusing an existing pool. Use this instead of
+   * building a connection string and calling `Database.load` directly.
+   */
+  acquireDb: (connId: string, database?: string, overrideVaultCredential?: VaultCredential) => Promise<DbHandle>;
   disconnectFromDatabase: () => Promise<void>;
   loadSchema: (database: string, overrideSchemas?: string[], force?: boolean) => Promise<void>;
   getDDL: (type: string, name: string) => Promise<string>;
@@ -309,6 +315,18 @@ function folderToDto(f: Folder): FolderDto {
  * scan -- around fifteen sequential queries, which is roughly fifteen seconds
  * against a server on another continent.
  */
+export interface DbHandle {
+  /** The connection string this pool was loaded under; also its registry key. */
+  path: string;
+  select<T = any>(query: string, bindValues?: unknown[]): Promise<T>;
+  execute(query: string, bindValues?: unknown[]): Promise<any>;
+  /**
+   * Closes a pool. Pass the pool's own `path`: called with no argument this
+   * closes every pool in the process.
+   */
+  close(db?: string): Promise<boolean>;
+}
+
 export interface ConnSession {
   connectionId: string;
   /** Database currently selected *for this connection*. */
@@ -321,7 +339,7 @@ export interface ConnSession {
    * so holding these open costs nothing beyond the sockets themselves and
    * makes switching back instant.
    */
-  pools: Record<string, any>;
+  pools: Record<string, DbHandle>;
   /** Cached catalogue per database. This is what removes the rescan. */
   schemaByDb: Record<string, SchemaItems>;
   roles: { login: string[]; group: string[] };
@@ -614,7 +632,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     for (const pool of Object.values(session.pools)) {
       void (async () => {
         try {
-          await (pool as any).close((pool as any).path);
+          await pool.close(pool.path);
         } catch (e) {
           logger.error("Failed to close pool for retired session:", e);
         }
@@ -724,13 +742,96 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     );
   };
 
+  /**
+   * Resolve a live pool for (connection, database).
+   *
+   * Every path that runs SQL must come through here. Paths that assembled their
+   * own connection string bypassed the SSH tunnel entirely -- dialling the
+   * remote host directly, which simply fails for a tunnelled connection -- and
+   * paid a fresh TCP + TLS + auth handshake on each call, roughly six
+   * sequential round trips.
+   */
+  const acquireDb = async (
+    connId: string,
+    database?: string,
+    overrideVaultCredential?: VaultCredential,
+  ): Promise<DbHandle> => {
+    const conn = connections.find((c) => c.id === connId);
+    if (!conn) throw new Error(`Unknown connection: ${connId}`);
+    const targetDb = database || conn.database;
+
+    const cached = sessionsRef.current[connId]?.pools[targetDb];
+    if (cached && !overrideVaultCredential) return cached;
+
+    // Resolve credentials — an explicit override wins, then the vault, then
+    // whatever is stored on the connection itself.
+    let username = conn.username || "";
+    let password = conn.password || "";
+    if (overrideVaultCredential) {
+      username = overrideVaultCredential.username || "";
+      password = overrideVaultCredential.password || "";
+    } else if (conn.vaultCredentialId) {
+      let vaultCred = vaultCredentials.find((vc) => vc.id === conn.vaultCredentialId);
+      if (!vaultCred) {
+        try {
+          const creds = await invokeCmd("load_vault_credentials", { vaultPassword: null });
+          const mapped = creds.map(vaultDtoToCredential);
+          setVaultCredentials(mapped);
+          vaultCred = mapped.find((vc) => vc.id === conn.vaultCredentialId);
+        } catch (e) {
+          logger.error("Failed to reload vault credentials:", e);
+        }
+      }
+      if (vaultCred) {
+        username = vaultCred.username || "";
+        password = vaultCred.password || "";
+      }
+    }
+
+    // URL encode credentials to handle special characters in passwords/usernames
+    const encodedUser = encodeURIComponent(username);
+    const encodedPass = encodeURIComponent(password);
+
+    let actualHost = conn.host || "localhost";
+    let actualPort = conn.port || (conn.type === "mysql" ? 3306 : 5432);
+
+    if (conn.sshEnabled && conn.sshHost && conn.sshUsername && conn.type !== "sqlite") {
+      const tunnelResult = await invokeCmd("create_ssh_tunnel", {
+        connectionId: conn.id,
+        sshHost: conn.sshHost,
+        sshPort: conn.sshPort || 22,
+        sshUsername: conn.sshUsername,
+        sshPassword: conn.sshPassword || null,
+        sshKeyPath: conn.sshKeyPath || null,
+        sshKeyPassphrase: conn.sshKeyPassphrase || null,
+        remoteHost: actualHost,
+        remotePort: actualPort,
+      });
+      actualHost = "127.0.0.1";
+      actualPort = tunnelResult.local_port;
+    }
+
+    let connectionString = "";
+    if (conn.type === "sqlite") {
+      connectionString = `sqlite:${conn.filepath || getDefaultDatabaseName()}`;
+    } else if (["postgres", "supabase", "cockroach"].includes(conn.type)) {
+      connectionString = `postgres://${encodedUser}:${encodedPass}@${actualHost}:${actualPort}/${targetDb}`;
+    } else if (["mysql", "mariadb"].includes(conn.type)) {
+      connectionString = `mysql://${encodedUser}:${encodedPass}@${actualHost}:${actualPort}/${targetDb}`;
+    }
+
+    const Database = (await import("@tauri-apps/plugin-sql")).default;
+    const db = await Database.load(connectionString);
+
+    patchSession(connId, (prev) => ({ pools: { ...prev.pools, [targetDb]: db } }));
+    return db;
+  };
+
   const connectToDatabase = async (connId: string, databaseName?: string, overrideVaultCredential?: VaultCredential) => {
     const conn = connections.find((c) => c.id === connId);
     if (!conn) return;
 
     try {
-      const Database = (await import("@tauri-apps/plugin-sql")).default;
-      let connectionString = "";
       const targetDb = databaseName || conn.database;
 
       // Already connected to this database on this connection: just make it
@@ -750,93 +851,28 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         retireSession(connId);
       }
 
-      // Resolve credentials - check for override first (passed directly when user selects profile)
-      let username = conn.username || "";
-      let password = conn.password || "";
-      
-      // If override vault credential is passed, use it directly
-      if (overrideVaultCredential) {
-        username = overrideVaultCredential.username || "";
-        password = overrideVaultCredential.password || "";
-      } else if (conn.vaultCredentialId) {
-        // Otherwise try to use vault credentials from connection's vaultCredentialId
-        let vaultCred = vaultCredentials.find(vc => vc.id === conn.vaultCredentialId);
-        
-        if (!vaultCred) {
-          // Vault credentials not loaded yet, reload directly
-          try {
-            const creds = await invokeCmd("load_vault_credentials", { vaultPassword: null });
-            const mapped = creds.map(vaultDtoToCredential);
-            setVaultCredentials(mapped);
-            vaultCred = mapped.find(vc => vc.id === conn.vaultCredentialId);
-          } catch (e) {
-            logger.error("Failed to reload vault credentials:", e);
-          }
-        }
-        
-        if (vaultCred) {
-          username = vaultCred.username || "";
-          password = vaultCred.password || "";
-        }
-      }
+      const db = await acquireDb(connId, targetDb, overrideVaultCredential);
 
-      // URL encode credentials to handle special characters in passwords/usernames
-      const encodedUser = encodeURIComponent(username);
-      const encodedPass = encodeURIComponent(password);
-
-      let actualHost = conn.host || "localhost";
-      let actualPort = conn.port || (conn.type === "mysql" ? 3306 : 5432);
-
-      // Create SSH tunnel if enabled
-      if (conn.sshEnabled && conn.sshHost && conn.sshUsername && conn.type !== "sqlite") {
-        const tunnelResult = await invokeCmd("create_ssh_tunnel", {
-          connectionId: conn.id,
-          sshHost: conn.sshHost,
-          sshPort: conn.sshPort || 22,
-          sshUsername: conn.sshUsername,
-          sshPassword: conn.sshPassword || null,
-          sshKeyPath: conn.sshKeyPath || null,
-          sshKeyPassphrase: conn.sshKeyPassphrase || null,
-          remoteHost: actualHost,
-          remotePort: actualPort,
-        });
-        actualHost = "127.0.0.1";
-        actualPort = tunnelResult.local_port;
-      }
-
-      if (conn.type === "sqlite") {
-        connectionString = `sqlite:${conn.filepath || getDefaultDatabaseName()}`;
-      } else if (["postgres", "supabase", "cockroach"].includes(conn.type)) {
-        connectionString = `postgres://${encodedUser}:${encodedPass}@${actualHost}:${actualPort}/${targetDb}`;
-      } else if (["mysql", "mariadb"].includes(conn.type)) {
-        connectionString = `mysql://${encodedUser}:${encodedPass}@${actualHost}:${actualPort}/${targetDb}`;
-      }
-
-      const db = await Database.load(connectionString);
-
-      // Register the pool and activate the session *before* the follow-up
-      // catalogue queries, so their results land on this session.
-      patchSession(conn.id, (prev) => ({
-        selectedDatabase: targetDb,
-        pools: { ...prev.pools, [targetDb]: db },
-      }));
+      patchSession(conn.id, { selectedDatabase: targetDb });
       setActiveConnectionId(conn.id);
 
       // Server major version is only consumed by the psql CLI integration and
       // never changes for a given server, so ask once. On a high-latency link
-      // this is a whole round trip that the user waits through before the
-      // editor becomes usable.
+      // this is a whole round trip the user waits through before the editor
+      // becomes usable.
       if (["postgres", "supabase", "cockroach"].includes(conn.type) && !conn.serverMajorVersion) {
-        try {
-          const [versionRow] = await db.select<any[]>("SELECT (regexp_matches(version(), E'^PostgreSQL (\\d+)'))[1]::int AS major");
-          if (versionRow?.major) {
-            updateConnection(conn.id, { serverMajorVersion: versionRow.major });
+        void (async () => {
+          try {
+            const [versionRow] = await db.select<any[]>("SELECT (regexp_matches(version(), E'^PostgreSQL (\\d+)'))[1]::int AS major");
+            if (versionRow?.major) {
+              updateConnection(conn.id, { serverMajorVersion: versionRow.major });
+            }
+          } catch {
+            // Server version query failed — not critical, psql CLI will fall back
           }
-        } catch {
-          // Server version query failed — not critical, psql CLI will fall back
-        }
+        })();
       }
-      
+
       // Get available databases list if it's the first connection or if requested
       if (!databaseName) {
         if (["postgres", "supabase", "cockroach"].includes(conn.type)) {
@@ -850,8 +886,13 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      // Load cluster-wide roles for PostgreSQL connections
+      // Load cluster-wide roles and tablespaces for PostgreSQL connections.
+      // Both feed tree nodes that start collapsed, so nothing the user can see
+      // is waiting on them -- but awaited here they were two more sequential
+      // round trips between pressing Connect and being able to type. Fire them
+      // off and let them land when they land.
       if (["postgres", "supabase", "cockroach"].includes(conn.type)) {
+        void (async () => {
         try {
           const roleRows = await db.select<any[]>("SELECT rolname, rolcanlogin FROM pg_roles WHERE rolname !~ '^pg_' ORDER BY rolname");
           const login: string[] = [];
@@ -875,6 +916,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           console.error("Failed to load tablespaces:", e);
           setTablespaces([]);
         }
+        })();
       }
     } catch (error: any) {
       console.error("Connection failed:", error);
@@ -884,7 +926,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
 
   const hasLivePool = (connectionString: string) =>
     Object.values(sessionsRef.current).some((sess) =>
-      Object.values(sess.pools).some((pool: any) => pool?.path === connectionString),
+      Object.values(sess.pools).some((pool) => pool?.path === connectionString),
     );
 
   const disconnectFromDatabase = async () => {
@@ -904,7 +946,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     // process, including the ones belonging to other connections.
     for (const pool of Object.values(session?.pools ?? {})) {
       try {
-        await (pool as any).close((pool as any).path);
+        await pool.close(pool.path);
       } catch (e) {
         console.error("Failed to close database connection:", e);
       }
@@ -2353,6 +2395,7 @@ SELECT ${colList} FROM ${schemaPart}.${tablePart};
         updateConnection,
         connectToDatabase,
         hasLivePool,
+        acquireDb,
         disconnectFromDatabase,
         loadSchema,
         getDDL,

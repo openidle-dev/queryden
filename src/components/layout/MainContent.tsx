@@ -10,7 +10,6 @@ import { useConfirmDialog } from "../ui/ConfirmDialog";
 import { Copy, FileText, BarChart2, Activity as ActivityIcon, Layers, Table } from "lucide-react";
 import { EmptyStateLauncher } from "./EmptyStateLauncher";
 import { logger } from "../../utils/logger";
-import { getDefaultDatabaseName } from "../../config/app";
 import { splitStatements } from "../../utils/splitStatements";
 import { mapSelectionStatementsToDocumentLines, mergeGlyphResults } from "../../utils/statementGlyphs";
 import { applyQueryLimit } from "../../utils/applyQueryLimit";
@@ -120,7 +119,7 @@ export interface MultiResult {
 }
 
 export function MainContent() {
-  const { connections, folders, activeConnection, selectedDatabase, currentDb, vaultCredentials, databases: globalDatabases, connectToDatabase, initialLoadDone } = useConnections();
+  const { connections, sessions, folders, activeConnection, selectedDatabase, currentDb, vaultCredentials, databases: globalDatabases, connectToDatabase, acquireDb, initialLoadDone } = useConnections();
   const { addQuery } = useQueryHistory();
   const settings = useSettings();
   const [showServices, setShowServices] = useState(true);
@@ -284,14 +283,20 @@ export function MainContent() {
     const conn = connections.find(c => c.id === connId);
     if (!conn || tabDatabases[connId]) return;
     try {
-      let username = conn.username || "", password = conn.password || "";
-      if (conn.vaultCredentialId) { const vaultCred = vaultCredentials.find(vc => vc.id === conn.vaultCredentialId); if (vaultCred) { username = vaultCred.username || ""; password = vaultCred.password || ""; } }
-      const Database = (await import("@tauri-apps/plugin-sql")).default;
-      const port = conn.port || (conn.type === "mysql" || conn.type === "mariadb" ? 3306 : 5432);
-      const connectionString = conn.type === "sqlite" ? `sqlite:${conn.filepath || getDefaultDatabaseName()}` :
-        ["postgres", "supabase", "cockroach"].includes(conn.type) ? `postgres://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${conn.host}:${port}/postgres` :
-        `mysql://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${conn.host}:${port}/mysql`;
-      const db = await Database.load(connectionString);
+      // If the connection is already connected, its database list is in the
+      // session. Opening a second pool to the maintenance database just to ask
+      // the same question again is a whole handshake for nothing.
+      const known = sessions[connId]?.databases;
+      if (known && known.length > 0) {
+        setTabDatabases(prev => ({ ...prev, [connId]: known }));
+        return;
+      }
+      // `acquireDb` honours the SSH tunnel and reuses an existing pool; the
+      // hand-rolled connection string dialled the remote host directly.
+      const maintenanceDb = conn.type === "sqlite"
+        ? undefined
+        : ["postgres", "supabase", "cockroach"].includes(conn.type) ? "postgres" : "mysql";
+      const db = await acquireDb(connId, maintenanceDb);
       let dbs: string[] = [];
       if (["postgres", "supabase", "cockroach"].includes(conn.type)) dbs = (await db.select<any[]>("SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname")).map((r: any) => r.datname);
       else if (["mysql", "mariadb"].includes(conn.type)) dbs = (await db.select<any[]>("SHOW DATABASES")).map((r: any) => r.Database).filter((db: string) => !['information_schema', 'performance_schema', 'mysql', 'sys'].includes(db));
@@ -1688,22 +1693,19 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       // Use the transaction-scoped connection if a transaction is active for this connection
       if (txStateRef.current.active && txDbRef.current && txContextRef.current?.connectionId === actualConnection.id && txContextRef.current?.database === actualDatabase) {
         db = txDbRef.current;
-      } else if (!db || targetConn) {
-        const Database = (await import("@tauri-apps/plugin-sql")).default;
-        let connectionString = "";
-        
-        const encodedUser = encodeURIComponent(username);
-        const encodedPass = encodeURIComponent(password);
-        
-        if (actualConnection.type === "sqlite") {
-          connectionString = `sqlite:${actualConnection.filepath || getDefaultDatabaseName()}`;
-        } else if (["postgres", "supabase", "cockroach"].includes(actualConnection.type)) {
-          connectionString = `postgres://${encodedUser}:${encodedPass}@${actualConnection.host}:${port}/${actualDatabase || actualConnection.database}`;
-        } else if (["mysql", "mariadb"].includes(actualConnection.type)) {
-          connectionString = `mysql://${encodedUser}:${encodedPass}@${actualConnection.host}:${port}/${actualDatabase || actualConnection.database}`;
-        }
-        
-        db = await Database.load(connectionString);
+      } else if (
+        !db ||
+        // Only re-resolve when the tab actually points somewhere other than
+        // the connection/database this handle already belongs to. The old
+        // condition was `targetConn` alone, and since new tabs inherit their
+        // neighbour's connection most tabs carry a target -- so every single
+        // Run paid a full connection handshake before the statement was even
+        // sent.
+        (targetConn &&
+          (targetConn.connectionId !== activeConnection?.id ||
+            (targetConn.database || "") !== (selectedDatabase || "")))
+      ) {
+        db = await acquireDb(actualConnection.id, actualDatabase || actualConnection.database);
       }
 
       // Check global permission
@@ -2239,27 +2241,12 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       if (!activeConnection) return;
 
       try {
-        const Database = (await import("@tauri-apps/plugin-sql")).default;
-        let username = activeConnection.username || "", password = activeConnection.password || "";
-        if (activeConnection.vaultCredentialId) {
-          const vaultCred = vaultCredentials.find(vc => vc.id === activeConnection.vaultCredentialId);
-          if (vaultCred) { username = vaultCred.username || ""; password = vaultCred.password || ""; }
-        }
-        const encodedUser = encodeURIComponent(username);
-        const encodedPass = encodeURIComponent(password);
-        const port = activeConnection.port || (activeConnection.type === "mysql" || activeConnection.type === "mariadb" ? 3306 : 5432);
-
-          let db: any;
+        let db: any;
 
         if (action === "begin") {
-          // Create a new transaction-scoped db connection
-          if (activeConnection.type === "sqlite") {
-            db = await Database.load(`sqlite:${activeConnection.filepath || getDefaultDatabaseName()}`);
-          } else if (["postgres", "supabase", "cockroach"].includes(activeConnection.type)) {
-            db = await Database.load(`postgres://${encodedUser}:${encodedPass}@${activeConnection.host}:${port}/${selectedDatabase || activeConnection.database}`);
-          } else {
-            db = await Database.load(`mysql://${encodedUser}:${encodedPass}@${activeConnection.host}:${port}/${selectedDatabase || activeConnection.database}`);
-          }
+          // Previously this opened its own pool by hand, which bypassed the SSH
+          // tunnel and was never closed -- leaking a pool per transaction.
+          db = await acquireDb(activeConnection.id, selectedDatabase || activeConnection.database);
 
           const isolationClause = isolation ? `ISOLATION LEVEL ${isolation}` : "";
           await db.execute(`BEGIN ${isolationClause}`.trim());
@@ -2647,26 +2634,10 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         : activeConnection;
       const saveDbName = targetConn?.database || selectedDatabase || activeConnection.database;
       const conn = saveConn || activeConnection;
-      let username = conn.username || "";
-      let password = conn.password || "";
-      if (conn.vaultCredentialId) {
-        const vaultCred = vaultCredentials.find(vc => vc.id === conn.vaultCredentialId);
-        if (vaultCred) { username = vaultCred.username || ""; password = vaultCred.password || ""; }
-      }
-      const encodedUser = encodeURIComponent(username);
-      const encodedPass = encodeURIComponent(password);
-      const port = conn.port || (conn.type === "mysql" || conn.type === "mariadb" ? 3306 : 5432);
-      const Database = (await import("@tauri-apps/plugin-sql")).default;
-      let connectionString = "";
-      let db: any;
-      if (conn.type === "sqlite") {
-        connectionString = `sqlite:${conn.filepath || "queryden.db"}`;
-      } else if (["postgres", "supabase", "cockroach"].includes(conn.type)) {
-        connectionString = `postgres://${encodedUser}:${encodedPass}@${conn.host}:${port}/${saveDbName}`;
-      } else {
-        connectionString = `mysql://${encodedUser}:${encodedPass}@${conn.host}:${port}/${saveDbName}`;
-      }
-      db = await Database.load(connectionString);
+      // Honours the SSH tunnel and reuses an existing pool. The hand-built
+      // connection string dialled the remote host directly, which simply
+      // fails for a tunnelled connection.
+      const db: any = await acquireDb(conn.id, saveDbName);
 
       const tableParts = activeTableName.split(".");
       const schemaName = tableParts.length > 1 ? tableParts[0] : "public";
@@ -2675,38 +2646,36 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       // ─── Step 2: Validate NOT NULL + FK constraints (all providers) ───
       const rowsWithMissing: { rowIndex: number; missing: string[] }[] = [];
 
+      // The required-column list depends only on the table, so ask for it once.
+      // This used to run inside the per-row loop with identical parameters every
+      // time: saving twenty rows meant twenty identical round trips, which on a
+      // distant server is most of a minute spent re-reading the same answer.
+      let requiredColumns: string[] = [];
+      if (["postgres", "supabase", "cockroach", "mysql", "mariadb"].includes(conn.type)) {
+        const notNullCols = await db.select(`
+          SELECT column_name
+          FROM information_schema.columns
+          WHERE table_schema = $1 AND table_name = $2
+            AND is_nullable = 'NO'
+            AND column_default IS NULL
+          ORDER BY ordinal_position
+        `, [schemaName, tableName]);
+        requiredColumns = notNullCols.map((c: any) => c.column_name);
+      } else if (conn.type === "sqlite") {
+        const sqliteCols = await db.select(`PRAGMA table_info("${tableName}")`);
+        requiredColumns = sqliteCols
+          .filter((c: any) => c.notnull === 1 && (c.dflt_value === null || c.dflt_value === undefined))
+          .map((c: any) => c.name);
+      }
+
       for (let i = 0; i < newRows.length; i++) {
         const { _isNew, ...data } = newRows[i];
         const missing: string[] = [];
 
-        // Check NOT NULL columns that don't have a DEFAULT (these must be provided)
-        if (["postgres", "supabase", "cockroach", "mysql", "mariadb"].includes(activeConnection.type)) {
-          const notNullCols = await db.select(`
-            SELECT column_name
-            FROM information_schema.columns
-            WHERE table_schema = $1 AND table_name = $2
-              AND is_nullable = 'NO'
-              AND column_default IS NULL
-            ORDER BY ordinal_position
-          `, [schemaName, tableName]);
-
-          for (const col of notNullCols) {
-            const colName = col.column_name;
-            const val = data[colName];
-            if (val === null || val === undefined || String(val).trim() === "") {
-              missing.push(colName);
-            }
-          }
-        } else if (activeConnection.type === "sqlite") {
-          const sqliteCols = await db.select(`PRAGMA table_info("${tableName}")`);
-          for (const col of sqliteCols) {
-            if (col.notnull === 1 && (col.dflt_value === null || col.dflt_value === undefined)) {
-              const colName = col.name;
-              const val = data[colName];
-              if (val === null || val === undefined || String(val).trim() === "") {
-                missing.push(colName);
-              }
-            }
+        for (const colName of requiredColumns) {
+          const val = data[colName];
+          if (val === null || val === undefined || String(val).trim() === "") {
+            missing.push(colName);
           }
         }
 
@@ -2743,7 +2712,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         let query = "";
         if (columns.length === 0) {
           query = `INSERT INTO ${qid(activeTableName)} DEFAULT VALUES`;
-          if (activeConnection.type === "mysql" || activeConnection.type === "mariadb") {
+          if (conn.type === "mysql" || conn.type === "mariadb") {
              query = `INSERT INTO ${qid(activeTableName)} () VALUES ()`;
           }
         } else {
@@ -2886,32 +2855,17 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         : activeConnection;
       const saveDbName = targetConn?.database || selectedDatabase || activeConnection.database;
       const conn = saveConn || activeConnection;
-      let username = conn.username || "";
-      let password = conn.password || "";
-      if (conn.vaultCredentialId) {
-        const vaultCred = vaultCredentials.find(vc => vc.id === conn.vaultCredentialId);
-        if (vaultCred) { username = vaultCred.username || ""; password = vaultCred.password || ""; }
-      }
-      const encodedUser = encodeURIComponent(username);
-      const encodedPass = encodeURIComponent(password);
-      const port = conn.port || (conn.type === "mysql" || conn.type === "mariadb" ? 3306 : 5432);
-      const Database = (await import("@tauri-apps/plugin-sql")).default;
-      let connectionString = "";
-      if (conn.type === "sqlite") {
-        connectionString = `sqlite:${conn.filepath || "queryden.db"}`;
-      } else if (["postgres", "supabase", "cockroach"].includes(conn.type)) {
-        connectionString = `postgres://${encodedUser}:${encodedPass}@${conn.host}:${port}/${saveDbName}`;
-      } else {
-        connectionString = `mysql://${encodedUser}:${encodedPass}@${conn.host}:${port}/${saveDbName}`;
-      }
-      db = await Database.load(connectionString);
+      // Honours the SSH tunnel and reuses an existing pool. The hand-built
+      // connection string dialled the remote host directly, which simply
+      // fails for a tunnelled connection.
+      db = await acquireDb(conn.id, saveDbName);
 
       // ── Build and run INSERT ───────────────────────────────────────────────
       const columns = Object.keys(newRow).filter(c => newRow[c] !== null);
       let query = "";
       if (columns.length === 0) {
         query = `INSERT INTO ${qid(activeTableName)} DEFAULT VALUES`;
-        if (activeConnection.type === "mysql" || activeConnection.type === "mariadb") {
+        if (conn.type === "mysql" || conn.type === "mariadb") {
           query = `INSERT INTO ${qid(activeTableName)} () VALUES ()`;
         }
       } else {
@@ -3011,7 +2965,16 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
 
     // Build EXPLAIN query based on database type
     let explainQuery = "";
-    const dbType = activeConnection.type;
+    // EXPLAIN ANALYZE *executes* the statement, so it has to run against the
+    // connection the tab actually targets. Running it on the globally-active
+    // connection meant executing the user's query on a different server than
+    // the one the tab is showing.
+    const optTarget = activeTabRef.current?.target;
+    const optConn = optTarget
+      ? connections.find(c => c.id === optTarget.connectionId) ?? activeConnection
+      : activeConnection;
+    const optDatabase = optTarget?.database || selectedDatabase || optConn.database;
+    const dbType = optConn.type;
 
     if (["postgres", "supabase", "cockroach"].includes(dbType)) {
       explainQuery = `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${queryToExplain}`;
@@ -3032,10 +2995,8 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     const startTime = Date.now();
 
     try {
-      if (!currentDb) {
-        throw new Error("No active database connection.");
-      }
-      const rows = await currentDb.select(explainQuery) as any[];
+      const explainDb = await acquireDb(optConn.id, optDatabase);
+      const rows = await explainDb.select(explainQuery) as any[];
       
       // Debug: Log the raw EXPLAIN result
       logger.debug(`[VisualOptimizer] DB Type: ${dbType}`);
@@ -3086,7 +3047,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       setIsExecuting(false);
       isExecutingRef.current = false;
     }
-  }, [activeConnection, selectedDatabase, currentDb]);
+  }, [activeConnection, selectedDatabase, connections, acquireDb]);
 
   // Handle variable dialog confirmation: substitute variables and re-run query
   const handleVarDialogConfirm = (values: VariableValues, remember: boolean) => {
