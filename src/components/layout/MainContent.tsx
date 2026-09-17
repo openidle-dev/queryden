@@ -10,6 +10,7 @@ import { useConfirmDialog } from "../ui/ConfirmDialog";
 import { Copy, FileText, BarChart2, Activity as ActivityIcon, Layers, Table } from "lucide-react";
 import { EmptyStateLauncher } from "./EmptyStateLauncher";
 import { logger } from "../../utils/logger";
+import { needsReconnect } from "../../utils/connectionTargeting";
 import { splitStatements } from "../../utils/splitStatements";
 import { mapSelectionStatementsToDocumentLines, mergeGlyphResults } from "../../utils/statementGlyphs";
 import { applyQueryLimit } from "../../utils/applyQueryLimit";
@@ -1694,16 +1695,12 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       if (txStateRef.current.active && txDbRef.current && txContextRef.current?.connectionId === actualConnection.id && txContextRef.current?.database === actualDatabase) {
         db = txDbRef.current;
       } else if (
-        !db ||
-        // Only re-resolve when the tab actually points somewhere other than
-        // the connection/database this handle already belongs to. The old
-        // condition was `targetConn` alone, and since new tabs inherit their
-        // neighbour's connection most tabs carry a target -- so every single
-        // Run paid a full connection handshake before the statement was even
-        // sent.
-        (targetConn &&
-          (targetConn.connectionId !== activeConnection?.id ||
-            (targetConn.database || "") !== (selectedDatabase || "")))
+        needsReconnect({
+          hasHandle: !!db,
+          target: targetConn,
+          activeConnectionId: activeConnection?.id,
+          selectedDatabase,
+        })
       ) {
         db = await acquireDb(actualConnection.id, actualDatabase || actualConnection.database);
       }

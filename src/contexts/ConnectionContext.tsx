@@ -5,6 +5,7 @@ import { useSettings } from "../store/settingsStore";
 import { getDefaultDatabaseName } from "../config/app";
 import { quoteIdentifier } from "../utils/sqlSecurity";
 import { logger } from "../utils/logger";
+import { bucketCatalogRows, schemaInClause } from "../utils/schemaCatalog";
 
 export interface DatabaseConnection {
   id: string;
@@ -1047,12 +1048,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         // new connection (another six round trips) instead of reusing the one
         // already established.
         const EXCLUDED_SCHEMAS = "'information_schema', 'pg_catalog', 'topology'";
-        // Single-quotes are doubled: a schema name is an identifier chosen by
-        // the user and reaches this string unparameterised.
-        const schemaIn = (col: string) =>
-          selectedSchemas.length > 0
-            ? `AND ${col} IN (${selectedSchemas.map(sc => `'${sc.replace(/'/g, "''")}'`).join(',')})`
-            : '';
+        const schemaIn = (col: string) => schemaInClause(col, selectedSchemas);
 
         let objectRows: any[] | null = null;
         try {
@@ -1123,12 +1119,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         }
 
         if (objectRows) {
-          const byKind: Record<string, string[]> = {};
-          for (const row of objectRows) {
-            const qualified =
-              row.sch && row.sch !== 'public' ? `${row.sch}.${row.nm}` : row.nm;
-            (byKind[row.kind] ||= []).push(qualified);
-          }
+          const byKind = bucketCatalogRows(objectRows);
           schema.tables = byKind.tables ?? [];
           schema.views = byKind.views ?? [];
           schema.functions = byKind.functions ?? [];
