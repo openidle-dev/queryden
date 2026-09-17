@@ -2845,42 +2845,41 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       // ─── Step 2: Validate NOT NULL + FK constraints (all providers) ───
       const rowsWithMissing: { rowIndex: number; missing: string[] }[] = [];
 
+      // Which columns are required depends only on the table, so ask once.
+      // This used to sit inside the per-row loop with identical parameters on
+      // every iteration: saving twenty rows meant twenty identical round
+      // trips, which against a distant server is most of a minute spent
+      // re-reading the same answer.
+      let requiredColumns: string[] = [];
+      if (["postgres", "supabase", "cockroach", "mysql", "mariadb"].includes(saveType)) {
+        // Placeholders are dialect-specific: $1/$2 on PostgreSQL-wire
+        // engines, ? on MySQL/MariaDB (sqlx does not understand $n there).
+        const ph1 = isPgLikeSave ? "$1" : "?";
+        const ph2 = isPgLikeSave ? "$2" : "?";
+        const notNullCols = await db.select(`
+          SELECT column_name
+          FROM information_schema.columns
+          WHERE table_schema = ${ph1} AND table_name = ${ph2}
+            AND is_nullable = 'NO'
+            AND column_default IS NULL
+          ORDER BY ordinal_position
+        `, [schemaName, tableName]);
+        requiredColumns = notNullCols.map((c: any) => c.column_name);
+      } else if (saveType === "sqlite") {
+        const sqliteCols = await db.select(`PRAGMA table_info("${tableName.replace(/"/g, '""')}")`);
+        requiredColumns = sqliteCols
+          .filter((c: any) => c.notnull === 1 && (c.dflt_value === null || c.dflt_value === undefined))
+          .map((c: any) => c.name);
+      }
+
       for (let i = 0; i < newRows.length; i++) {
         const { _isNew, ...data } = newRows[i];
         const missing: string[] = [];
 
-        // Check NOT NULL columns that don't have a DEFAULT (these must be provided).
-        // Placeholders are dialect-specific: $1/$2 on PostgreSQL-wire
-        // engines, ? on MySQL/MariaDB (sqlx does not understand $n there).
-        if (["postgres", "supabase", "cockroach", "mysql", "mariadb"].includes(saveType)) {
-          const ph1 = isPgLikeSave ? "$1" : "?";
-          const ph2 = isPgLikeSave ? "$2" : "?";
-          const notNullCols = await db.select(`
-            SELECT column_name
-            FROM information_schema.columns
-            WHERE table_schema = ${ph1} AND table_name = ${ph2}
-              AND is_nullable = 'NO'
-              AND column_default IS NULL
-            ORDER BY ordinal_position
-          `, [schemaName, tableName]);
-
-          for (const col of notNullCols) {
-            const colName = col.column_name;
-            const val = data[colName];
-            if (val === null || val === undefined || String(val).trim() === "") {
-              missing.push(colName);
-            }
-          }
-        } else if (saveType === "sqlite") {
-          const sqliteCols = await db.select(`PRAGMA table_info("${tableName.replace(/"/g, '""')}")`);
-          for (const col of sqliteCols) {
-            if (col.notnull === 1 && (col.dflt_value === null || col.dflt_value === undefined)) {
-              const colName = col.name;
-              const val = data[colName];
-              if (val === null || val === undefined || String(val).trim() === "") {
-                missing.push(colName);
-              }
-            }
+        for (const colName of requiredColumns) {
+          const val = data[colName];
+          if (val === null || val === undefined || String(val).trim() === "") {
+            missing.push(colName);
           }
         }
 
