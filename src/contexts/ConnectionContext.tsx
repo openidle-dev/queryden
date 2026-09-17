@@ -137,6 +137,14 @@ interface ConnectionContextType {
   removeConnection: (id: string) => void;
   updateConnection: (id: string, conn: Partial<DatabaseConnection>) => void;
   connectToDatabase: (connId: string, databaseName?: string, overrideVaultCredential?: VaultCredential) => Promise<void>;
+  /**
+   * True when `connectionString` is backed by a pool a live session is using.
+   *
+   * The Rust side reuses pools keyed by connection string, so a throwaway
+   * caller (the connection tester) can be handed the very pool an open
+   * connection is running on. Such a caller must not close it.
+   */
+  hasLivePool: (connectionString: string) => boolean;
   disconnectFromDatabase: () => Promise<void>;
   loadSchema: (database: string, overrideSchemas?: string[]) => Promise<void>;
   getDDL: (type: string, name: string) => Promise<string>;
@@ -700,6 +708,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const hasLivePool = (connectionString: string) =>
+    !!currentDb && currentDb.path === connectionString;
+
   const disconnectFromDatabase = async () => {
     if (activeConnection) {
       try {
@@ -710,7 +721,10 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     }
     if (currentDb) {
       try {
-        await currentDb.close();
+        // `close()` with no argument closes *every* pool in the process: the JS
+        // plugin forwards `undefined` and the Rust side reads that as "all".
+        // Always name the pool being closed.
+        await currentDb.close(currentDb.path);
       } catch (e) {
         console.error("Failed to close database connection:", e);
       }
@@ -2115,6 +2129,7 @@ SELECT ${colList} FROM ${schemaPart}.${tablePart};
         removeConnection,
         updateConnection,
         connectToDatabase,
+        hasLivePool,
         disconnectFromDatabase,
         loadSchema,
         getDDL,

@@ -52,7 +52,7 @@ const getValidHexColor = (color: string): string => {
 };
 
 export function ConnectionDialog({ connection, onClose, defaultFolderId }: { connection?: DatabaseConnection; onClose: () => void; defaultFolderId?: string }) {
-  const { addConnection, updateConnection, removeConnection, vaultCredentials, folders } = useConnections();
+  const { addConnection, updateConnection, removeConnection, vaultCredentials, folders, hasLivePool } = useConnections();
   const [step, setStep] = useState<"driver" | "details">(connection ? "details" : "driver");
   const [searchFilter, setSearchFilter] = useState("");
   const [driverCategory, setDriverCategory] = useState("All");
@@ -213,7 +213,14 @@ export function ConnectionDialog({ connection, onClose, defaultFolderId }: { con
 
       const db = await Database.default.load(connectionString);
       await db.select("SELECT 1");
-      await db.close();
+      // Two traps here. `close()` with no argument closes *every* pool in the
+      // process, so testing a connection used to drop every other connection
+      // the user had open. And because the Rust side reuses pools by
+      // connection string, this handle may *be* a live session's pool -- in
+      // which case it is not ours to close at all.
+      if (!hasLivePool(connectionString)) {
+        await db.close(db.path);
+      }
       return { success: true, message: "Connection successful!" };
     } catch (err: any) {
       console.error("Connection test error:", err);
