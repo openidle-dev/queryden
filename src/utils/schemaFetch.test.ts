@@ -15,9 +15,28 @@ const PG_TABLES = [
   { table_schema: "devops", table_name: "servers" },
 ];
 
-function pgDb(issued: string[]): SchemaFetchDb {
+/**
+ * The object lists all arrive from one consolidated query now, as
+ * `(kind, sch, nm)` triples. Built from the same fixtures the per-view
+ * branches below return, so both paths are asserted against identical data.
+ */
+const PG_OBJECT_ROWS = [
+  ...PG_TABLES.map((t) => ({ kind: "tables", sch: t.table_schema, nm: t.table_name })),
+  { kind: "views", sch: "public", nm: "active_users" },
+  { kind: "functions", sch: "public", nm: "current_user_id" },
+  { kind: "functions", sch: "devops", nm: "deploy_status" },
+  { kind: "procedures", sch: "devops", nm: "rotate_keys" },
+];
+
+function pgDb(issued: string[], opts: { failUnion?: boolean } = {}): SchemaFetchDb {
   return mockDb((sql) => {
     issued.push(sql);
+    if (sql.includes("AS kind")) {
+      if (opts.failUnion) {
+        throw new Error('relation "pg_event_trigger" does not exist');
+      }
+      return PG_OBJECT_ROWS;
+    }
     if (sql.includes("information_schema.tables")) return PG_TABLES;
     if (sql.includes("information_schema.views"))
       return [{ table_schema: "public", table_name: "active_users" }];
@@ -201,6 +220,15 @@ describe("fetchSchemaItems — no duplicate suggestions", () => {
   it("collapses duplicate PG rows across overlapping reads", async () => {
     const db: SchemaFetchDb = {
       select: async (sql: string) => {
+        // The consolidated object query can itself return a name twice --
+        // catalogue quirks, case variants, overlapping reads -- so the
+        // defensive dedupe has to sit downstream of it, not inside the
+        // per-view branches it replaced.
+        if (sql.includes("AS kind"))
+          return [
+            { kind: "tables", sch: "public", nm: "users" },
+            { kind: "tables", sch: "public", nm: "users" },
+          ];
         if (sql.includes("information_schema.tables"))
           return [
             { table_schema: "public", table_name: "users" },
@@ -241,34 +269,65 @@ describe("fetchSchemaItems — per-view schema columns when filtered", () => {
   it("uses each catalog view's own schema column", async () => {
     const issued: string[] = [];
     await fetchSchemaItems({ db: pgDb(issued), connType: "postgres", selectedSchemas: ["devops"] });
-    const find = (needle: string) => issued.find((s) => s.includes(needle));
 
-    expect(find("information_schema.tables")).toContain("AND table_schema IN ('devops')");
+    // The object lists share one statement now, but each branch of it still
+    // has to name its own schema column: filtering routines, triggers or
+    // foreign tables on `table_schema` is a SQL error, and would take the
+    // whole consolidated query down with it.
+    const union = issued.find((s) => s.includes("AS kind"));
+    expect(union).toBeDefined();
+    expect(union).toContain("AND table_schema IN ('devops')");
+    expect(union).toContain("AND routine_schema IN ('devops')");
+    expect(union).toContain("AND trigger_schema IN ('devops')");
+    expect(union).toContain("AND foreign_table_schema IN ('devops')");
+    expect(union).toContain("AND schemaname IN ('devops')");
+    expect(union).toContain("AND sequence_schema IN ('devops')");
 
-    const routines = issued.filter((s) => s.includes("information_schema.routines"));
-    expect(routines).toHaveLength(2); // functions read + procedures read
-    for (const sql of routines) {
-      expect(sql).toContain("AND routine_schema IN ('devops')");
-      expect(sql).not.toMatch(/AND table_schema IN/);
-    }
+    expect(issued.find((s) => s.includes("FROM pg_attribute"))).toContain(
+      "AND n.nspname IN ('devops')",
+    );
+  });
 
-    expect(find("information_schema.triggers")).toContain("AND trigger_schema IN ('devops')");
-    expect(find("information_schema.foreign_tables")).toContain("AND foreign_table_schema IN ('devops')");
-    expect(find("FROM pg_attribute")).toContain("AND n.nspname IN ('devops')");
+  it("reads every object list in a single round trip", async () => {
+    const issued: string[] = [];
+    await fetchSchemaItems({ db: pgDb(issued), connType: "postgres", selectedSchemas: [] });
+    // One consolidated object query, plus columns and foreign keys. Every
+    // statement is a full network round trip, so against a server on another
+    // continent this is the difference between roughly 3 seconds and 15.
+    expect(issued).toHaveLength(3);
+    expect(issued.filter((s) => s.includes("AS kind"))).toHaveLength(1);
+  });
+
+  it("falls back to per-object queries when the consolidated query fails", async () => {
+    // An older server, or CockroachDB's partial catalogue, can be missing one
+    // of the views the union reads -- which fails the entire statement. The
+    // per-object path then costs only the lists that genuinely are missing.
+    const issued: string[] = [];
+    const schema = await fetchSchemaItems({
+      db: pgDb(issued, { failUnion: true }),
+      connType: "postgres",
+      selectedSchemas: [],
+    });
+    expect(schema.tables).toEqual(["users", "projects", "devops.deployments", "devops.servers"]);
+    expect(schema.views).toEqual(["active_users"]);
+    expect(issued.length).toBeGreaterThan(3);
   });
 
   it("escapes schema names in every filter (apostrophes must not break SQL)", async () => {
     const issued: string[] = [];
     await fetchSchemaItems({ db: pgDb(issued), connType: "postgres", selectedSchemas: ["o'brien"] });
     const filtered = issued.filter((s) =>
-      /_schema IN \(|nspname IN \(|regnamespace::text IN \(/.test(s),
+      /_schema IN \(|nspname IN \(|schemaname IN \(|regnamespace::text IN \(/.test(s),
     );
-    // tables, views, 2× routines, triggers, indexes, sequences,
-    // procedures, foreign tables, columns, foreign keys
-    expect(filtered.length).toBeGreaterThan(5);
+    // The consolidated object query, plus columns and foreign keys.
+    expect(filtered.length).toBeGreaterThanOrEqual(3);
     for (const sql of filtered) {
       expect(sql).toContain("'o''brien'");
     }
+    // Every filter inside the consolidated statement must carry the escaped
+    // form: one unescaped apostrophe breaks the whole query, not just a list.
+    const union = issued.find((s) => s.includes("AS kind")) ?? "";
+    expect(union.split("'o''brien'").length - 1).toBeGreaterThanOrEqual(6);
   });
 });
 
