@@ -16,6 +16,17 @@ pub(crate) async fn load<R: Runtime>(
     migrations: State<'_, Migrations>,
     db: String,
 ) -> Result<String, crate::Error> {
+    // QueryDen: reuse an already-established pool for this exact connection
+    // string. The frontend calls `load()` on every reconnect, on every tab that
+    // targets a connection, and on every database switch; upstream connected
+    // unconditionally and inserted over the previous entry, which threw away a
+    // live connection and leaked the old pool. Re-establishing costs a full
+    // TCP + TLS + auth handshake — roughly six sequential round trips, close to
+    // two seconds against a server on another continent.
+    if db_instances.0.read().await.contains_key(&db) {
+        return Ok(db);
+    }
+
     let pool = DbPool::connect(&db, &app).await?;
 
     if let Some(migrations) = migrations.0.lock().await.remove(&db) {
@@ -23,7 +34,18 @@ pub(crate) async fn load<R: Runtime>(
         pool.migrate(&migrator).await?;
     }
 
-    db_instances.0.write().await.insert(db.clone(), pool);
+    {
+        let mut instances = db_instances.0.write().await;
+        // Another task may have connected the same URL while we were still
+        // handshaking. Keep the registered pool and discard ours rather than
+        // inserting over it and leaking the loser.
+        if instances.contains_key(&db) {
+            drop(instances);
+            pool.close().await;
+            return Ok(db);
+        }
+        instances.insert(db.clone(), pool);
+    }
 
     Ok(db)
 }
@@ -36,7 +58,7 @@ pub(crate) async fn close(
     db_instances: State<'_, DbInstances>,
     db: Option<String>,
 ) -> Result<bool, crate::Error> {
-    let instances = db_instances.0.read().await;
+    let mut instances = db_instances.0.write().await;
 
     let pools = if let Some(db) = db {
         vec![db]
@@ -45,7 +67,13 @@ pub(crate) async fn close(
     };
 
     for pool in pools {
-        let db = instances.get(&pool).ok_or(Error::DatabaseNotLoaded(pool))?;
+        // QueryDen: take the pool *out* of the registry before closing it.
+        // Upstream closed it but left the entry in place, so `load()`'s reuse
+        // fast path above would hand back a dead handle for the rest of the
+        // session.
+        let db = instances
+            .remove(&pool)
+            .ok_or(Error::DatabaseNotLoaded(pool))?;
         db.close().await;
     }
 
