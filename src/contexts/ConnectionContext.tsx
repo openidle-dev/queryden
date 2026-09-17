@@ -186,6 +186,13 @@ interface ConnectionContextType {
   ensureConnectionDb: (connId: string, database?: string) => Promise<EnsuredConnection>;
   /** Close + evict all cached lazy handles for a connection. */
   dropCachedConnection: (connId: string) => Promise<void>;
+  /**
+   * True when `connectionString` is backed by a pool this app is actively
+   * using. Pools are keyed by connection string on the Rust side and reused,
+   * so a throwaway caller (the connection tester) can be handed the very pool
+   * a live connection is running on, and must not close it.
+   */
+  hasLivePool: (connectionString: string) => boolean;
   loadSchema: (database: string, overrideSchemas?: string[]) => Promise<void>;
   /**
    * Fetch (or reuse a cached) schema snapshot for ANY saved connection —
@@ -802,7 +809,10 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     }
     if (currentDb) {
       try {
-        await currentDb.close();
+        // Name the pool. `close()` with no argument closes *every* pool in the
+        // process -- the JS plugin forwards `undefined` and the Rust side reads
+        // that as "all" -- so disconnecting one server dropped the rest.
+        await currentDb.close(currentDb.path);
       } catch (e) {
         console.error("Failed to close database connection:", e);
       }
@@ -825,6 +835,14 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
    * snapshots for the connection are evicted too so a later reconnect
    * re-introspects instead of completing against stale catalog data.
    */
+  const hasLivePool = (connectionString: string) => {
+    if (currentDb?.path === connectionString) return true;
+    for (const db of lazyHandlesRef.current.values()) {
+      if (db?.path === connectionString) return true;
+    }
+    return false;
+  };
+
   const dropCachedConnection = async (connId: string) => {
     const prefix = `${connId}::`;
     for (const key of [...schemaCacheRef.current.keys()]) {
@@ -841,7 +859,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           pending
             .then((db: any) => {
               try {
-                const r = db?.close?.();
+                // Named: a bare close() would take every other connection's
+                // pool down with this one.
+                const r = db?.close?.(db?.path);
                 if (r && typeof r.then === "function") return r;
               } catch {
                 /* already dead */
@@ -858,7 +878,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         closes.push(
           (async () => {
             try {
-              await db?.close?.();
+              await db?.close?.(db?.path);
             } catch {
               /* already dead */
             }
@@ -2088,6 +2108,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         disconnectFromDatabase,
         ensureConnectionDb,
         dropCachedConnection,
+        hasLivePool,
         loadSchema,
         ensureSchemaFor,
         getDDL,

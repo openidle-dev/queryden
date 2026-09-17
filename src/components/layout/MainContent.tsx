@@ -226,6 +226,14 @@ export function MainContent() {
   // Dedicated db connection for the active transaction
   const txDbRef = useRef<any>(null);
   const txContextRef = useRef<{ connectionId: string; database: string } | null>(null);
+  // `executeQuery` and the tx-action handler both read transaction state, and
+  // neither can list it as a dependency without being rebuilt -- invalidating
+  // everything downstream -- on every statement. Read it through a ref that is
+  // refreshed each render instead. Without this, `txState.active` was always
+  // the pre-BEGIN snapshot, so BEGIN/COMMIT/ROLLBACK silently did nothing
+  // while the toolbar showed a transaction open.
+  const txStateRef = useRef(txState);
+  useEffect(() => { txStateRef.current = txState; });
 
   // Auto-rollback when connection changes during an active transaction
   useEffect(() => {
@@ -1774,7 +1782,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         const duration = Date.now() - startTime;
         setExecutionTime(duration);
         window.dispatchEvent(new CustomEvent("status-bar-update", {
-          detail: { rows: isSelect ? rowsAffected : rowsAffected, time: duration, txActive: txState.active, txStatements: txState.statementCount }
+          detail: { rows: isSelect ? rowsAffected : rowsAffected, time: duration, txActive: txStateRef.current.active, txStatements: txStateRef.current.statementCount }
         }));
         if (currentTabId) {
           // Create a psql console entry from the current output
@@ -1813,7 +1821,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       
       // ── Default: libpq path ──────────────────────────────────────────────────
       // Use the transaction-scoped connection if a transaction is active for this connection
-      if (txState.active && txDbRef.current && txContextRef.current?.connectionId === actualConnection.id && txContextRef.current?.database === actualDatabase) {
+      if (txStateRef.current.active && txDbRef.current && txContextRef.current?.connectionId === actualConnection.id && txContextRef.current?.database === actualDatabase) {
         db = txDbRef.current;
       } else if (ensured) {
         // Tab-target (or unconnected-global) run: the lazily-established
@@ -1987,11 +1995,11 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         }
 
         // Update transaction statement count if in an active transaction
-        if (txState.active) {
+        if (txStateRef.current.active) {
           const numStatements = isRunAll ? statementsToRun.length : 1;
           setTxState(prev => ({ ...prev, statementCount: prev.statementCount + numStatements }));
           window.dispatchEvent(new CustomEvent("tx-state-changed", {
-            detail: { active: true, statementCount: txState.statementCount + numStatements }
+            detail: { active: true, statementCount: txStateRef.current.statementCount + numStatements }
           }));
         }
       } finally {
@@ -2148,7 +2156,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       
       // Update status bar
       window.dispatchEvent(new CustomEvent("status-bar-update", {
-        detail: { rows: isSelect ? rowsAffected : rowsAffected, time: duration, txActive: txState.active, txStatements: txState.statementCount }
+        detail: { rows: isSelect ? rowsAffected : rowsAffected, time: duration, txActive: txStateRef.current.active, txStatements: txStateRef.current.statementCount }
       }));
       
       // Persist successful execution to the query tab
@@ -2424,11 +2432,11 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         // Notify toolbar of state change
         const newTxStatements = action === "rollback" || action === "commit" ? 0
           : action === "begin" ? 0
-          : txState.statementCount;
+          : txStateRef.current.statementCount;
         window.dispatchEvent(new CustomEvent("tx-state-changed", {
           detail: {
-            active: action === "commit" || action === "rollback" ? false : txState.active || action === "begin",
-            isolationLevel: action === "begin" ? (isolation || "READ COMMITTED") : txState.isolationLevel,
+            active: action === "commit" || action === "rollback" ? false : txStateRef.current.active || action === "begin",
+            isolationLevel: action === "begin" ? (isolation || "READ COMMITTED") : txStateRef.current.isolationLevel,
             statementCount: newTxStatements,
           }
         }));
