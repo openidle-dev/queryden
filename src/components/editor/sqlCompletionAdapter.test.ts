@@ -44,7 +44,7 @@ function modelOf(text: string): CompletionModelLike {
 /** Labels the suggest widget would list at `|`, in Monaco's filter order of acceptance. */
 function visible(sqlWithCaret: string, schema: CompletionSchemaLike | null = SCHEMA): string[] {
   const offset = sqlWithCaret.indexOf("|");
-  const text = sqlWithCaret.replace("|", "");
+  const text = sqlWithCaret.replace(/\|/g, "");
   const before = text.slice(0, offset);
   const lineNumber = before.split("\n").length;
   const column = offset - before.lastIndexOf("\n");
