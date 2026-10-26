@@ -39,7 +39,7 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 - **Exports:** RFC 4180 CSV, escaped XML/HTML, quoted SQL, `IS NULL` in generated WHERE clauses, and a native **Excel `.xlsx`** export (bold frozen header, typed cells). The "Exported …" toast disappears after a moment instead of staying on screen.
 - **AI assistant:** the model list is fetched live from OpenAI, Anthropic, Gemini or the local server; calls go through the backend (the CSP blocked them before); the API key is sealed with AES-256-GCM instead of stored in plain text.
 - **Data safety:** a connection/vault/settings/history file that fails to load is never overwritten by an empty list, and every storage write is atomic (temp file + fsync + rename, created `0600`).
-- **SSH:** key authentication passed the private key as the public key (always failed); `~` in key paths; Test SSH accepts hostnames; tunnel errors are reported immediately instead of a 30 s pool timeout.
+- **SSH:** key authentication passed the private key as the public key (always failed); `~` in key paths; Test SSH accepts hostnames; tunnel errors are reported immediately instead of a 30 s pool timeout, and retrying right after a failed tunnel no longer gets handed the dead tunnel.
 - **Platform:** storage/SSH/system commands no longer block the UI thread; Windows IPC allowed in the CSP; macOS Cmd+Option shortcuts and F1 help; psql console font fallbacks; image "Open" works; app icons fill their canvas; Linux releases build on Ubuntu 22.04 (glibc 2.35) and `.deb` installs get their own updater entry.
 
 ### Added
