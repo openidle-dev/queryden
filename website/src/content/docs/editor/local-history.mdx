@@ -3,7 +3,7 @@ title: Local history
 description: Silent line-level snapshots of every editor tab. Locally, never synced.
 section: editor
 order: 30
-updated: 2026-05-13
+updated: 2026-10-26
 ---
 
 QueryDen takes a snapshot of every editor tab every five seconds. The snapshots are stored encrypted in your vault, never leave your machine, and never expire.
@@ -17,13 +17,13 @@ QueryDen takes a snapshot of every editor tab every five seconds. The snapshots 
 
 ## What you do with it
 
-`Ctrl+Alt+H` (or **Tab → History** in the toolbar) opens the local-history panel for the current tab. The panel shows every snapshot as a timestamped row. Click any row to see a **line-level diff** against the current buffer. Hit **Revert** to swap the current buffer for the snapshot.
+Right-click in the editor and choose **Local History | Show History** to open the local-history panel for the current tab. The panel shows every snapshot as a timestamped row. Click any row to see a **line-level diff** against the current buffer. Hit **Revert** to swap the current buffer for the snapshot.
 
 > Reverting does not destroy the current buffer — it gets snapshotted first. So "revert" is one undoable step, not a one-way trip.
 
 ## Where it lives on disk
 
-`~/.local/share/com.queryden.app/local-history.json` on Linux, equivalent paths on macOS and Windows. The file is encrypted alongside your other vault data — see [Vault setup](/docs/getting-started/vault-setup).
+`~/.local/share/com.queryden.app/local-history.json` on Linux, equivalent paths on macOS and Windows. The file is encrypted alongside your other vault data — see [The vault](/docs/getting-started/vault-setup).
 
 ## When to use it
 

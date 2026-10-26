@@ -1,0 +1,31 @@
+---
+title: Saved queries and Multi Query
+description: Keep a library of queries per connection, and run one query across many databases and servers at once.
+section: editor
+order: 80
+updated: 2026-10-26
+---
+
+## Saving a query
+
+`Ctrl+S` saves the tab's SQL to your library, filed under the tab's own connection and database. Saving under a name that already exists **on the same connection** updates it; a query with the same name on another connection is a separate entry and is left alone.
+
+Saved queries are stored encrypted with the rest of your data — see [The vault](/docs/getting-started/vault-setup).
+
+## Opening saved queries
+
+The **Files** panel in the sidebar lists your saved queries with a search box:
+
+- **Click** a query to open it in a new tab — on the connection and database it was saved for.
+- **▶** opens it and runs it straight away.
+- **Delete** asks for confirmation first.
+
+## Multi Query
+
+The **Multi-Query** toolbar button runs one query against many targets in a single go — every tenant database, every environment, every server:
+
+1. Pick targets: individual databases, whole connections, or **Select All** for every database of every connection.
+2. Write the query, or load one from the same **Saved Queries** list.
+3. Run. Targets execute in parallel (four at a time), each through its own SSH tunnel and credentials, and each result appears under its target with its status, row count and time.
+
+Results can be [exported](/docs/editor/exporting-results) per target, including to Excel.

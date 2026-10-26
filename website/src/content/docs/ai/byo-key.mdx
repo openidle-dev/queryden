@@ -10,14 +10,14 @@ QueryDen does not run an inference server. When you use the AI features, the cal
 
 ## Configuring a provider
 
-**Settings → AI → Add provider**. Pick one of:
+Open **Settings → AI Assistant**, turn it on, and pick a provider:
 
 - **OpenAI** — paste an `sk-...` key.
 - **Anthropic** — paste an `sk-ant-...` key.
 - **Google (Gemini)** — paste an `AIza...` key.
 - **Local** — Ollama (`http://localhost:11434` by default) or any OpenAI-compatible server such as LM Studio (`http://localhost:1234`). No key needed.
 
-The key is stored in `settings.json` sealed with AES-256-GCM, using the same machine-locked key as the credential vault — never in plain text. Requests to the provider are made by QueryDen's backend, so the key never passes through the web view; it leaves your machine only in the request to the provider.
+The key is sealed with AES-256-GCM, using the same machine-locked key as the credential vault — never stored in plain text. Requests to the provider are made by QueryDen's backend, so the key never passes through the web view; it leaves your machine only in the request to the provider.
 
 ## Where the AI is actually used
 

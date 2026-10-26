@@ -136,6 +136,7 @@ function classifyAsset(name: string, sizeBytes: number): ReleaseAsset | null {
   if (name === 'latest.json' || name.endsWith('.app.tar.gz')) return null;
 
   const sizeMB = Math.round((sizeBytes / 1024 / 1024) * 10) / 10;
+  if (/_universal\.dmg$/i.test(name)) return { os: 'macOS',   arch: 'Intel + Apple Silicon', file: name, sizeMB, primary: true  };
   if (/_aarch64\.dmg$/i.test(name))   return { os: 'macOS',   arch: 'Apple Silicon',     file: name, sizeMB, primary: true  };
   if (/_x64-setup\.exe$/i.test(name)) return { os: 'Windows', arch: 'x86_64',            file: name, sizeMB, primary: true  };
   if (/_amd64\.deb$/i.test(name))     return { os: 'Linux',   arch: 'x86_64 · .deb',     file: name, sizeMB, primary: true  };

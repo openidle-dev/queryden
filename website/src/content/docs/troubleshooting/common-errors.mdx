@@ -3,7 +3,7 @@ title: Common errors
 description: A growing list of error messages with diagnoses and fixes.
 section: troubleshooting
 order: 10
-updated: 2026-05-13
+updated: 2026-10-26
 ---
 
 If your error isn't here yet, open an issue with the exact message, the engine, and your OS. The list grows by reproduction.
@@ -20,7 +20,11 @@ Wrong password, or the database isn't configured to accept password auth from yo
 
 ### `server version mismatch` (psql / pg_dump)
 
-QueryDen handles this for you — the embedded CLI auto-downloads the matching client version. If you see this from a system-installed `psql`, you're not using QueryDen's bundled one. Run via **Tab → CLI** instead.
+The [psql console](/docs/editor/psql-console) uses the newest `psql` installed on your machine. A newer client talks to older servers, so install a client at least as new as your newest server; **Settings → CLI Tools** shows which one QueryDen found.
+
+### `psql not found`
+
+Install the PostgreSQL client (the dialog lists the command for your OS) and press **Check Again** — no restart needed. QueryDen also finds `psql` in the standard install folders when they aren't on your `PATH`.
 
 ## Vault
 
@@ -28,15 +32,19 @@ QueryDen handles this for you — the embedded CLI auto-downloads the matching c
 
 By design. The vault is bound to the machine fingerprint. Copying `vault.json` to a different computer makes it unreadable, even with the right password. See [Vault internals](/docs/security/vault-internals).
 
-### `5 failed unlock attempts — locked for N minutes`
+### `Stored connections or credentials could not be read`
 
-Brute-force lockout tripped. Wait it out. There is no override — if you're locked out of your own data, you'll need to wait for the cooldown.
+A data file failed to decrypt — usually because the app data folder was copied from another machine. QueryDen leaves the file untouched and won't save over it. Restore the original folder, or move your connections with **Import / Export Connections** instead (see [The vault](/docs/getting-started/vault-setup#moving-to-a-new-machine)).
 
 ## Editor
 
 ### `Ctrl+D toggles the explorer when I wanted multi-cursor`
 
-Fixed in [#13](https://github.com/openidle-dev/queryden/issues/13). The Database Explorer toggle moved to `Ctrl+\` (matching the VS Code / DataGrip sidebar-toggle convention), leaving `Ctrl+D` to Monaco's built-in "add selection to next occurrence" multi-cursor.
+Fixed in [#13](https://github.com/openidle-dev/queryden/issues/13). The Database Explorer toggle moved to `Ctrl+Shift+E`, leaving `Ctrl+D` to Monaco's built-in "add selection to next occurrence" multi-cursor.
+
+### No autocomplete suggestions
+
+Completion uses the schema of the tab's connection and database. Open the database in the explorer (tabs on other servers load theirs in the background) and use **Refresh Schema** after DDL changes. See [Completion and navigation](/docs/editor/code-intelligence).
 
 ## Performance
 

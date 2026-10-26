@@ -3,11 +3,11 @@ import Layout from '../layouts/Layout.astro';
 import SignatureMesh from '../components/SignatureMesh.astro';
 import { SITE, RELEASE } from '../lib/site';
 
-// TODO: fill these in. The structure is informed by Zed ("Currently / Next"),
-// Warp ("team committed / community-eligible"), and Astro (issues are the
-// source of truth — the website is a thin curated view). Each item should
-// link to a GitHub issue when one exists; the issue is what's real, this page
-// is a summary.
+// The structure is informed by Zed ("Currently / Next"), Warp ("team
+// committed / community-eligible"), and Astro (issues are the source of
+// truth — the website is a thin curated view). Each item should link to a
+// GitHub issue when one exists; the issue is what's real, this page is a
+// summary. When an issue closes, move its item to SHIPPED.
 //
 // Status rule (keep it minimal): only "in progress" items get a badge.
 // Everything else is implicitly planned. Don't invent dates or version pins.
@@ -28,6 +28,8 @@ interface Horizon {
   items: Item[];
 }
 
+const issueLink = (n: number) => `<a href="${SITE.repo}/issues/${n}" rel="noopener">#${n}</a>`;
+
 const HORIZONS: Horizon[] = [
   {
     id: 'now',
@@ -35,15 +37,27 @@ const HORIZONS: Horizon[] = [
     lede: 'Active focus — the work most likely to land in the next release.',
     items: [
       {
-        title: 'macOS in-app updater',
-        body: 'pick_asset misses the .dmg and install_update has no darwin branch — Mac users are stuck on whatever they first installed. Fixing the asset selection and install path.',
-        issue: 8,
+        title: 'Editor sessions and code intelligence',
+        body: 'Every tab becomes its own database session, so transactions and <code>SET</code> carry between runs. Context-aware completion, parameter hints with argument names, Ctrl+click definitions, DataGrip-style colours, and exact psql-style values for every type.',
         status: 'in-progress',
       },
       {
-        title: 'Connection dialog cleanup',
-        body: 'Surface all required settings clearly and collapse the "coming soon" provider list behind a Show all toggle, so the dialog stops looking like every backend is half-finished.',
-        issue: 44,
+        title: 'AI assistant on your own key',
+        body: 'Real calls to OpenAI, Anthropic, Gemini or a local server, with the model list fetched live from the provider and the key sealed at rest.',
+        issue: 10,
+        status: 'in-progress',
+      },
+      {
+        title: 'CLI tools management',
+        body: '<b>Settings → CLI Tools</b> shows which <code>psql</code> / <code>mysql</code> / <code>mongosh</code> was found, where and which version — including installs that aren\'t on <code>PATH</code>.',
+        issue: 39,
+        status: 'in-progress',
+      },
+      {
+        title: 'Dependency security sweep',
+        body: 'Patched TLS, archive-extraction and build-tool dependencies across the app and the docs site.',
+        issue: 185,
+        status: 'in-progress',
       },
     ],
   },
@@ -53,29 +67,32 @@ const HORIZONS: Horizon[] = [
     lede: 'Queued for after the current batch. Order is approximate; scope may move.',
     items: [
       {
-        title: 'SSH tunnel reliability',
-        body: 'A reproducible "tunnel won\'t connect" report. Needs a deeper look at the ssh2-based tunnel registry and clearer error surfacing.',
-        issue: 46,
+        title: 'Refresh the database list',
+        body: 'Pick up databases created or dropped on the server without reconnecting.',
+        issue: 237,
       },
       {
-        title: 'psql console correctness',
-        body: 'Auto-appended LIMIT after a trailing semicolon produces a syntax error; the Extended-display shortcut (\\x) doesn\'t fire. Two small fixes that make the embedded psql usable.',
-        issue: 38,
+        title: 'Master password and OS keychain',
+        body: 'An optional master password mixed into the vault key, and the per-install key kept in the macOS Keychain, Windows Credential Manager or Secret Service.',
       },
       {
-        title: 'Type-correct grid rendering',
-        body: 'BIGINT precision past JS safe-integer range, and date / timestamp detection by column type instead of column name.',
-        issue: 41,
+        title: 'SSH hardening',
+        body: 'Host-key verification against <code>known_hosts</code>, and ed25519 / OpenSSH-format keys on Windows.',
       },
       {
-        title: 'CLI tools management',
-        body: 'PostgreSQL CLI auto-download is broken end-to-end; users have no UI to inspect, switch, or repair downloaded CLIs.',
-        issue: 40,
+        title: 'One design system everywhere',
+        body: `Consistent primitives and palette across the app, the results grid included (${issueLink(151)}, ${issueLink(152)}, ${issueLink(187)}, ${issueLink(192)}).`,
+        issue: 149,
       },
       {
-        title: 'Keymap audit',
-        body: 'Ctrl+Shift+F is double-bound, and ~14 shortcuts in the DataGrip preset are advertised but never wired. (Ctrl+D resolved in #13.)',
-        issue: 11,
+        title: 'Testing infrastructure',
+        body: 'Component tests and Playwright end-to-end runs on top of the unit and live-database suites.',
+        issue: 24,
+      },
+      {
+        title: 'Toolchain upgrades',
+        body: 'CI on the Node 24 runtime, and the docs site on Astro 7.',
+        issue: 186,
       },
     ],
   },
@@ -85,13 +102,43 @@ const HORIZONS: Horizon[] = [
     lede: 'Direction, not commitment — these are problems we want to solve, not specs we\'ve written.',
     items: [
       {
-        title: 'Universal macOS build',
-        body: 'Ship universal-apple-darwin so the same DMG runs on Intel and Apple Silicon Macs.',
-        issue: 7,
+        title: 'Install a previous version',
+        body: 'Roll back to an earlier release from inside the app.',
+        issue: 91,
+        status: 'exploring',
+      },
+      {
+        title: 'Signed and notarized builds',
+        body: 'Code-signed Windows installers and notarized macOS builds, so neither OS warns on first launch.',
+        status: 'exploring',
+      },
+      {
+        title: 'Smaller, focused modules',
+        body: `Split the largest components and contexts into focused pieces (${issueLink(1)}–${issueLink(6)}) and add ESLint (${issueLink(33)}).`,
+        issue: 2,
+        status: 'exploring',
+      },
+      {
+        title: 'More engines',
+        body: 'SQL Server, Oracle and DB2 — listed as coming soon in the connection dialog.',
         status: 'exploring',
       },
     ],
   },
+];
+
+// Closed issues that used to sit on this page.
+const SHIPPED: Item[] = [
+  { title: 'Universal macOS build — Intel and Apple Silicon in one .dmg', body: '', issue: 7 },
+  { title: 'In-app updater on macOS', body: '', issue: 8 },
+  { title: 'Keymap preset only advertises shortcuts that work', body: '', issue: 11 },
+  { title: 'Per-vault random Argon2 salt', body: '', issue: 14 },
+  { title: 'psql console: auto-LIMIT and \\x fixes', body: '', issue: 38 },
+  { title: 'psql found from system installs instead of a broken auto-download', body: '', issue: 40 },
+  { title: 'BIGINT values beyond JavaScript\'s safe range stay exact', body: '', issue: 41 },
+  { title: 'Connection dialog shows every setting clearly', body: '', issue: 44 },
+  { title: 'SSH tunnel reliability', body: '', issue: 46 },
+  { title: 'Beta update channel', body: '', issue: 105 },
 ];
 
 const STATUS_LABEL: Record<Status, string> = {
@@ -163,6 +210,16 @@ const issueUrl = (n: number) => `${SITE.repo}/issues/${n}`;
             Latest release: <a href={`${SITE.repo}/releases/tag/${RELEASE.tag}`} class="rm-src" rel="noopener">{RELEASE.tag}</a>{' '}
             on {RELEASE.publishedAt}. The <a href="/changelog" class="rm-src">changelog</a> has the version-by-version history.
           </p>
+          <ul class="rm-shipped">
+            {SHIPPED.map((it) => (
+              <li>
+                {it.issue !== undefined && (
+                  <a class="rm-issue" href={issueUrl(it.issue)} rel="noopener" aria-label={`GitHub issue #${it.issue}`}>#{it.issue}</a>
+                )}
+                <span>{it.title}</span>
+              </li>
+            ))}
+          </ul>
         </div>
         <div>
           <h2 class="rm-tail-title">Disagree with the priorities?</h2>
@@ -260,6 +317,15 @@ const issueUrl = (n: number) => `${SITE.repo}/issues/${n}`;
     transition: color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
   }
   .rm-desc a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .rm-desc b { color: var(--ink-1); font-weight: 500; }
+
+  .rm-shipped { list-style: none; padding: 0; margin: 18px 0 0; display: grid; gap: 8px; }
+  .rm-shipped li {
+    display: grid; grid-template-columns: 52px 1fr; gap: 12px; align-items: baseline;
+    color: var(--ink-2); font-size: 14px; line-height: 1.5;
+  }
+  .rm-shipped .rm-issue { font-family: var(--mono); font-size: 12px; justify-self: start; }
 
   /* Tail callouts */
   .rm-tail { border-top: 1px solid var(--line); }

@@ -4,6 +4,10 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 
 ## [Unreleased]
 
+### Security
+- **Dependency advisories cleared.** rustls 0.23.46, rustls-webpki 0.103.16 and webpki-roots 1.0.11 (TLS downgrade, handshake and distrusted-intermediate fixes); quinn-proto, crossbeam-epoch, quick-xml (via plist), tokio. The app's own `zip` moves 2 → 9 (symlink, permission and SUID handling in `extract()`, used for CLI-tool downloads) with only the deflate codec, dropping the bzip2/lzma C libraries. Frontend: Vite, PostCSS, nanoid and Babel patched; Vitest 3 → 4 (Tinypool RCE, dev-only); Monaco 0.55 → 0.57 (bundled DOMPurify). Docs site: in-range Astro dependency fixes.
+- **Not yet fixable here:** `zip` 4.x inside `tauri-plugin-updater` (no patched 4.x; update archives are signature-verified before extraction), `rsa` in sqlx's MySQL driver (no fixed release; QueryDen only encrypts with the server's public key), `rkyv` (in the lockfile, not compiled in), and Astro ≥ 7.2.8 for the docs site (needs Node ≥ 22.23 on the build host).
+
 ### Query console (all engines)
 - **Each editor tab is its own database session.** Statements used to run on whichever pooled connection was free, so `BEGIN; …; COMMIT` across runs autocommitted the middle statements and left a connection idle in transaction, and `SET`, `SET ROLE`, temp tables, prepared statements and cursors vanished between runs. Tabs now pin a dedicated connection (`plugin:sql|run`); the toolbar transaction buttons and grid edits use the same session. Idle sessions dropped by a NAT/pooler reconnect automatically with a notice.
 - **Rows *and* affected counts for every statement.** Execution no longer guesses SELECT-vs-execute from keywords: data-modifying CTEs, `DELETE … RETURNING`, `CALL`, `FETCH` and `SELECT fn()` all return what they produce. Empty results keep their column headers; duplicate column names (`SELECT a.id, b.id`) both survive.
@@ -35,7 +39,7 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 - **Exports:** RFC 4180 CSV, escaped XML/HTML, quoted SQL, `IS NULL` in generated WHERE clauses, and a native **Excel `.xlsx`** export (bold frozen header, typed cells). The "Exported …" toast disappears after a moment instead of staying on screen.
 - **AI assistant:** the model list is fetched live from OpenAI, Anthropic, Gemini or the local server; calls go through the backend (the CSP blocked them before); the API key is sealed with AES-256-GCM instead of stored in plain text.
 - **Data safety:** a connection/vault/settings/history file that fails to load is never overwritten by an empty list, and every storage write is atomic (temp file + fsync + rename, created `0600`).
-- **SSH:** key authentication passed the private key as the public key (always failed); `~` in key paths; Test SSH accepts hostnames; tunnel errors are reported immediately instead of a 30 s pool timeout.
+- **SSH:** key authentication passed the private key as the public key (always failed); `~` in key paths; Test SSH accepts hostnames; tunnel errors are reported immediately instead of a 30 s pool timeout, and retrying right after a failed tunnel no longer gets handed the dead tunnel.
 - **Platform:** storage/SSH/system commands no longer block the UI thread; Windows IPC allowed in the CSP; macOS Cmd+Option shortcuts and F1 help; psql console font fallbacks; image "Open" works; app icons fill their canvas; Linux releases build on Ubuntu 22.04 (glibc 2.35) and `.deb` installs get their own updater entry.
 
 ### Added

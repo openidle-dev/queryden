@@ -101,6 +101,16 @@ fn get_tunnels() -> &'static Mutex<HashMap<String, SshTunnel>> {
     TUNNELS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Drop `connection_id`'s registry entry only while it is still this tunnel:
+/// a newer tunnel for the same connection may have replaced it.
+fn unregister_tunnel(connection_id: &str, stop_signal: &Arc<Mutex<bool>>) {
+    if let Ok(mut map) = get_tunnels().lock() {
+        if map.get(connection_id).is_some_and(|t| Arc::ptr_eq(&t.stop_signal, stop_signal)) {
+            map.remove(connection_id);
+        }
+    }
+}
+
 fn find_free_port() -> Result<u16, String> {
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
@@ -168,9 +178,7 @@ pub fn create_ssh_tunnel(
             let _ = ready_tx.send(Err(e.clone()));
             eprintln!("SSH tunnel error: {}", e);
         }
-        if let Ok(mut map) = get_tunnels().lock() {
-            map.remove(&conn_id_for_thread);
-        }
+        unregister_tunnel(&conn_id_for_thread, &stop_signal_clone);
     });
 
     map.insert(
@@ -190,14 +198,17 @@ pub fn create_ssh_tunnel(
     // 30 s later as an opaque database "pool timed out".
     match ready_rx.recv_timeout(Duration::from_secs(45)) {
         Ok(Ok(())) => Ok(tunnel_info),
-        Ok(Err(e)) => Err(e),
+        // Unregister here rather than leave it to the exiting thread: until
+        // then the dead entry would be handed to a retry as a live tunnel.
+        Ok(Err(e)) => {
+            unregister_tunnel(&connection_id, &stop_signal);
+            Err(e)
+        }
         Err(_) => {
             if let Ok(mut stop) = stop_signal.lock() {
                 *stop = true;
             }
-            if let Ok(mut map) = get_tunnels().lock() {
-                map.remove(&connection_id);
-            }
+            unregister_tunnel(&connection_id, &stop_signal);
             Err(format!("SSH tunnel to {} did not come up within 45 seconds", tunnel_info.remote_host))
         }
     }
@@ -576,8 +587,28 @@ mod tests {
         .unwrap_err();
         assert!(err.contains("Failed to connect to SSH server"), "{err}");
         assert!(started.elapsed() < Duration::from_secs(10));
-        // Failed tunnels don't linger in the registry.
+        // Failed tunnels don't linger in the registry, so a retry fails
+        // again instead of being handed the dead tunnel's port.
         assert!(get_tunnel_status("qd-test-refused".into()).unwrap().is_none());
+        let retry = create_ssh_tunnel(
+            "qd-test-refused".into(), "127.0.0.1".into(), closed, "u".into(),
+            Some("p".into()), None, None, "db".into(), 5432,
+        );
+        assert!(retry.is_err(), "retry returned a dead tunnel: {retry:?}");
+    }
+
+    #[test]
+    fn an_old_tunnel_never_unregisters_its_replacement() {
+        let old_signal = Arc::new(Mutex::new(false));
+        let new_signal = Arc::new(Mutex::new(false));
+        get_tunnels().lock().unwrap().insert(
+            "qd-test-replaced".into(),
+            SshTunnel { local_port: 1, remote_host: "db".into(), remote_port: 5432, stop_signal: new_signal.clone() },
+        );
+        unregister_tunnel("qd-test-replaced", &old_signal);
+        assert!(get_tunnel_status("qd-test-replaced".into()).unwrap().is_some());
+        unregister_tunnel("qd-test-replaced", &new_signal);
+        assert!(get_tunnel_status("qd-test-replaced".into()).unwrap().is_none());
     }
 
     #[test]

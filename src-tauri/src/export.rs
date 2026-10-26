@@ -287,7 +287,7 @@ mod tests {
         }
 
         let mut archive = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
-        let names: Vec<String> = (0..archive.len()).map(|i| archive.by_index(i).unwrap().name().to_string()).collect();
+        let names: Vec<String> = archive.file_names().map(|n| n.unwrap().into_owned()).collect();
         for part in ["[Content_Types].xml", "_rels/.rels", "xl/workbook.xml", "xl/_rels/workbook.xml.rels", "xl/styles.xml", "xl/worksheets/sheet1.xml"] {
             assert!(names.contains(&part.to_string()), "missing {part}");
         }

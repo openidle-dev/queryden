@@ -1,0 +1,53 @@
+---
+title: psql console
+description: Run psql commands against any PostgreSQL connection from inside QueryDen, with meta-commands, expanded display and \watch.
+section: editor
+order: 60
+updated: 2026-10-26
+---
+
+import Callout from '../../../components/Callout.astro';
+
+The psql console runs your installed `psql` against a connection, in a tab, with the connection's credentials and SSH tunnel already applied. It's there for the things only psql does — `\d`, `\l`, `\df`, expanded display, `\watch` — next to the SQL editor.
+
+## Open it
+
+Right-click a database in the Database Explorer → **Open PSQL (Console)**. It's available for PostgreSQL, Supabase and CockroachDB connections, and always opens on the server and database you clicked.
+
+Type a command and press `Enter` (`Shift+Enter` for a new line). `↑` / `↓` recall earlier commands.
+
+## Commands
+
+| Input | What happens |
+|-------|--------------|
+| Any SQL | Runs and prints a psql-style table. NULL prints empty, line breaks inside values print as `↵`. Several statements separated by `;` run one after another. |
+| `\dt`, `\d table`, `\l`, `\dn`, `\df`, `\du` … | Passed to psql and printed exactly as psql prints them. |
+| `\c dbname` | Switches the console to another database on the same server (after checking it can connect). |
+| `\x`, `\x on`, `\x off` | Toggles expanded display for the following commands. |
+| `\watch 5` | Re-runs the last query every 5 seconds until you press **Stop**. |
+
+Server `NOTICE` and `WARNING` messages are printed with the output.
+
+<Callout type="info" title="Each command is its own psql run">
+The console starts a fresh `psql -c` for every command, so session state — `SET`, `BEGIN`, temporary tables — doesn't carry from one command to the next. For session work, use a regular editor tab: each one [keeps its own session](/docs/editor/statement-aware-run#each-tab-is-its-own-session).
+</Callout>
+
+## Which psql is used
+
+QueryDen looks for `psql` in this order and uses the first it finds:
+
+1. Your `PATH`.
+2. The standard install folders, even when they aren't on `PATH`:
+   - **Windows** — `Program Files\PostgreSQL\<version>\bin` (EDB installer), Scoop.
+   - **macOS** — Homebrew (`postgresql@<version>` and keg-only `libpq`), Postgres.app, `/Library/PostgreSQL` (EDB), MacPorts.
+   - **Linux** — `/usr/lib/postgresql/<version>/bin` (Debian/Ubuntu), `/usr/pgsql-<version>` (PGDG RPMs), `/usr/local/pgsql/bin`, Linuxbrew, Snap.
+
+When several versions are installed, the newest wins. A newer psql talks to older servers, so one recent client covers all your connections. **Settings → CLI Tools** shows which binary was found, where, and its version; press **Refresh** after installing one.
+
+If none is found, the console shows install instructions for your OS with a **Check Again** button — no restart needed.
+
+## Safe by default
+
+- The password is handed to psql through its environment, never on the command line where other processes could see it.
+- Your `~/.psqlrc` is skipped, so personal settings like `\timing` can't change what QueryDen reads back.
+- Connections time out after 15 seconds instead of hanging on an unreachable host.

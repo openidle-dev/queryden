@@ -2,9 +2,9 @@ import { describe, it, expect, vi } from "vitest";
 // Monaco's own word finder and suggest-list filter, so these tests see what
 // the suggest widget would show, not just what the provider returned.
 // @ts-expect-error - internal Monaco path, no .d.ts shipped
-import { ensureValidWordDefinition, getWordAtText } from "monaco-editor/esm/vs/editor/common/core/wordHelper.js";
+import { ensureValidWordDefinition, getWordAtText } from "monaco-editor/editor/common/core/wordHelper.js";
 // @ts-expect-error - internal Monaco path, no .d.ts shipped
-import { fuzzyScore } from "monaco-editor/esm/vs/base/common/filters.js";
+import { fuzzyScore } from "monaco-editor/base/common/filters.js";
 import { provideSqlCompletions, statementBoundsAt, type CompletionModelLike, type MonacoSuggestion } from "./sqlCompletionAdapter";
 import { sqlLanguageConfiguration } from "./sqlLanguage";
 import type { CompletionSchemaLike } from "./completionContext";

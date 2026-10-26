@@ -2,9 +2,9 @@ import { describe, it, expect } from "vitest";
 // Monaco's own Monarch compiler + lexer, run headless with stub services so
 // the grammar is tested exactly as the editor will execute it.
 // @ts-expect-error - internal Monaco path, no .d.ts shipped
-import { compile } from "monaco-editor/esm/vs/editor/standalone/common/monarch/monarchCompile.js";
+import { compile } from "monaco-editor/editor/standalone/common/monarch/monarchCompile.js";
 // @ts-expect-error - internal Monaco path, no .d.ts shipped
-import { MonarchTokenizer } from "monaco-editor/esm/vs/editor/standalone/common/monarch/monarchLexer.js";
+import { MonarchTokenizer } from "monaco-editor/editor/standalone/common/monarch/monarchLexer.js";
 import { encodeSemanticTokens, sqlMonarchLanguage } from "./sqlLanguage";
 import { classifySqlSpans } from "./completionContext";
 
