@@ -1,4 +1,6 @@
+mod ai;
 mod cli;
+mod export;
 mod ssh;
 mod storage;
 mod sysinfo;
@@ -6,7 +8,7 @@ mod updater;
 
 use tauri::Manager;
 use tracing::info;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 /// Build timestamp injected by build.rs at compile time. Surfaced to the
 /// frontend so the About dialog can show "built on YYYY-MM-DD" alongside
@@ -26,12 +28,17 @@ pub fn run() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 
+    // The env filter applies to log output only (a per-layer filter). As a
+    // global filter it would also switch off sqlx's PostgreSQL NOTICE events,
+    // which the SQL plugin captures to show RAISE NOTICE output in the console.
     tracing_subscriber::registry()
         .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "queryden=debug,tauri=info".into()),
+            tracing_subscriber::fmt::layer().with_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "queryden=debug,tauri=info".into()),
+            ),
         )
-        .with(tracing_subscriber::fmt::layer())
+        .with(tauri_plugin_sql::notice_capture_layer())
         .init();
 
     info!("Starting QueryDen...");
@@ -75,6 +82,7 @@ pub fn run() {
             storage::get_master_key_storage_status,
             sysinfo::get_system_info,
             get_build_info,
+            export::export_xlsx,
             cli::cli_check_tools,
             cli::cli_list_cached,
             cli::cli_remove_cached,
@@ -93,6 +101,8 @@ pub fn run() {
             ssh::close_all_tunnels,
             ssh::test_ssh_connection,
             updater::check_for_update_on_channel,
+            ai::ai_list_models,
+            ai::ai_complete,
         ])
         .setup(|app| {
             info!("QueryDen application setup complete");

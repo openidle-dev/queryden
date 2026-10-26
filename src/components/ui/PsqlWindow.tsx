@@ -156,7 +156,11 @@ export const PsqlWindow = memo(function PsqlWindow({
     }
   }, [isExecuting, showLiveGrace, entries, liveOutput]);
 
-  const fontFamily = settings.editorFontFamily || "'JetBrains Mono', 'Fira Code', 'Consolas', 'Cascadia Code', monospace";
+  // Always end with installed monospace fonts: a configured font that isn't
+  // installed (JetBrains Mono on a stock Windows/macOS) otherwise falls back
+  // to a proportional face and psql's columns stop lining up.
+  const MONO_FALLBACK = "'JetBrains Mono', 'Cascadia Mono', Consolas, 'SF Mono', Menlo, 'DejaVu Sans Mono', 'Liberation Mono', monospace";
+  const fontFamily = settings.editorFontFamily ? `${settings.editorFontFamily}, ${MONO_FALLBACK}` : MONO_FALLBACK;
 
   useEffect(() => {
     textareaRef.current?.focus();

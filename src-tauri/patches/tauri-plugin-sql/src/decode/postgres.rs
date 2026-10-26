@@ -2,21 +2,71 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
-use rust_decimal::prelude::ToPrimitive;
 use serde_json::Value as JsonValue;
-use sqlx::{postgres::PgValueRef, TypeInfo, Value, ValueRef};
+use sqlx::{
+    postgres::{PgTypeKind, PgValueFormat, PgValueRef},
+    TypeInfo, Value, ValueRef,
+};
 use time::{Date, OffsetDateTime, PrimitiveDateTime, Time};
 use uuid::Uuid;
 
 use crate::Error;
 
+/// Decode a value received in TEXT format (simple query protocol — the
+/// editor console). The text is exactly what psql prints; only types with a
+/// natural JSON form are converted, everything else stays verbatim.
+pub(crate) fn text_to_json(oid: Option<u32>, text: &str) -> JsonValue {
+    match oid {
+        Some(16) => JsonValue::Bool(text == "t"),
+        Some(21 | 23 | 26) => text.parse::<i64>().map(|v| JsonValue::Number(v.into())).unwrap_or_else(|_| JsonValue::String(text.into())),
+        Some(20) => text.parse::<i64>().map(super::int64_to_json).unwrap_or_else(|_| JsonValue::String(text.into())),
+        Some(700 | 701 | 1700) => super::exact_number_or_string(text),
+        Some(114 | 3802) => serde_json::from_str(text).unwrap_or_else(|_| JsonValue::String(text.into())),
+        Some(17) => match text.strip_prefix("\\x").and_then(decode_hex) {
+            Some(bytes) => super::bytes_to_json(&bytes),
+            None => JsonValue::String(text.into()),
+        },
+        _ => JsonValue::String(text.into()),
+    }
+}
+
+fn decode_hex(hex: &str) -> Option<Vec<u8>> {
+    if hex.len() % 2 != 0 {
+        return None;
+    }
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
+        .collect()
+}
+
+/// Decode a value received in BINARY format (prepared statements — the
+/// app's own catalog queries and the `select` command).
 pub(crate) fn to_json(v: PgValueRef) -> Result<JsonValue, Error> {
     if v.is_null() {
         return Ok(JsonValue::Null);
     }
+    if v.format() == PgValueFormat::Text {
+        let oid = v.type_info().oid().map(|o| o.0);
+        return Ok(match v.as_bytes() {
+            Ok(bytes) => match std::str::from_utf8(bytes) {
+                Ok(text) => text_to_json(oid, text),
+                // The session switched client_encoding away from UTF8: show
+                // the value with replacement characters instead of NULL.
+                Err(_) => JsonValue::String(String::from_utf8_lossy(bytes).into_owned()),
+            },
+            Err(_) => JsonValue::Null,
+        });
+    }
+
+    // sqlx only names `oid` itself; regclass, regrole, xid, … resolve to
+    // lowercase catalog names, so recognise the family by type OID.
+    if let Some(oid) = v.type_info().oid().map(|o| o.0).filter(|o| is_oid_family(*o)) {
+        return Ok(oid_family_binary(oid, v.as_bytes().ok()));
+    }
 
     let res = match v.type_info().name() {
-        "CHAR" | "VARCHAR" | "TEXT" | "NAME" => {
+        "CHAR" | "VARCHAR" | "TEXT" | "NAME" | "BPCHAR" | "CITEXT" => {
             if let Ok(v) = ValueRef::to_owned(&v).try_decode() {
                 JsonValue::String(v)
             } else {
@@ -32,14 +82,19 @@ pub(crate) fn to_json(v: PgValueRef) -> Result<JsonValue, Error> {
         }
         "FLOAT4" => {
             if let Ok(v) = ValueRef::to_owned(&v).try_decode::<f32>() {
-                JsonValue::from(v)
+                // Through the shortest f32 text, so 0.1f32 is 0.1, not 0.10000000149011612.
+                if v.is_finite() {
+                    super::exact_number_or_string(&v.to_string())
+                } else {
+                    super::float_to_json(v as f64)
+                }
             } else {
                 JsonValue::Null
             }
         }
         "FLOAT8" => {
             if let Ok(v) = ValueRef::to_owned(&v).try_decode::<f64>() {
-                JsonValue::from(v)
+                super::float_to_json(v)
             } else {
                 JsonValue::Null
             }
@@ -89,6 +144,13 @@ pub(crate) fn to_json(v: PgValueRef) -> Result<JsonValue, Error> {
                 JsonValue::Null
             }
         }
+        "TEXT[]" | "VARCHAR[]" | "NAME[]" | "BPCHAR[]" | "CHAR[]" => {
+            if let Ok(v) = ValueRef::to_owned(&v).try_decode::<Vec<Option<String>>>() {
+                JsonValue::Array(v.into_iter().map(|s| s.map(JsonValue::String).unwrap_or(JsonValue::Null)).collect())
+            } else {
+                JsonValue::Null
+            }
+        }
         "BOOL" => {
             if let Ok(v) = ValueRef::to_owned(&v).try_decode() {
                 JsonValue::Bool(v)
@@ -96,189 +158,231 @@ pub(crate) fn to_json(v: PgValueRef) -> Result<JsonValue, Error> {
                 JsonValue::Null
             }
         }
-        "DATE" => {
-            if let Ok(v) = ValueRef::to_owned(&v).try_decode::<Date>() {
-                JsonValue::String(v.to_string())
-            } else {
-                JsonValue::Null
-            }
-        }
-        "TIME" => {
-            if let Ok(v) = ValueRef::to_owned(&v).try_decode::<Time>() {
-                JsonValue::String(v.to_string())
-            } else {
-                JsonValue::Null
-            }
-        }
-        "TIMESTAMP" => {
-            if let Ok(v) = ValueRef::to_owned(&v).try_decode::<PrimitiveDateTime>() {
-                JsonValue::String(v.to_string())
-            } else {
-                JsonValue::Null
-            }
-        }
-        "TIMESTAMPTZ" => {
-            if let Ok(v) = ValueRef::to_owned(&v).try_decode::<OffsetDateTime>() {
-                JsonValue::String(v.to_string())
-            } else {
-                JsonValue::Null
-            }
-        }
+        "DATE" => match v.as_bytes() {
+            Ok(b) if b == i32::MAX.to_be_bytes() => JsonValue::String("infinity".into()),
+            Ok(b) if b == i32::MIN.to_be_bytes() => JsonValue::String("-infinity".into()),
+            _ => ValueRef::to_owned(&v)
+                .try_decode::<Date>()
+                .map(|d| JsonValue::String(d.to_string()))
+                .unwrap_or(JsonValue::Null),
+        },
+        "TIME" => ValueRef::to_owned(&v)
+            .try_decode::<Time>()
+            .map(|t| JsonValue::String(format_time(t)))
+            .unwrap_or(JsonValue::Null),
+        "TIMESTAMP" => match infinity_timestamp(&v) {
+            Some(inf) => inf,
+            None => ValueRef::to_owned(&v)
+                .try_decode::<PrimitiveDateTime>()
+                .map(|dt| JsonValue::String(format!("{} {}", dt.date(), format_time(dt.time()))))
+                .unwrap_or(JsonValue::Null),
+        },
+        "TIMESTAMPTZ" => match infinity_timestamp(&v) {
+            Some(inf) => inf,
+            // Binary timestamptz is UTC; print it the way psql does with TimeZone=UTC.
+            None => ValueRef::to_owned(&v)
+                .try_decode::<OffsetDateTime>()
+                .map(|dt| JsonValue::String(format!("{} {}+00", dt.date(), format_time(dt.time()))))
+                .unwrap_or(JsonValue::Null),
+        },
         "JSON" | "JSONB" => ValueRef::to_owned(&v).try_decode().unwrap_or_default(),
         "BYTEA" => {
             if let Ok(v) = ValueRef::to_owned(&v).try_decode::<Vec<u8>>() {
-                JsonValue::Array(v.into_iter().map(|n| JsonValue::Number(n.into())).collect())
+                super::bytes_to_json(&v)
             } else {
                 JsonValue::Null
             }
         }
-        "NUMERIC" => {
-            if let Ok(v) = ValueRef::to_owned(&v).try_decode::<rust_decimal::Decimal>() {
-                if let Some(n) = v.to_f64().and_then(serde_json::Number::from_f64) {
-                    JsonValue::Number(n)
-                } else {
-                    JsonValue::String(v.to_string())
-                }
-            } else {
-                JsonValue::Null
+        "NUMERIC" => match v.as_bytes().ok().and_then(numeric_binary_to_string) {
+            Some(text) => super::exact_number_or_string(&text),
+            None => JsonValue::Null,
+        },
+        "INTERVAL" => match v.as_bytes() {
+            Ok(bytes) if bytes.len() >= 16 => {
+                let micros = i64::from_be_bytes(bytes[0..8].try_into().unwrap_or_default());
+                let days = i32::from_be_bytes(bytes[8..12].try_into().unwrap_or_default());
+                let months = i32::from_be_bytes(bytes[12..16].try_into().unwrap_or_default());
+                JsonValue::String(format_interval(months, days, micros))
             }
-        }
-        "INTERVAL" => {
-            // Decode INTERVAL from PostgreSQL binary format
-            // PgValueRef::as_bytes returns Result<&[u8], Error>
-            if let Ok(bytes) = v.as_bytes() {
-                if bytes.len() >= 16 {
-                    // INTERVAL binary: 8 bytes microseconds (i64 BE), 4 bytes days (i32 BE), 4 bytes months (i32 BE)
-                    let microseconds = i64::from_be_bytes([
-                        bytes[0], bytes[1], bytes[2], bytes[3],
-                        bytes[4], bytes[5], bytes[6], bytes[7],
-                    ]);
-                    let days = i32::from_be_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
-                    let months = i32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
-
-                    let mut parts = Vec::new();
-                    if months != 0 {
-                        parts.push(format!("{} mons", months));
-                    }
-                    if days != 0 {
-                        parts.push(format!("{} days", days));
-                    }
-                    if microseconds != 0 {
-                        let total_secs = microseconds / 1_000_000;
-                        let hours = (total_secs / 3600).abs();
-                        let mins = ((total_secs % 3600) / 60).abs();
-                        let secs = (total_secs % 60).abs();
-                        if microseconds < 0 {
-                            parts.push(format!("-{:02}:{:02}:{:02}", hours, mins, secs));
-                        } else {
-                            parts.push(format!("{:02}:{:02}:{:02}", hours, mins, secs));
-                        }
-                    }
-                    JsonValue::String(if parts.is_empty() {
-                        "00:00:00".to_string()
-                    } else {
-                        parts.join(" ")
-                    })
-                } else {
-                    JsonValue::Null
-                }
-            } else {
-                JsonValue::Null
-            }
-        }
-        "OID" => {
-            if let Ok(v) = ValueRef::to_owned(&v).try_decode::<i32>() {
-                JsonValue::Number(v.into())
-            } else {
-                JsonValue::Null
-            }
-        }
+            _ => JsonValue::Null,
+        },
         "VOID" => JsonValue::Null,
-        "regrole" => {
-            // regrole is an OID alias — PostgreSQL transmits it as the role name
-            // in text mode or as a 4-byte OID in binary mode. In practice the
-            // plugin receives the text form, so try as_str first.
-            if let Ok(s) = v.as_str() {
-                JsonValue::String(s.to_string())
-            } else if let Ok(v) = ValueRef::to_owned(&v).try_decode::<String>() {
-                JsonValue::String(v)
-            } else if let Ok(v) = ValueRef::to_owned(&v).try_decode::<i32>() {
-                JsonValue::Number(v.into())
-            } else {
-                JsonValue::Null
-            }
-        }
-        "INET" => {
-            // Decode INET from PostgreSQL binary format.
-            // Binary: 1 byte family (2=IPv4, 3=IPv6), 1 byte prefix bits,
-            // 1 byte is_cidr flag, 1 byte address length (nb), then nb address bytes.
-            if let Ok(bytes) = v.as_bytes() {
-                if bytes.len() >= 8 {
-                    let family = bytes[0];
-                    let nb = bytes[3] as usize;
-                    if bytes.len() >= 4 + nb {
-                        match family {
-                            2 => {
-                                let addr = std::net::Ipv4Addr::new(bytes[4], bytes[5], bytes[6], bytes[7]);
-                                JsonValue::String(addr.to_string())
-                            }
-                            3 if nb == 16 => {
-                                let mut octets = [0u8; 16];
-                                octets.copy_from_slice(&bytes[4..20]);
-                                let addr = std::net::Ipv6Addr::from(octets);
-                                JsonValue::String(addr.to_string())
-                            }
-                            _ => JsonValue::Null,
+        "INET" | "CIDR" => {
+            // Binary: family (2=IPv4, 3=IPv6), prefix bits, is_cidr, address length, address.
+            match v.as_bytes() {
+                Ok(bytes) if bytes.len() >= 4 && bytes.len() >= 4 + bytes[3] as usize => {
+                    let bits = bytes[1];
+                    let addr: Option<std::net::IpAddr> = match (bytes[0], bytes[3]) {
+                        (2, 4) => Some(std::net::Ipv4Addr::new(bytes[4], bytes[5], bytes[6], bytes[7]).into()),
+                        (3, 16) => {
+                            let mut octets = [0u8; 16];
+                            octets.copy_from_slice(&bytes[4..20]);
+                            Some(std::net::Ipv6Addr::from(octets).into())
                         }
-                    } else {
-                        JsonValue::Null
+                        _ => None,
+                    };
+                    match addr {
+                        Some(a) => {
+                            let full = if a.is_ipv4() { 32 } else { 128 };
+                            let show_bits = bits != full || v.type_info().name() == "CIDR";
+                            JsonValue::String(if show_bits { format!("{a}/{bits}") } else { a.to_string() })
+                        }
+                        None => JsonValue::Null,
                     }
-                } else {
-                    JsonValue::Null
                 }
-            } else {
-                JsonValue::Null
+                _ => JsonValue::Null,
             }
         }
-        // Handle custom types (enums, domains, etc.) by trying to decode as string
         _ => {
-            let type_name = v.type_info().name().to_string();
-            // PostgreSQL transmits ENUMs (like `ansible.log_stream`, `ansible.job_status`)
-            // as their text labels even in binary mode. `v.as_str()` reads the raw text
-            // buffer directly without requiring a matching string-type OID, so it works
-            // for custom ENUMs where `try_decode::<String>()` would fail.
-            if let Ok(s) = v.as_str() {
-                log::warn!("unsupported type {type_name} decoded as string via as_str");
-                JsonValue::String(s.to_string())
-            } else if let Ok(v) = ValueRef::to_owned(&v).try_decode::<String>() {
-                log::warn!("unsupported type {type_name} decoded as string");
-                JsonValue::String(v)
-            } else if let Ok(v) = ValueRef::to_owned(&v).try_decode::<Vec<String>>() {
-                // Handle ARRAY types by joining elements
-                log::warn!("unsupported array type {type_name} decoded as JSON array");
-                JsonValue::Array(v.into_iter().map(JsonValue::String).collect())
-            } else if let Ok(v) = ValueRef::to_owned(&v).try_decode::<i32>() {
-                // Handle OID, XID, CID as integers
-                JsonValue::Number(v.into())
-            } else if let Ok(v) = ValueRef::to_owned(&v).try_decode::<i64>() {
-                JsonValue::Number(v.into())
-            } else if let Ok(v) = ValueRef::to_owned(&v).try_decode::<bool>() {
-                JsonValue::Bool(v)
-            } else if let Ok(v) = ValueRef::to_owned(&v).try_decode::<f64>() {
-                if let Some(n) = serde_json::Number::from_f64(v) {
-                    JsonValue::Number(n)
-                } else {
-                    log::warn!("unsupported type {type_name} — f64 decode failed to convert to JSON number, returning null");
-                    JsonValue::Null
+            let type_info = v.type_info().into_owned();
+            // `kind()` panics (unreachable!) on unresolved type declarations,
+            // and release builds abort on panic — only ask resolved types.
+            let resolved = type_info.oid().is_some() && type_info.name() != "?";
+            match resolved.then(|| type_info.kind()) {
+                // Enum labels are sent as their text even in binary format.
+                Some(PgTypeKind::Enum(_)) => v.as_str().map(|s| JsonValue::String(s.to_string())).unwrap_or(JsonValue::Null),
+                _ => {
+                    if let Ok(s) = ValueRef::to_owned(&v).try_decode::<String>() {
+                        JsonValue::String(s)
+                    } else {
+                        // Reading other binary payloads as UTF-8 produced
+                        // control-character garbage; say what the value is instead.
+                        log::warn!("no binary decoder for type {}", type_info.name());
+                        JsonValue::String(format!("<{}>", type_info.name().to_lowercase()))
+                    }
                 }
-            } else {
-                log::warn!("unsupported type {type_name} — no fallback decode succeeded, returning null");
-                JsonValue::Null
             }
         }
     };
 
     Ok(res)
+}
+
+/// oid, xid, cid, xid8 and the reg* aliases (regproc … regcollation).
+fn is_oid_family(oid: u32) -> bool {
+    matches!(oid, 24 | 26 | 28 | 29 | 2202..=2206 | 3734 | 3769 | 4089 | 4096 | 4191 | 5069)
+}
+
+/// Binary form is the raw number (4 bytes; xid8 is 8). A reg* value's name
+/// only exists in text format, so app queries cast those to `::text`.
+fn oid_family_binary(oid: u32, bytes: Option<&[u8]>) -> JsonValue {
+    match bytes {
+        Some(b) if oid == 5069 && b.len() == 8 => {
+            super::int64_to_json(i64::from_be_bytes(b.try_into().unwrap_or_default()))
+        }
+        Some(b) if b.len() == 4 => JsonValue::Number(u32::from_be_bytes([b[0], b[1], b[2], b[3]]).into()),
+        _ => JsonValue::Null,
+    }
+}
+
+fn infinity_timestamp(v: &PgValueRef) -> Option<JsonValue> {
+    match v.as_bytes() {
+        Ok(b) if b == i64::MAX.to_be_bytes() => Some(JsonValue::String("infinity".into())),
+        Ok(b) if b == i64::MIN.to_be_bytes() => Some(JsonValue::String("-infinity".into())),
+        _ => None,
+    }
+}
+
+/// `HH:MM:SS` plus fractional seconds only when present, trailing zeros
+/// trimmed — psql's rendering (`time`'s Display prints `12:00:00.0`).
+fn format_time(t: Time) -> String {
+    let (h, m, s, micros) = t.as_hms_micro();
+    if micros == 0 {
+        format!("{h:02}:{m:02}:{s:02}")
+    } else {
+        let frac = format!("{micros:06}");
+        format!("{h:02}:{m:02}:{s:02}.{}", frac.trim_end_matches('0'))
+    }
+}
+
+/// PostgreSQL's default `IntervalStyle = postgres` rendering:
+/// `1 year 2 mons 3 days 04:05:06.789`.
+fn format_interval(months: i32, days: i32, micros: i64) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let unit = |n: i64, one: &str, many: &str| format!("{n} {}", if n.abs() == 1 { one } else { many });
+    let (years, mons) = (months / 12, months % 12);
+    if years != 0 {
+        parts.push(unit(years as i64, "year", "years"));
+    }
+    if mons != 0 {
+        parts.push(unit(mons as i64, "mon", "mons"));
+    }
+    if days != 0 {
+        parts.push(unit(days as i64, "day", "days"));
+    }
+    if micros != 0 || parts.is_empty() {
+        let sign = if micros < 0 { "-" } else { "" };
+        let total = micros.unsigned_abs();
+        let (secs, frac) = (total / 1_000_000, total % 1_000_000);
+        let mut time = format!("{sign}{:02}:{:02}:{:02}", secs / 3600, (secs % 3600) / 60, secs % 60);
+        if frac != 0 {
+            time.push('.');
+            time.push_str(format!("{frac:06}").trim_end_matches('0'));
+        }
+        parts.push(time);
+    }
+    parts.join(" ")
+}
+
+/// Exact text of a binary-format NUMERIC: base-10000 digit groups, a weight
+/// (position of the first group), sign/special flags and display scale.
+/// Handles NaN/±Infinity and values beyond rust_decimal's 28 digits.
+fn numeric_binary_to_string(b: &[u8]) -> Option<String> {
+    if b.len() < 8 {
+        return None;
+    }
+    let ndigits = i16::from_be_bytes([b[0], b[1]]) as usize;
+    let weight = i16::from_be_bytes([b[2], b[3]]) as i32;
+    let sign = u16::from_be_bytes([b[4], b[5]]);
+    let dscale = u16::from_be_bytes([b[6], b[7]]) as usize;
+    match sign {
+        0xC000 => return Some("NaN".into()),
+        0xD000 => return Some("Infinity".into()),
+        0xF000 => return Some("-Infinity".into()),
+        _ => {}
+    }
+    if b.len() < 8 + ndigits * 2 {
+        return None;
+    }
+    let digit = |i: i32| -> u16 {
+        if i < 0 || i as usize >= ndigits {
+            0
+        } else {
+            let at = 8 + i as usize * 2;
+            u16::from_be_bytes([b[at], b[at + 1]])
+        }
+    };
+
+    let mut out = String::new();
+    if sign == 0x4000 {
+        out.push('-');
+    }
+    if weight < 0 {
+        out.push('0');
+    } else {
+        for i in 0..=weight {
+            if i == 0 {
+                out.push_str(&digit(i).to_string());
+            } else {
+                out.push_str(&format!("{:04}", digit(i)));
+            }
+        }
+    }
+    if dscale > 0 {
+        let mut frac = String::new();
+        let mut i = weight + 1;
+        while frac.len() < dscale {
+            frac.push_str(&format!("{:04}", digit(i)));
+            i += 1;
+        }
+        frac.truncate(dscale);
+        out.push('.');
+        out.push_str(&frac);
+    }
+    if out == "-0" || (out.starts_with("-0") && out[1..].chars().all(|c| c == '0' || c == '.')) {
+        out.remove(0);
+    }
+    Some(out)
 }
 
 /// Convert a `Vec<Option<i64>>` into a `Vec<JsonValue>`, preserving the
@@ -375,6 +479,63 @@ mod tests {
         assert_eq!(out[0].as_i64(), Some(1));
         assert!(out[1].is_null(), "expected JSON null, got {:?}", out[1]);
         assert_eq!(out[2].as_i64(), Some(3));
+    }
+
+    fn numeric_bytes(ndigits: i16, weight: i16, sign: u16, dscale: u16, digits: &[i16]) -> Vec<u8> {
+        let mut b = Vec::new();
+        for v in [ndigits.to_be_bytes(), weight.to_be_bytes(), sign.to_be_bytes(), dscale.to_be_bytes()] {
+            b.extend_from_slice(&v);
+        }
+        for d in digits {
+            b.extend_from_slice(&d.to_be_bytes());
+        }
+        b
+    }
+
+    #[test]
+    fn numeric_binary_is_exact() {
+        // 12345678901234567.89 = groups 1|2345|6789|0123|4567|8900, weight 4
+        let b = numeric_bytes(6, 4, 0, 2, &[1, 2345, 6789, 123, 4567, 8900]);
+        assert_eq!(numeric_binary_to_string(&b).unwrap(), "12345678901234567.89");
+        // 1.50: one group "1" weight 0, fraction group 5000, dscale 2
+        assert_eq!(numeric_binary_to_string(&numeric_bytes(2, 0, 0, 2, &[1, 5000])).unwrap(), "1.50");
+        // -0.0042: weight -1 (first group is 0042 after the point)
+        assert_eq!(numeric_binary_to_string(&numeric_bytes(1, -1, 0x4000, 4, &[42])).unwrap(), "-0.0042");
+        assert_eq!(numeric_binary_to_string(&numeric_bytes(0, 0, 0xC000, 0, &[])).unwrap(), "NaN");
+        assert_eq!(numeric_binary_to_string(&numeric_bytes(0, 0, 0, 0, &[])).unwrap(), "0");
+    }
+
+    #[test]
+    fn oid_family_binary_values() {
+        // regrole (4096) is named "regrole" by sqlx, not "REGROLE".
+        assert!(is_oid_family(4096) && is_oid_family(2205) && is_oid_family(28) && is_oid_family(26));
+        assert!(!is_oid_family(23) && !is_oid_family(25));
+        assert_eq!(oid_family_binary(4096, Some(&10u32.to_be_bytes())), serde_json::json!(10));
+        assert_eq!(oid_family_binary(28, Some(&u32::MAX.to_be_bytes())), serde_json::json!(4294967295u32));
+        assert_eq!(oid_family_binary(5069, Some(&742i64.to_be_bytes())), serde_json::json!(742));
+        assert_eq!(oid_family_binary(26, Some(&[1, 2])), JsonValue::Null);
+    }
+
+    #[test]
+    fn intervals_and_times_print_like_psql() {
+        assert_eq!(format_interval(14, 3, 14_706_789_000), "1 year 2 mons 3 days 04:05:06.789");
+        assert_eq!(format_interval(0, 1, 0), "1 day");
+        assert_eq!(format_interval(0, 0, -1_500_000), "-00:00:01.5");
+        assert_eq!(format_interval(0, 0, 0), "00:00:00");
+        assert_eq!(format_time(Time::from_hms(12, 0, 0).unwrap()), "12:00:00");
+        assert_eq!(format_time(Time::from_hms_micro(1, 2, 3, 450_000).unwrap()), "01:02:03.45");
+    }
+
+    #[test]
+    fn text_format_values() {
+        assert_eq!(text_to_json(Some(16), "t"), JsonValue::Bool(true));
+        assert_eq!(text_to_json(Some(1700), "1.50"), JsonValue::String("1.50".into()));
+        assert_eq!(text_to_json(Some(1700), "2.5"), serde_json::json!(2.5));
+        assert_eq!(text_to_json(Some(20), "9223372036854775807"), JsonValue::String("9223372036854775807".into()));
+        assert_eq!(text_to_json(Some(3802), "{\"a\": 1}"), serde_json::json!({"a": 1}));
+        assert_eq!(text_to_json(Some(17), "\\x4869"), serde_json::json!([72, 105]));
+        assert_eq!(text_to_json(Some(2205), "pg_class"), JsonValue::String("pg_class".into()));
+        assert_eq!(text_to_json(None, "{a,b}"), JsonValue::String("{a,b}".into()));
     }
 
     #[test]

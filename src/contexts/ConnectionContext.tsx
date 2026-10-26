@@ -17,6 +17,7 @@ import {
 } from "../utils/ddlBuilders";
 import { buildConnectionString } from "../utils/connectionString";
 import { logger } from "../utils/logger";
+import { buildPgDdl, type PgObjectKind } from "../utils/pgDdl";
 
 export interface DatabaseConnection {
   id: string;
@@ -99,7 +100,7 @@ export interface SchemaItems {
   eventTriggers?: string[];
   extensions?: string[];
   languages?: string[];
-  columns?: { table_name: string; column_name: string }[];
+  columns?: { table_name: string; column_name: string; data_type?: string }[];
   foreignKeys?: { source_table: string; source_column: string; target_table: string; target_column: string }[];
   _ts?: number;
 }
@@ -168,6 +169,8 @@ interface ConnectionContextType {
   currentDb: any;
   schemaProgress: SchemaLoadingProgress;
   initialLoadDone: boolean;
+  /** Set when connections.json exists but could not be read; saving is blocked so it is never overwritten. */
+  connectionsLoadError: string | null;
   setActiveConnection: (conn: DatabaseConnection | null) => void;
   setSelectedDatabase: (db: string | null) => void;
   addConnection: (conn: DatabaseConnection) => void;
@@ -461,6 +464,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       return { schemaByDb: next };
     });
   const [initialLoadDone, setInitialLoadDone] = useState(false);
+  // A failed read (machine-lock / decryption error) must never be followed by
+  // a save: the in-memory list is empty, and persisting it would overwrite
+  // every stored connection on disk.
+  const [connectionsLoadError, setConnectionsLoadError] = useState<string | null>(null);
+  const connectionsLoadFailedRef = useRef(false);
   const schemaProgress = activeSession?.schemaProgress ?? IDLE_PROGRESS;
   const [vaultCredentials, setVaultCredentials] = useState<VaultCredential[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
@@ -498,6 +506,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         }
       } catch (e) {
         logger.error("Failed to load connections from file:", e);
+        connectionsLoadFailedRef.current = true;
+        setConnectionsLoadError(e instanceof Error ? e.message : String(e));
       } finally {
         setInitialLoadDone(true);
       }
@@ -551,18 +561,29 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     })();
   }, [folders, foldersLoaded]);
 
+  // Same rule as connections: after a failed read the in-memory list is
+  // empty, so saving would overwrite every stored vault credential.
+  const vaultLoadFailedRef = useRef(false);
+
   const reloadVaultCredentials = async () => {
     if (!isTauri()) return;
     try {
       const creds = await invokeCmd("load_vault_credentials", { vaultPassword: null });
       setVaultCredentials(creds.map(vaultDtoToCredential));
+      vaultLoadFailedRef.current = false;
     } catch (e) {
-      logger.error("Failed to load vault credentials:", e);
+      logger.error("Failed to load vault credentials — vault changes will not be saved:", e);
+      vaultLoadFailedRef.current = true;
+      setConnectionsLoadError((prev) => prev ?? `Credential vault: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
   const saveVaultCredentials = async (creds: VaultCredential[]) => {
     if (!isTauri()) return;
+    if (vaultLoadFailedRef.current) {
+      logger.error("Not saving vault credentials: the vault could not be read, and saving would overwrite it.");
+      return;
+    }
     try {
       await invokeCmd("save_vault_credentials", {
         credentials: creds.map(vaultCredentialToDto),
@@ -589,8 +610,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       }
     }
     
-    // Only save if the initial load has completed to avoid overwriting with empty state
-    if (initialLoadDone) {
+    // Only save after a SUCCESSFUL initial load: saving after a failed read
+    // would overwrite the stored connections with the empty in-memory list.
+    if (initialLoadDone && !connectionsLoadFailedRef.current) {
       saveToFile();
     }
   }, [connections, initialLoadDone]);
@@ -889,7 +911,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         // Load tablespaces
         try {
           const tsRows = await db.select<any[]>(
-            "SELECT spcname, spcowner::regrole AS owner, pg_tablespace_location(oid) AS location, COALESCE(pg_size_pretty(NULLIF(pg_tablespace_size(oid), 0)), '0 bytes') AS size FROM pg_tablespace ORDER BY spcname"
+            "SELECT spcname, spcowner::regrole::text AS owner, pg_tablespace_location(oid) AS location, COALESCE(pg_size_pretty(NULLIF(pg_tablespace_size(oid), 0)), '0 bytes') AS size FROM pg_tablespace ORDER BY spcname"
           );
           setTablespacesFor(tsRows.map((r: any) => ({ name: r.spcname, owner: r.owner, location: r.location, size: r.size })));
         } catch (e) {
@@ -1247,7 +1269,19 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     }
     
     try {
-      if (["postgres", "supabase", "cockroach"].includes(activeConnection.type)) {
+      const isPgFamily = ["postgres", "supabase", "cockroach"].includes(activeConnection.type);
+      // Server-side deparsers first; the legacy builders below remain as a
+      // fallback for catalogs that lack them (older CockroachDB releases).
+      if (isPgFamily && ["auto", "table", "view", "function"].includes(type)) {
+        try {
+          const qualified = schema && !name.includes(".") ? `${schema}.${name}` : name;
+          return await buildPgDdl(currentDb, qualified, (type === "table" ? "auto" : type) as PgObjectKind);
+        } catch (e) {
+          logger.debug("Catalog DDL failed; using legacy builder:", e);
+        }
+      }
+      if (type === "auto") type = "table";
+      if (isPgFamily) {
         if (type === "table") {
           let ddl = `CREATE TABLE ${name} (\n`;
           let ddlParts: string[] = [];
@@ -1431,7 +1465,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
                      left_type.typname AS left_type,
                      right_type.typname AS right_type,
                      result_type.typname AS result_type,
-                     o.oprcode::regproc AS func_name
+                     o.oprcode::regproc::text AS func_name
               FROM pg_operator o
               LEFT JOIN pg_type left_type ON o.oprleft = left_type.oid
               LEFT JOIN pg_type right_type ON o.oprright = right_type.oid
@@ -1539,10 +1573,10 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
               return `CREATE TYPE ${name} AS ENUM (${labels});`;
             } else if (ti.typtype === 'd') {
               const domainInfo = await currentDb.select(`
-                SELECT t.typbasetype::regtype AS base_type,
+                SELECT t.typbasetype::regtype::text AS base_type,
                        t.typdefault,
-                       (SELECT cc.consrc FROM pg_constraint cc
-                        WHERE cc.contypid = t.oid AND cc.contype = 'c' LIMIT 1) AS check_expr
+                       (SELECT pg_get_constraintdef(cc.oid, true) FROM pg_constraint cc
+                        WHERE cc.contypid = t.oid AND cc.contype = 'c' LIMIT 1) AS check_def
                 FROM pg_type t
                 WHERE t.oid = (SELECT t2.oid FROM pg_type t2
                                JOIN pg_namespace n2 ON t2.typnamespace = n2.oid
@@ -1554,8 +1588,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
                 if (domainInfo[0].typdefault) {
                   ddl += ` DEFAULT ${domainInfo[0].typdefault}`;
                 }
-                if (domainInfo[0].check_expr) {
-                  ddl += ` CONSTRAINT ${ti.type_name}_check CHECK (${domainInfo[0].check_expr})`;
+                if (domainInfo[0].check_def) {
+                  ddl += ` CONSTRAINT ${ti.type_name}_check ${domainInfo[0].check_def}`;
                 }
                 ddl += ';';
                 return ddl;
@@ -1610,9 +1644,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           try {
             const langInfo = await currentDb.select(`
               SELECT lanname, lanpltrusted,
-                     lanplcallfoid::regproc AS handler,
-                     laninline::regproc AS inline_handler,
-                     lanvalidator::regproc AS validator
+                     lanplcallfoid::regproc::text AS handler,
+                     laninline::regproc::text AS inline_handler,
+                     lanvalidator::regproc::text AS validator
               FROM pg_language
               WHERE lanname = $1 AND lanispl = true
             `, [name]);
@@ -1662,7 +1696,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         } else if (type === "tablespace") {
           try {
             const tsInfo = await currentDb.select(`
-              SELECT spcname, spcowner::regrole AS owner, pg_tablespace_location(oid) AS location, spcoptions
+              SELECT spcname, spcowner::regrole::text AS owner, pg_tablespace_location(oid) AS location, spcoptions
               FROM pg_tablespace WHERE spcname = $1
             `, [name]);
             if (!tsInfo || tsInfo.length === 0) {
@@ -2239,6 +2273,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         currentDb,
         schemaProgress,
         initialLoadDone,
+        connectionsLoadError,
         setActiveConnection,
         setSelectedDatabase,
         addConnection,

@@ -6,6 +6,7 @@ import {
   CheckToolResult,
   CliQueryResult,
   CliToolInfoDto,
+  CliToolSource,
 } from "../lib/ipc";
 
 export interface CliToolInfo {
@@ -13,6 +14,9 @@ export interface CliToolInfo {
   majorVersion: number | null;
   available: boolean;
   path: string | null;
+  source: CliToolSource | null;
+  version: string | null;
+  downloadable: boolean;
   systemInstallHint: string;
 }
 
@@ -84,6 +88,9 @@ function toCliToolInfo(t: CliToolInfoDto): CliToolInfo {
     majorVersion: t.major_version,
     available: t.available,
     path: t.path,
+    source: t.source,
+    version: t.version,
+    downloadable: t.downloadable,
     systemInstallHint: t.system_install_hint,
   };
 }

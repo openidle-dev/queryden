@@ -23,14 +23,28 @@ pub(crate) fn to_json(v: SqliteValueRef) -> Result<JsonValue, Error> {
         }
         "REAL" => {
             if let Ok(v) = v.to_owned().try_decode::<f64>() {
-                JsonValue::from(v)
+                super::float_to_json(v)
             } else {
                 JsonValue::Null
             }
         }
-        "INTEGER" | "NUMERIC" => {
+        "INTEGER" => {
             if let Ok(v) = v.to_owned().try_decode::<i64>() {
                 super::int64_to_json(v)
+            } else {
+                JsonValue::Null
+            }
+        }
+        // NUMERIC affinity stores integers and reals; 1.5 decoded as i64
+        // used to come back as NULL.
+        "NUMERIC" => {
+            let owned = v.to_owned();
+            if let Ok(i) = owned.try_decode::<i64>() {
+                super::int64_to_json(i)
+            } else if let Ok(f) = owned.try_decode::<f64>() {
+                super::float_to_json(f)
+            } else if let Ok(s) = owned.try_decode_unchecked::<String>() {
+                JsonValue::String(s)
             } else {
                 JsonValue::Null
             }
@@ -65,13 +79,19 @@ pub(crate) fn to_json(v: SqliteValueRef) -> Result<JsonValue, Error> {
         }
         "BLOB" => {
             if let Ok(v) = v.to_owned().try_decode::<Vec<u8>>() {
-                JsonValue::Array(v.into_iter().map(|n| JsonValue::Number(n.into())).collect())
+                super::bytes_to_json(&v)
             } else {
                 JsonValue::Null
             }
         }
         "NULL" => JsonValue::Null,
-        _ => return Err(Error::UnsupportedDatatype(v.type_info().name().to_string())),
+        _ => {
+            let owned = v.to_owned();
+            match owned.try_decode_unchecked::<String>() {
+                Ok(s) => JsonValue::String(s),
+                Err(_) => owned.try_decode_unchecked::<Vec<u8>>().map(|b| super::bytes_to_json(&b)).unwrap_or(JsonValue::Null),
+            }
+        }
     };
 
     Ok(res)

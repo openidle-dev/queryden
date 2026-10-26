@@ -21,16 +21,24 @@ export interface ShortcutKeyEvent {
   shiftKey: boolean;
   altKey: boolean;
   key: string;
+  /** Physical key (`KeyS`). Letters match on this when present: with Option
+   * (macOS) or AltGr (Windows layouts), `key` is a different character —
+   * Cmd+Option+S reports `ß`. */
+  code?: string;
 }
 
 export function matchGlobalShortcut(
   e: ShortcutKeyEvent
 ): GlobalShortcutAction | null {
   const isMod = e.ctrlKey || e.metaKey;
-  const keyLower = e.key.toLowerCase();
+  const keyLower = e.code && /^Key[A-Z]$/.test(e.code) ? e.code.slice(3).toLowerCase() : e.key.toLowerCase();
+
+  // F1 — Help (works everywhere; macOS reserves Cmd+H for "Hide").
+  if (!isMod && !e.altKey && !e.shiftKey && e.key === "F1") {
+    return { type: "open-help" };
+  }
 
   // Ctrl+H or Cmd+H — Help
-  // Note: On Mac, Cmd+H hides the window, but Ctrl+H is still matched.
   if (isMod && !e.altKey && !e.shiftKey && keyLower === "h") {
     return { type: "open-help" };
   }

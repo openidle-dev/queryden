@@ -13,7 +13,7 @@ import EditorWorker from "monaco-editor/editor/editor.worker?worker";
 // completion and table/alias colouring silently stop), and the API.
 // `monacoSetup.test.ts` fails if a Monaco upgrade adds one we don't import.
 //
-// We then re-add only the SQL Monarch contribution for syntax highlighting in
+// We then register only QueryDen's own SQL tokenizer (`sqlLanguage.ts`) for
 // the query editor, Compare dialog, and Definition viewer. SQL autocomplete
 // and hover providers are registered dynamically in QueryEditor at mount time.
 import "monaco-editor/features/register.all.js";
@@ -26,12 +26,14 @@ import "monaco-editor/editor/contrib/gotoError/browser/markerSelectionStatus.js"
 import "monaco-editor/editor/contrib/semanticTokens/browser/documentSemanticTokens.js";
 import "monaco-editor/editor/contrib/suggest/browser/suggestController.js";
 import "monaco-editor/editor/common/standaloneStrings.js";
-import "monaco-editor/languages/definitions/sql/register.js";
 import * as monacoRuntime from "monaco-editor/editor/editor.api.js";
+import { registerSqlLanguage } from "./sqlLanguage";
 
 // Borrow the namespace types from the main entry without dragging its runtime.
 import type * as MonacoTypes from "monaco-editor";
 const monaco = monacoRuntime as typeof MonacoTypes;
+
+registerSqlLanguage(monaco);
 
 // Wire the editor worker so Monaco doesn't log "Could not create web worker(s)"
 // and fall back to main-thread execution for diff / search / link computation.

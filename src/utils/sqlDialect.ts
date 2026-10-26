@@ -114,9 +114,12 @@ export function stripSqlToCode(sql: string, opts?: SqlLexerOptions): string {
 
     if (c === "'") {
       const start = i;
+      // Backslash escapes only in MySQL strings and PostgreSQL E'…' strings
+      // (same rule as splitStatements): `'C:\'` is a complete PG string.
+      const backslashEscapes = !!opts?.hashComments || ((sql[i - 1] === "E" || sql[i - 1] === "e") && !/[\w$]/.test(sql[i - 2] ?? ""));
       i++;
       while (i < sql.length) {
-        if (sql[i] === "\\" && i + 1 < sql.length) {
+        if (backslashEscapes && sql[i] === "\\" && i + 1 < sql.length) {
           i += 2;
           continue;
         }
@@ -199,12 +202,20 @@ export function stripSqlToCode(sql: string, opts?: SqlLexerOptions): string {
     }
 
     if (c === "/" && sql[i + 1] === "*") {
+      // PostgreSQL block comments nest; MySQL's don't.
       const start = i;
+      let depth = 1;
       i += 2;
-      while (i < sql.length) {
-        if (sql[i] === "*" && sql[i + 1] === "/") {
+      while (i < sql.length && depth > 0) {
+        if (!opts?.hashComments && sql[i] === "/" && sql[i + 1] === "*") {
+          depth++;
           i += 2;
-          break;
+          continue;
+        }
+        if (sql[i] === "*" && sql[i + 1] === "/") {
+          depth--;
+          i += 2;
+          continue;
         }
         i++;
       }
@@ -309,21 +320,48 @@ export function isSelectLike(sql: string, opts?: SqlLexerOptions): boolean {
 
 export interface DestructiveFlags {
   isTruncate: boolean;
+  /** The statement itself is a DELETE (not a DELETE inside a CTE or body). */
   isDelete: boolean;
+  /** The statement itself is an UPDATE (not `ON CONFLICT DO UPDATE`, `FOR UPDATE`). */
+  isUpdate: boolean;
+  /** WHERE at the statement's own level — one inside a subquery or CTE doesn't limit it. */
   hasWhere: boolean;
   isDrop: boolean;
+  /** TRUNCATE, DROP, or DELETE/UPDATE that affects every row. */
   isDestructive: boolean;
 }
 
-/** Lexer-aware destructive-operation classification. */
+/** Upper-case words at parenthesis depth 0 of already-cleaned SQL. */
+function topLevelWords(clean: string): string[] {
+  const words: string[] = [];
+  let depth = 0;
+  for (const m of clean.matchAll(/[()]|[A-Z_][A-Z0-9_$]*/g)) {
+    if (m[0] === "(") depth++;
+    else if (m[0] === ")") depth = Math.max(0, depth - 1);
+    else if (depth === 0) words.push(m[0]);
+  }
+  return words;
+}
+
+const STATEMENT_VERBS = new Set(["SELECT", "INSERT", "UPDATE", "DELETE", "MERGE", "TRUNCATE", "DROP", "VALUES", "TABLE", "CALL", "COPY"]);
+
+/**
+ * Lexer-aware destructive-operation classification of ONE statement
+ * (callers classify each statement of a script separately: in
+ * `DELETE FROM a; SELECT … WHERE x = 1` the WHERE belongs to the SELECT).
+ */
 export function classifyDestructive(sql: string, opts?: SqlLexerOptions): DestructiveFlags {
-  const clean = cleanSqlForKeywords(sql, opts);
-  const isTruncate = /\bTRUNCATE\b/.test(clean);
-  const isDelete = /\bDELETE\b/.test(clean);
-  const hasWhere = /\bWHERE\b/.test(clean);
-  const isDrop = /\bDROP\b/.test(clean);
-  const isDestructive = isTruncate || (isDelete && !hasWhere) || isDrop;
-  return { isTruncate, isDelete, hasWhere, isDrop, isDestructive };
+  const words = topLevelWords(cleanSqlForKeywords(sql, opts));
+  // The statement's verb: the first verb at depth 0, past any WITH … AS (…).
+  const verbIndex = words.findIndex((w) => STATEMENT_VERBS.has(w));
+  const verb = verbIndex >= 0 ? words[verbIndex] : "";
+  const isTruncate = verb === "TRUNCATE";
+  const isDrop = verb === "DROP" || words[0] === "DROP";
+  const isDelete = verb === "DELETE";
+  const isUpdate = verb === "UPDATE";
+  const hasWhere = verbIndex >= 0 && words.slice(verbIndex).includes("WHERE");
+  const isDestructive = isTruncate || isDrop || ((isDelete || isUpdate) && !hasWhere);
+  return { isTruncate, isDelete, isUpdate, hasWhere, isDrop, isDestructive };
 }
 
 /** Escape a string literal value: `'O''Brien'`. */

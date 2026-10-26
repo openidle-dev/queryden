@@ -4,6 +4,7 @@ import "../editor/monacoSetup";
 import Editor from "@monaco-editor/react";
 import { defineMonacoThemes, resolveMonacoTheme } from "../../utils/monacoThemes";
 import { useConnections } from "../../contexts/useConnections";
+import { buildPgDdl } from "../../utils/pgDdl";
 import { useTheme } from "../../contexts/ThemeContext";
 import { Dialog } from "../ui/Dialog";
 import { Button } from "../ui/Button";
@@ -11,11 +12,18 @@ import { Button } from "../ui/Button";
 interface DefinitionModalProps {
   isOpen: boolean;
   tableName: string;
+  /** "function" when opened from a call (`fn(`); "auto" resolves on the server. */
+  kind?: "auto" | "function";
+  /** The editor tab's own connection/database (defaults to the sidebar's). */
+  connectionId?: string;
+  database?: string;
   onClose: () => void;
 }
 
-export function DefinitionModal({ isOpen, tableName, onClose }: DefinitionModalProps) {
-  const { getDDL, activeConnection } = useConnections();
+const PG_FAMILY = ["postgres", "supabase", "cockroach"];
+
+export function DefinitionModal({ isOpen, tableName, kind = "auto", connectionId, database, onClose }: DefinitionModalProps) {
+  const { getDDL, activeConnection, selectedDatabase, ensureConnectionDb } = useConnections();
   const { theme } = useTheme();
   const [ddl, setDdl] = useState<string>("");
   const [loading, setLoading] = useState(false);
@@ -31,15 +39,41 @@ export function DefinitionModal({ isOpen, tableName, onClose }: DefinitionModalP
     setTimeout(() => setCopyStatus(null), 2000);
   };
 
+  // Look the name up where the tab runs: a tab on another connection or
+  // database than the sidebar's would otherwise search the wrong catalogue
+  // (or none, with nothing connected in the sidebar) and find nothing.
+  const elsewhere =
+    !!connectionId && (connectionId !== activeConnection?.id || (!!database && database !== selectedDatabase));
   useEffect(() => {
-    if (isOpen && tableName && activeConnection) {
-      setLoading(true);
-      getDDL("table", tableName).then((res) => {
-        setDdl(res);
-        setLoading(false);
+    if (!isOpen || !tableName) return;
+    let cancelled = false;
+    setLoading(true);
+    const load = async (): Promise<string> => {
+      if (elsewhere && connectionId) {
+        const ensured = await ensureConnectionDb(connectionId, database);
+        if (PG_FAMILY.includes(ensured.connection.type)) return buildPgDdl(ensured.db, tableName, kind);
+        return `-- Connect ${ensured.connection.name} in the explorer to view definitions on it.`;
+      }
+      if (!activeConnection) return "-- Connect to a database to view definitions.";
+      return getDDL(kind, tableName);
+    };
+    load()
+      .then((res) => {
+        if (!cancelled) setDdl(res || `-- No definition found for ${tableName}.`);
+      })
+      .catch((e) => {
+        if (!cancelled) setDdl(`-- Could not load definition: ${e instanceof Error ? e.message : String(e)}`);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
       });
-    }
-  }, [isOpen, tableName, activeConnection, getDDL]);
+    return () => {
+      cancelled = true;
+    };
+    // getDDL / ensureConnectionDb are new closures every render; refetching
+    // on each render raced older lookups against newer ones.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, tableName, kind, elsewhere, connectionId, database, activeConnection?.id, selectedDatabase]);
 
   return (
     <Dialog open={isOpen} onClose={onClose} className="max-w-4xl h-[70vh]">

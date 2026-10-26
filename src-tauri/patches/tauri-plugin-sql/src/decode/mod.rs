@@ -44,9 +44,52 @@ pub(crate) fn uint64_to_json(v: u64) -> JsonValue {
     }
 }
 
+/// A decimal rendered as text by the server (PostgreSQL numeric, MySQL
+/// DECIMAL, float output). It becomes a JSON number only when that number
+/// prints back to exactly the same text; otherwise the exact text is kept:
+/// `1.50` (scale), `12345678901234567.89` (beyond f64), `NaN`, `Infinity`.
+pub(crate) fn exact_number_or_string(text: &str) -> JsonValue {
+    if let Ok(f) = text.parse::<f64>() {
+        if f.is_finite() && f.to_string() == text {
+            if let Some(n) = serde_json::Number::from_f64(f) {
+                return JsonValue::Number(n);
+            }
+        }
+    }
+    JsonValue::String(text.to_string())
+}
+
+/// A float that may be NaN/±Infinity (JSON has no representation for them).
+pub(crate) fn float_to_json(v: f64) -> JsonValue {
+    if v.is_nan() {
+        return JsonValue::String("NaN".into());
+    }
+    if v.is_infinite() {
+        return JsonValue::String(if v > 0.0 { "Infinity" } else { "-Infinity" }.into());
+    }
+    serde_json::Number::from_f64(v).map(JsonValue::Number).unwrap_or(JsonValue::Null)
+}
+
+/// `bytes` as a JSON array of byte values — the contract the frontend's
+/// binary preview expects for bytea / BLOB columns.
+pub(crate) fn bytes_to_json(bytes: &[u8]) -> JsonValue {
+    JsonValue::Array(bytes.iter().map(|b| JsonValue::Number((*b).into())).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decimals_stay_exact() {
+        assert_eq!(exact_number_or_string("123.45"), serde_json::json!(123.45));
+        assert_eq!(exact_number_or_string("100"), serde_json::json!(100.0));
+        assert_eq!(exact_number_or_string("1.50"), serde_json::json!("1.50"));
+        assert_eq!(exact_number_or_string("12345678901234567.89"), serde_json::json!("12345678901234567.89"));
+        assert_eq!(exact_number_or_string("NaN"), serde_json::json!("NaN"));
+        assert_eq!(float_to_json(f64::INFINITY), serde_json::json!("Infinity"));
+        assert_eq!(float_to_json(0.25), serde_json::json!(0.25));
+    }
 
     #[test]
     fn safe_range_stays_json_number() {

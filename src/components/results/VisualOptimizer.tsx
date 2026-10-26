@@ -7,6 +7,7 @@ import {
   BarChart3, Target, Shield, Layers, ArrowRight, Sparkles, XCircle
 } from "lucide-react";
 import { useAI } from "../../store/aiStore";
+import { providerNeedsApiKey } from "../../lib/ai";
 import { callAI } from "../../lib/ai";
 import { logger } from "../../utils/logger";
 
@@ -174,7 +175,7 @@ export function VisualOptimizer({ data, onApplyFix }: VisualOptimizerProps) {
   const [aiAnalysis, setAIAnalysis] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<"tree" | "explain" | "analyze">("tree");
 
-  const canUseAI = ai.enabled && !!ai.apiKey;
+  const canUseAI = ai.enabled && (!providerNeedsApiKey(ai.provider) || !!ai.apiKey.trim());
 
   // Extract data and dbType from payload format
   const rawData = data?.data || data;
@@ -225,6 +226,14 @@ export function VisualOptimizer({ data, onApplyFix }: VisualOptimizerProps) {
       
       // Try different possible response formats
       if (rawData[0].Plan) return rawData[0].Plan;
+
+      // CockroachDB has no JSON plans: EXPLAIN returns one text line per row.
+      if (typeof rawData[0].info === "string") {
+        return {
+          "Node Type": "CockroachDB plan",
+          "Plan Notes": rawData.map((r: any) => r.info).join("\n"),
+        };
+      }
       
       const rawPlan = rawData[0]['QUERY PLAN'] || rawData[0]['query plan'] || rawData[0]['Plan'];
       if (rawPlan) {

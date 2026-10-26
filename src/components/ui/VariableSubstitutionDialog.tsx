@@ -149,6 +149,13 @@ function findVariableMatches(query: string): VariableMatch[] {
       continue;
     }
 
+    // `arr[lo:hi]`, `x:=1`: a colon right after an identifier, `]` or `)` is
+    // a slice bound / operator, not a variable introducer.
+    if (c === ":" && /[\w\])"]/.test(query[i - 1] ?? "")) {
+      i++;
+      continue;
+    }
+
     // Real variable: `:name`, `:name:default`, `:name?`, `:name:default?`.
     if (c === ":") {
       const m = VAR_RE.exec(query.slice(i));
@@ -170,6 +177,37 @@ function findVariableMatches(query: string): VariableMatch[] {
   return matches;
 }
 
+/** Character spans of every real `:variable` (same rules as substitution). */
+export function variableSpans(query: string): Array<{ start: number; end: number }> {
+  return findVariableMatches(query).map(({ start, end }) => ({ start, end }));
+}
+
+const NUMBER_RE = /^-?\d+(\.\d+)?$/;
+
+/** `:n:NUMBER`, `:d:DATE`, `:b:BOOLEAN` declare a type rather than a default. */
+function typeAnnotation(raw: string | undefined): QueryVariable["type"] | null {
+  switch ((raw ?? "").toUpperCase()) {
+    case "NUMBER":
+    case "NUMERIC":
+    case "INT":
+    case "INTEGER":
+      return "number";
+    case "DATE":
+      return "date";
+    case "BOOLEAN":
+    case "BOOL":
+      return "boolean";
+    default:
+      return null;
+  }
+}
+
+/** Numbers go in bare (`LIMIT :n` must stay valid on MySQL); everything else is quoted. */
+function literalFor(value: string, numeric: boolean): string {
+  if (numeric && NUMBER_RE.test(value.trim())) return value.trim();
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
 /** Parse :varName patterns from a SQL query string.
  *  Supports:
  *  - :varname — required text variable
@@ -183,8 +221,11 @@ export function extractVariables(query: string): QueryVariable[] {
   const vars: QueryVariable[] = [];
   for (const m of findVariableMatches(query)) {
     let inferredType: QueryVariable["type"] = "text";
-    if (m.defaultValue !== undefined) {
-      if (/^\d+(\.\d+)?$/.test(m.defaultValue)) {
+    const annotation = typeAnnotation(m.defaultValue);
+    if (annotation) {
+      inferredType = annotation;
+    } else if (m.defaultValue !== undefined) {
+      if (/^-?\d+(\.\d+)?$/.test(m.defaultValue)) {
         inferredType = "number";
       } else if (/^\d{4}-\d{2}-\d{2}/.test(m.defaultValue)) {
         inferredType = "date";
@@ -195,7 +236,7 @@ export function extractVariables(query: string): QueryVariable[] {
     if (!vars.find(v => v.name === m.name)) {
       vars.push({
         name: m.name,
-        defaultValue: m.defaultValue,
+        defaultValue: annotation ? undefined : m.defaultValue,
         isOptional: m.isOptional,
         type: inferredType,
         position: m.start,
@@ -219,14 +260,24 @@ export function substituteVariables(
   let lastEnd = 0;
   for (const m of matches) {
     result += query.slice(lastEnd, m.start);
+    const annotation = typeAnnotation(m.defaultValue);
+    const fallback = annotation ? undefined : m.defaultValue;
     const userValue = values[m.name];
-    const effective =
-      userValue !== undefined && userValue !== "" ? userValue : m.defaultValue;
-    if (effective !== undefined) {
-      const safe = String(effective).replace(/'/g, "''");
-      result += `'${safe}'`;
-    } else {
+    const effective = userValue !== undefined && userValue !== "" ? userValue : fallback;
+    const numeric = annotation === "number" || (fallback !== undefined && NUMBER_RE.test(fallback));
+    // `IN (:ids)` with `1, 2, 3` means three values, not one string.
+    const inList = /\bIN\s*\(\s*$/i.test(result);
+    if (effective === undefined) {
       result += "NULL";
+    } else if (inList && String(effective).includes(",")) {
+      result += String(effective)
+        .split(",")
+        .map(v => v.trim())
+        .filter(v => v.length > 0)
+        .map(v => literalFor(v, numeric || NUMBER_RE.test(v)))
+        .join(", ");
+    } else {
+      result += literalFor(String(effective), numeric);
     }
     lastEnd = m.end;
   }

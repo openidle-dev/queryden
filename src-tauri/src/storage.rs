@@ -31,6 +31,34 @@ struct LockoutState {
     lockout_until: u64,
 }
 
+/// Replace `path` atomically: write a sibling temp file (created 0600 on
+/// Unix, so secrets are never briefly world-readable), fsync it, then rename
+/// it over the target. A crash or power loss mid-write leaves either the old
+/// file or the new one — never a truncated, undecryptable file. One lock
+/// serializes all writers, since commands no longer run on the main thread.
+fn write_atomic(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
+    use std::io::Write;
+    static WRITE_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = WRITE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
+    tmp_name.push(".tmp");
+    let tmp = path.with_file_name(tmp_name);
+
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&tmp)?;
+    file.write_all(contents.as_ref())?;
+    file.sync_all()?;
+    drop(file);
+    fs::rename(&tmp, path)
+}
+
 fn set_restricted_permissions(path: &Path) {
     #[cfg(unix)]
     {
@@ -60,7 +88,7 @@ fn save_lockout_state(app_dir: &Path) {
     };
     let path = app_dir.join(".vault_lockout");
     if let Ok(json) = serde_json::to_string(&state) {
-        let _ = fs::write(&path, &json);
+        let _ = write_atomic(&path, &json);
         set_restricted_permissions(&path);
     }
 }
@@ -188,11 +216,15 @@ fn get_machine_id() -> String {
 fn detect_machine_id() -> String {
     #[cfg(target_os = "linux")]
     {
-        if let Ok(id) = fs::read_to_string("/etc/machine-id") {
-            return id.trim().to_string();
-        }
-        if let Ok(id) = fs::read_to_string("/var/lib/dbus/machine-id") {
-            return id.trim().to_string();
+        // An existing-but-empty /etc/machine-id (cloned VMs, minimal images)
+        // must fall through to the D-Bus copy rather than yield "".
+        for path in ["/etc/machine-id", "/var/lib/dbus/machine-id"] {
+            if let Ok(id) = fs::read_to_string(path) {
+                let id = id.trim();
+                if !id.is_empty() {
+                    return id.to_string();
+                }
+            }
         }
     }
 
@@ -200,11 +232,19 @@ fn detect_machine_id() -> String {
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
+        // -NoProfile: text printed by a user's PowerShell profile must never
+        // become part of the machine ID (a changed profile would change the
+        // fingerprint and lock the encrypted files). Only the UUID-shaped
+        // token of the output is used.
         if let Ok(output) = Command::new("powershell")
             .creation_flags(CREATE_NO_WINDOW)
-            .args(["-Command", "(Get-CimInstance -Class Win32_ComputerSystemProduct).UUID"])
+            .args(["-NoProfile", "-NonInteractive", "-Command", "(Get-CimInstance -Class Win32_ComputerSystemProduct).UUID"])
             .output() {
-            let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let text = String::from_utf8_lossy(&output.stdout);
+            if let Some(uuid) = text.split_whitespace().find(|t| t.len() == 36 && t.chars().filter(|c| *c == '-').count() == 4) {
+                return uuid.to_string();
+            }
+            let s = text.trim().to_string();
             if !s.is_empty() { return s; }
         }
     }
@@ -274,7 +314,7 @@ fn get_master_app_key(app_dir: &Path) -> Result<String, String> {
             warn!("Failed to persist master key to OS keyring");
         }
     }
-    if let Err(e) = fs::write(&mk_path, &new_key) {
+    if let Err(e) = write_atomic(&mk_path, &new_key) {
         warn!("Failed to persist master key to {mk_path:?}: {e}");
     } else {
         persisted = true;
@@ -639,7 +679,7 @@ pub struct FoldersData {
     pub machine_fingerprint: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_folders(app: tauri::AppHandle, folders: Vec<Folder>) -> Result<(), String> {
     let dir = ensure_app_dir(&app)?;
     let data = FoldersData {
@@ -650,12 +690,12 @@ pub fn save_folders(app: tauri::AppHandle, folders: Vec<Folder>) -> Result<(), S
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
     let encrypted = encrypt(&json, None, &dir)?;
     let path = dir.join("folders.json");
-    fs::write(&path, encrypted).map_err(|e| e.to_string())?;
+    write_atomic(&path, encrypted).map_err(|e| e.to_string())?;
     set_restricted_permissions(&path);
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn load_folders(app: tauri::AppHandle) -> Result<Vec<Folder>, String> {
     let dir = get_app_data_dir(&app);
     let path = dir.join("folders.json");
@@ -688,7 +728,7 @@ pub fn load_folders(app: tauri::AppHandle) -> Result<Vec<Folder>, String> {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_connections(app: tauri::AppHandle, connections: Vec<StoredConnection>, vault_password: Option<String>) -> Result<(), String> {
     let dir = ensure_app_dir(&app)?;
     let encrypted: Vec<StoredConnection> = connections
@@ -715,12 +755,12 @@ pub fn save_connections(app: tauri::AppHandle, connections: Vec<StoredConnection
     };
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
     let path = dir.join("connections.json");
-    fs::write(&path, json).map_err(|e| e.to_string())?;
+    write_atomic(&path, json).map_err(|e| e.to_string())?;
     set_restricted_permissions(&path);
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn load_connections(app: tauri::AppHandle, vault_password: Option<String>) -> Result<Vec<StoredConnection>, String> {
     let dir = get_app_data_dir(&app);
     let path = dir.join("connections.json");
@@ -765,7 +805,7 @@ pub struct ConnectionData {
     pub machine_fingerprint: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn export_connections(
     app: tauri::AppHandle,
     path: String,
@@ -802,12 +842,12 @@ pub fn export_connections(
         machine_fingerprint: get_machine_fingerprint(),
     };
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
-    fs::write(&path, json).map_err(|e| e.to_string())?;
+    write_atomic(Path::new(&path), json).map_err(|e| e.to_string())?;
     set_restricted_permissions(path.as_ref());
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn import_connections(app: tauri::AppHandle, path: String, vault_password: Option<String>) -> Result<usize, String> {
     let existing = load_connections(app.clone(), vault_password.clone())?;
     let data: ConnectionData = serde_json::from_str(
@@ -863,7 +903,7 @@ pub struct ImportAdvancedResult {
     pub folders: Vec<Folder>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn import_connections_advanced(
     app: tauri::AppHandle,
     connections: Vec<StoredConnection>,
@@ -984,7 +1024,7 @@ fn write_connection_data(dir: &std::path::Path, connections: Vec<StoredConnectio
     };
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
     let path = dir.join("connections.json");
-    fs::write(&path, json).map_err(|e| e.to_string())?;
+    write_atomic(&path, json).map_err(|e| e.to_string())?;
     set_restricted_permissions(&path);
     Ok(())
 }
@@ -998,7 +1038,7 @@ fn save_folders_inner(dir: &std::path::Path, folders: Vec<Folder>) -> Result<(),
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
     let encrypted = encrypt(&json, None, dir)?;
     let path = dir.join("folders.json");
-    fs::write(&path, encrypted).map_err(|e| e.to_string())?;
+    write_atomic(&path, encrypted).map_err(|e| e.to_string())?;
     set_restricted_permissions(&path);
     Ok(())
 }
@@ -1009,21 +1049,23 @@ pub struct SettingsData {
     pub version: u32,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_settings(app: tauri::AppHandle, settings: serde_json::Value) -> Result<(), String> {
     let dir = ensure_app_dir(&app)?;
+    let mut settings = settings;
+    seal_secret_settings(&mut settings, &dir)?;
     let data = SettingsData {
         settings,
         version: 1,
     };
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
     let path = dir.join("settings.json");
-    fs::write(&path, json).map_err(|e| e.to_string())?;
+    write_atomic(&path, json).map_err(|e| e.to_string())?;
     set_restricted_permissions(&path);
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn load_settings(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let dir = get_app_data_dir(&app);
     let path = dir.join("settings.json");
@@ -1031,8 +1073,60 @@ pub fn load_settings(app: tauri::AppHandle) -> Result<serde_json::Value, String>
         return Ok(serde_json::json!({}));
     }
     let json = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let data: SettingsData = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    let mut data: SettingsData = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+
+    // Files written before secrets were sealed hold the API key in plaintext;
+    // rewrite them sealed right away rather than waiting for the next save.
+    let had_plaintext = SECRET_SETTING_KEYS.iter().any(|k| {
+        data.settings
+            .get(*k)
+            .and_then(|v| v.as_str())
+            .is_some_and(|v| !v.is_empty() && !v.starts_with(SEALED_PREFIX))
+    });
+    if had_plaintext {
+        let mut sealed = data.settings.clone();
+        if seal_secret_settings(&mut sealed, &dir).is_ok() {
+            if let Ok(json) = serde_json::to_string_pretty(&SettingsData { settings: sealed, version: data.version }) {
+                if write_atomic(&path, json).is_ok() {
+                    set_restricted_permissions(&path);
+                }
+            }
+        }
+    }
+
+    open_secret_settings(&mut data.settings, &dir);
     Ok(data.settings)
+}
+
+/// Settings fields that hold secrets. `settings.json` is otherwise plain
+/// JSON; these are stored AES-256-GCM sealed with the same machine-locked key
+/// as the credential vault.
+const SECRET_SETTING_KEYS: &[&str] = &["aiApiKey"];
+const SEALED_PREFIX: &str = "sealed:v1:";
+
+fn seal_secret_settings(settings: &mut serde_json::Value, dir: &Path) -> Result<(), String> {
+    for key in SECRET_SETTING_KEYS {
+        let Some(slot) = settings.get_mut(*key) else { continue };
+        let Some(plain) = slot.as_str() else { continue };
+        if plain.is_empty() || plain.starts_with(SEALED_PREFIX) {
+            continue;
+        }
+        let sealed = encrypt(plain, None, dir)?;
+        *slot = serde_json::Value::String(format!("{SEALED_PREFIX}{sealed}"));
+    }
+    Ok(())
+}
+
+/// Reverse of `seal_secret_settings`. A value that can't be opened (file
+/// copied from another machine) becomes empty so the user re-enters it,
+/// rather than sending ciphertext to a provider as the key.
+fn open_secret_settings(settings: &mut serde_json::Value, dir: &Path) {
+    for key in SECRET_SETTING_KEYS {
+        let Some(slot) = settings.get_mut(*key) else { continue };
+        let Some(sealed) = slot.as_str().and_then(|v| v.strip_prefix(SEALED_PREFIX)) else { continue };
+        let plain = decrypt(sealed, None, dir);
+        *slot = serde_json::Value::String(if plain == sealed { String::new() } else { plain });
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1054,7 +1148,7 @@ pub struct QueryHistoryItem {
     pub success: bool,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_query_history(app: tauri::AppHandle, history: Vec<QueryHistoryItem>) -> Result<(), String> {
     let dir = ensure_app_dir(&app)?;
     let data = QueryHistoryData {
@@ -1065,12 +1159,12 @@ pub fn save_query_history(app: tauri::AppHandle, history: Vec<QueryHistoryItem>)
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
     let encrypted = encrypt(&json, None, &dir)?;
     let path = dir.join("query-history.json");
-    fs::write(&path, encrypted).map_err(|e| e.to_string())?;
+    write_atomic(&path, encrypted).map_err(|e| e.to_string())?;
     set_restricted_permissions(&path);
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn load_query_history(app: tauri::AppHandle) -> Result<Vec<QueryHistoryItem>, String> {
     let dir = get_app_data_dir(&app);
     let path = dir.join("query-history.json");
@@ -1090,16 +1184,16 @@ pub fn load_query_history(app: tauri::AppHandle) -> Result<Vec<QueryHistoryItem>
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_keymaps(app: tauri::AppHandle, keymaps: serde_json::Value) -> Result<(), String> {
     let dir = ensure_app_dir(&app)?;
     let json = serde_json::to_string_pretty(&keymaps).map_err(|e| e.to_string())?;
     let path = dir.join("keymaps.json");
-    fs::write(&path, json).map_err(|e| e.to_string())?;
+    write_atomic(&path, json).map_err(|e| e.to_string())?;
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn load_keymaps(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let dir = get_app_data_dir(&app);
     let path = dir.join("keymaps.json");
@@ -1111,16 +1205,16 @@ pub fn load_keymaps(app: tauri::AppHandle) -> Result<serde_json::Value, String> 
     Ok(data)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_templates(app: tauri::AppHandle, templates: serde_json::Value) -> Result<(), String> {
     let dir = ensure_app_dir(&app)?;
     let json = serde_json::to_string_pretty(&templates).map_err(|e| e.to_string())?;
     let path = dir.join("templates.json");
-    fs::write(&path, json).map_err(|e| e.to_string())?;
+    write_atomic(&path, json).map_err(|e| e.to_string())?;
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn load_templates(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let dir = get_app_data_dir(&app);
     let path = dir.join("templates.json");
@@ -1132,7 +1226,7 @@ pub fn load_templates(app: tauri::AppHandle) -> Result<serde_json::Value, String
     Ok(data)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_app_data_path(app: tauri::AppHandle) -> String {
     get_app_data_dir(&app).to_string_lossy().to_string()
 }
@@ -1154,7 +1248,7 @@ pub struct VaultData {
     pub salt: Option<String>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_vault_credentials(app: tauri::AppHandle, credentials: Vec<VaultCredential>, vault_password: Option<String>) -> Result<(), String> {
     let dir = ensure_app_dir(&app)?;
 
@@ -1193,12 +1287,12 @@ pub fn save_vault_credentials(app: tauri::AppHandle, credentials: Vec<VaultCrede
     };
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
     let path = dir.join("vault.json");
-    fs::write(&path, json).map_err(|e| e.to_string())?;
+    write_atomic(&path, json).map_err(|e| e.to_string())?;
     set_restricted_permissions(&path);
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn load_vault_credentials(app: tauri::AppHandle, vault_password: Option<String>) -> Result<Vec<VaultCredential>, String> {
     let dir = get_app_data_dir(&app);
     let path = dir.join("vault.json");
@@ -1287,7 +1381,7 @@ pub struct SavedQueryItem {
     pub created_at: i64,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_saved_queries(app: tauri::AppHandle, queries: Vec<SavedQueryItem>) -> Result<(), String> {
     let dir = ensure_app_dir(&app)?;
     let data = SavedQueryData {
@@ -1298,12 +1392,12 @@ pub fn save_saved_queries(app: tauri::AppHandle, queries: Vec<SavedQueryItem>) -
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
     let encrypted = encrypt(&json, None, &dir)?;
     let path = dir.join("saved-queries.json");
-    fs::write(&path, encrypted).map_err(|e| e.to_string())?;
+    write_atomic(&path, encrypted).map_err(|e| e.to_string())?;
     set_restricted_permissions(&path);
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn load_saved_queries(app: tauri::AppHandle) -> Result<Vec<SavedQueryItem>, String> {
     let dir = get_app_data_dir(&app);
     let path = dir.join("saved-queries.json");
@@ -1344,7 +1438,7 @@ pub struct LocalHistoryData {
     pub machine_fingerprint: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_local_history(app: tauri::AppHandle, entries: Vec<LocalHistoryEntry>) -> Result<(), String> {
     let dir = ensure_app_dir(&app)?;
     let data = LocalHistoryData {
@@ -1355,12 +1449,12 @@ pub fn save_local_history(app: tauri::AppHandle, entries: Vec<LocalHistoryEntry>
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
     let encrypted = encrypt(&json, None, &dir)?;
     let path = dir.join("local-history.json");
-    fs::write(&path, encrypted).map_err(|e| e.to_string())?;
+    write_atomic(&path, encrypted).map_err(|e| e.to_string())?;
     set_restricted_permissions(&path);
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn load_local_history(app: tauri::AppHandle) -> Result<Vec<LocalHistoryEntry>, String> {
     let dir = get_app_data_dir(&app);
     let path = dir.join("local-history.json");
@@ -1380,7 +1474,7 @@ pub fn load_local_history(app: tauri::AppHandle) -> Result<Vec<LocalHistoryEntry
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn clear_local_history(app: tauri::AppHandle) -> Result<(), String> {
     let dir = ensure_app_dir(&app)?;
     let path = dir.join("local-history.json");
@@ -1421,18 +1515,18 @@ pub struct SessionsData {
     pub version: u32,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_sessions(app: tauri::AppHandle, tabs: Vec<SessionTabDto>, active_tab_id: Option<String>, active_connection_id: Option<String>, active_database: Option<String>) -> Result<(), String> {
     let dir = ensure_app_dir(&app)?;
     let data = SessionsData { tabs, active_tab_id, active_connection_id, active_database, version: 1 };
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
     let path = dir.join("sessions.json");
-    fs::write(&path, json).map_err(|e| e.to_string())?;
+    write_atomic(&path, json).map_err(|e| e.to_string())?;
     set_restricted_permissions(&path);
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn load_sessions(app: tauri::AppHandle) -> Result<SessionsData, String> {
     let dir = get_app_data_dir(&app);
     let path = dir.join("sessions.json");
@@ -1450,7 +1544,7 @@ pub struct MasterKeyStorageStatus {
     pub status: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_master_key_storage_status(app: tauri::AppHandle) -> Result<MasterKeyStorageStatus, String> {
     let dir = ensure_app_dir(&app)?;
     let mk_path = dir.join(".master_key");
@@ -1472,4 +1566,67 @@ pub fn get_master_key_storage_status(app: tauri::AppHandle) -> Result<MasterKeyS
     Ok(MasterKeyStorageStatus {
         status: "unavailable".to_string(),
     })
+}
+
+#[cfg(test)]
+mod atomic_write_tests {
+    use super::*;
+
+    #[test]
+    fn replaces_contents_and_leaves_no_temp_file() {
+        let dir = std::env::temp_dir().join(format!("qd-atomic-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("connections.json");
+        write_atomic(&path, "old").unwrap();
+        write_atomic(&path, "new contents").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new contents");
+        assert!(!dir.join("connections.json.tmp").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod secret_settings_tests {
+    use super::*;
+
+    // The derived key is cached process-wide (the app has one data dir);
+    // tests with separate temp dirs must not derive it concurrently.
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn api_key_is_sealed_on_disk_and_opened_on_load() {
+        let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+        let dir = std::env::temp_dir().join(format!("qd-secrets-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut settings = serde_json::json!({ "aiApiKey": "sk-test-123", "aiModel": "m" });
+        seal_secret_settings(&mut settings, &dir).unwrap();
+        let stored = settings["aiApiKey"].as_str().unwrap().to_string();
+        assert!(stored.starts_with(SEALED_PREFIX), "{stored}");
+        assert!(!stored.contains("sk-test-123"));
+        assert_eq!(settings["aiModel"], "m");
+
+        // Sealing twice must not double-encrypt.
+        seal_secret_settings(&mut settings, &dir).unwrap();
+        assert_eq!(settings["aiApiKey"].as_str().unwrap(), stored);
+
+        open_secret_settings(&mut settings, &dir);
+        assert_eq!(settings["aiApiKey"], "sk-test-123");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn unreadable_sealed_value_becomes_empty() {
+        let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+        let dir = std::env::temp_dir().join(format!("qd-secrets-bad-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut settings = serde_json::json!({ "aiApiKey": format!("{SEALED_PREFIX}bm90LXZhbGlkLWNpcGhlcnRleHQ=") });
+        open_secret_settings(&mut settings, &dir);
+        assert_eq!(settings["aiApiKey"], "");
+        fs::remove_dir_all(&dir).ok();
+    }
 }

@@ -97,12 +97,12 @@ describe("buildCopyInsertSql", () => {
     expect(buildCopyInsertSql({
       dbType: "postgres",
       targetDb: "targetdb",
-      targetSchema: "devops",
+      targetSchema: "reporting",
       targetTable: "deployments",
-      srcSchema: "devops",
+      srcSchema: "reporting",
       srcTable: "deployments",
     })).toBe(
-      'INSERT INTO "targetdb"."devops"."deployments"\nSELECT * FROM "devops"."deployments"',
+      'INSERT INTO "targetdb"."reporting"."deployments"\nSELECT * FROM "reporting"."deployments"',
     );
   });
 
@@ -137,8 +137,8 @@ describe("buildCopyInsertSql", () => {
 
 describe("buildCountSql", () => {
   it("quotes schema-qualified tables", () => {
-    expect(buildCountSql("postgres", "devops", "deployments")).toBe(
-      'SELECT COUNT(*) as count FROM "devops"."deployments"',
+    expect(buildCountSql("postgres", "reporting", "deployments")).toBe(
+      'SELECT COUNT(*) as count FROM "reporting"."deployments"',
     );
     expect(buildCountSql("postgres", "public", EVIL)).toContain(`"public"."evil""; DROP TABLE users; --"`);
   });
@@ -154,15 +154,15 @@ describe("buildCopyPreviewSql", () => {
   it("quotes identifiers and formats sample values safely", () => {
     const sql = buildCopyPreviewSql({
       dbType: "postgres",
-      tableDisplay: "devops.deployments",
+      tableDisplay: "reporting.deployments",
       targetDb: "targetdb",
-      srcSchema: "devops",
+      srcSchema: "reporting",
       srcTable: "deployments",
       colNames: ["id", "name", "meta"],
       sampleRow: { id: 1, name: `o'brien`, meta: { a: 1 } },
       currentDbDisplay: "shop",
     });
-    expect(sql).toContain(`FROM "devops"."deployments"`);
+    expect(sql).toContain(`FROM "reporting"."deployments"`);
     expect(sql).toContain(`"id", "name", "meta"`);
     expect(sql).toContain(`1, 'o''brien', '{"a":1}'`);
     expect(sql).not.toContain("[object Object]");
@@ -186,7 +186,7 @@ describe("buildCopyPreviewSql", () => {
 describe("splitDisplayName", () => {
   it("splits bare and qualified names", () => {
     expect(splitDisplayName("deployments")).toEqual({ schema: null, table: "deployments" });
-    expect(splitDisplayName("devops.deployments")).toEqual({ schema: "devops", table: "deployments" });
+    expect(splitDisplayName("reporting.deployments")).toEqual({ schema: "reporting", table: "deployments" });
   });
 
   it("respects quoted dots", () => {

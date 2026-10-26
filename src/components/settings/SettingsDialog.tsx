@@ -1,10 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { X, Settings, Database, Play, Monitor, Keyboard, Zap, Trash2, Search, Import, Edit2, Copy, HardDrive, Shield, AlertTriangle, CheckCircle, AlertCircle, Download, Terminal, RefreshCw } from "lucide-react";
 import { useSettings } from "../../store/settingsStore";
 import { useKeymap, defaultKeymaps, useLiveTemplates } from "../../store/keymapStore";
 import { useAI, AIProvider } from "../../store/aiStore";
 import { useCliStore } from "../../store/cliStore";
-import { Sparkles, Bot } from "lucide-react";
+import { Sparkles, Bot, Check, Globe, Loader2 } from "lucide-react";
+import { listModels, providerNeedsApiKey, type AIModel } from "../../lib/ai";
 import { VaultCredential } from "../../contexts/ConnectionContext";
 import { useConnections } from "../../contexts/useConnections";
 import { useVault } from "../../store/vaultStore";
@@ -29,7 +30,7 @@ const categories: { id: SettingsCategory; label: string; icon: any; keywords: st
   { id: "explorer", label: "Database Explorer", icon: Database, keywords: ["view", "function", "trigger", "index", "constraint", "schema", "namespace", "tree", "explorer", "foreign tables", "empty groups", "startup", "reconnect", "reopen", "restore", "session", "connection", "launch", "open"] },
   { id: "copyTransfer", label: "Copy/Transfer", icon: Copy, keywords: ["copy", "transfer", "merge", "schema", "data", "method", "batch size", "parallel", "threads", "compression", "logging", "pg_dump"] },
   { id: "permissions", label: "Permissions & Rules", icon: Shield, keywords: ["drop", "truncate", "delete", "warn", "bypass", "rules", "safety", "guru", "dangerous"] },
-  { id: "ai", label: "AI Assistant", icon: Sparkles, keywords: ["ai", "assistant", "openai", "gemini", "anthropic", "llm", "api", "key", "model", "ollama", "gpt-4", "claude"] },
+  { id: "ai", label: "AI Assistant", icon: Sparkles, keywords: ["ai", "assistant", "openai", "gemini", "anthropic", "claude", "gpt", "llm", "api", "key", "model", "models", "endpoint", "local", "ollama", "lm studio"] },
   { id: "importExport", label: "Import/Export", icon: Import, keywords: ["import", "export", "csv", "json", "sql", "tsv", "xml", "html", "delimiter", "headers", "null", "quote"] },
   { id: "vault", label: "Credential Vault", icon: Shield, keywords: ["vault", "security", "credentials", "password", "username", "encryption", "master", "profiles"] },
   { id: "updates", label: "Updates", icon: Download, keywords: ["update", "updates", "beta", "channel", "stable", "release", "version", "auto-update", "prerelease"] },
@@ -683,6 +684,7 @@ function ImportExportSettings() {
         <div className="grid grid-cols-2 gap-x-8 gap-y-2 bg-[var(--surface-base)]/30 border border-[var(--neutral-6)] rounded-lg p-3">
           {[
             { id: "csv", label: "CSV (Comma-Separated Values)", ext: ".csv" },
+            { id: "excel", label: "Excel Workbook", ext: ".xlsx" },
             { id: "json", label: "JSON", ext: ".json" },
             { id: "xml", label: "XML Document", ext: ".xml" },
             { id: "html", label: "HTML Table", ext: ".html" },
@@ -859,9 +861,183 @@ function ToggleOption({ label, description, checked, onChange }: {
   );
 }
 
+const AI_PROVIDERS: { id: AIProvider; label: string; icon: string }[] = [
+  { id: "openai", label: "OpenAI", icon: "🤖" },
+  { id: "google", label: "Google Gemini", icon: "✨" },
+  { id: "anthropic", label: "Anthropic", icon: "🏛️" },
+  { id: "local", label: "Local (Ollama, LM Studio)", icon: "🏠" },
+];
+
+const AI_ENDPOINT_HELP: Record<AIProvider, { placeholder: string; hint: string }> = {
+  openai: {
+    placeholder: "https://api.openai.com",
+    hint: "Leave empty for OpenAI, or point at any OpenAI-compatible API (e.g. https://openrouter.ai/api/v1).",
+  },
+  anthropic: { placeholder: "https://api.anthropic.com", hint: "Leave empty unless you route requests through a proxy." },
+  google: { placeholder: "https://generativelanguage.googleapis.com", hint: "Leave empty unless you route requests through a proxy." },
+  local: {
+    placeholder: "http://localhost:11434",
+    hint: "Leave empty to try Ollama (localhost:11434), then LM Studio (localhost:1234). Any OpenAI-compatible server works, e.g. http://localhost:8000/v1.",
+  },
+};
+
+const MODEL_LIST_DEBOUNCE_MS = 600;
+
+interface ModelListState {
+  status: "idle" | "loading" | "ready" | "error";
+  models: AIModel[];
+  error: string | null;
+}
+
+const EMPTY_MODEL_LIST: ModelListState = { status: "idle", models: [], error: null };
+
+function ModelPicker({ models, value, onChange }: {
+  models: AIModel[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [highlight, setHighlight] = useState(0);
+  const listRef = useRef<HTMLUListElement>(null);
+
+  const term = query.trim().toLowerCase();
+  const filtered = term
+    ? models.filter((m) => m.id.toLowerCase().includes(term) || m.label.toLowerCase().includes(term))
+    : models;
+  const customId = query.trim();
+  const offerCustom = customId !== "" && !models.some((m) => m.id === customId);
+  const optionCount = filtered.length + (offerCustom ? 1 : 0);
+
+  useEffect(() => {
+    if (!open) return;
+    listRef.current?.querySelector('[data-highlighted="true"]')?.scrollIntoView({ block: "nearest" });
+  }, [open, highlight]);
+
+  const close = () => {
+    setOpen(false);
+    setQuery("");
+  };
+
+  const commit = (id: string) => {
+    onChange(id);
+    close();
+  };
+
+  const openList = () => {
+    setOpen(true);
+    setHighlight(Math.max(0, models.findIndex((m) => m.id === value)));
+  };
+
+  const handleKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (!open) {
+        openList();
+        return;
+      }
+      setHighlight((h) => Math.min(h + 1, optionCount - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlight((h) => Math.max(h - 1, 0));
+    } else if (e.key === "Enter" && open) {
+      e.preventDefault();
+      if (highlight < filtered.length) commit(filtered[highlight].id);
+      else if (offerCustom) commit(customId);
+    } else if (e.key === "Escape" && open) {
+      // Keep the dialog's window-level Escape handler from closing Settings.
+      e.stopPropagation();
+      close();
+    }
+  };
+
+  const optionClass = (active: boolean) =>
+    `flex items-center justify-between gap-3 px-2 py-1.5 rounded-sm text-xs cursor-pointer select-none ${
+      active ? "bg-[var(--accent-9)] text-white" : "text-[var(--neutral-12)]"
+    }`;
+
+  return (
+    <div>
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--neutral-11)] opacity-50" />
+        <input
+          type="text"
+          role="combobox"
+          aria-expanded={open}
+          aria-autocomplete="list"
+          spellCheck={false}
+          value={open ? query : value}
+          placeholder={open ? `Search ${models.length} models or type an id…` : "Select a model"}
+          onFocus={openList}
+          onClick={() => {
+            if (!open) openList();
+          }}
+          onBlur={close}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setHighlight(0);
+            setOpen(true);
+          }}
+          onKeyDown={handleKeyDown}
+          className="w-full pl-8 pr-3 py-2 text-sm rounded bg-[var(--surface-base)] border border-[var(--neutral-6)] outline-none focus:border-[var(--accent-8)] font-mono"
+        />
+      </div>
+      {open && (
+        <ul
+          ref={listRef}
+          role="listbox"
+          onMouseDown={(e) => e.preventDefault()}
+          className="mt-1 max-h-56 overflow-y-auto rounded-md border border-[var(--neutral-6)] bg-[var(--surface-overlay)] p-1 shadow-xl"
+        >
+          {filtered.map((m, i) => (
+            <li
+              key={m.id}
+              role="option"
+              aria-selected={m.id === value}
+              data-highlighted={i === highlight}
+              onMouseEnter={() => setHighlight(i)}
+              onClick={() => commit(m.id)}
+              className={optionClass(i === highlight)}
+            >
+              <span className="truncate">{m.label}</span>
+              <span className="flex items-center gap-1.5 shrink-0">
+                {m.label !== m.id && (
+                  <span className={`font-mono text-[10px] ${i === highlight ? "text-white/80" : "text-[var(--neutral-11)]"}`}>
+                    {m.id}
+                  </span>
+                )}
+                {m.id === value && <Check className="w-3.5 h-3.5" />}
+              </span>
+            </li>
+          ))}
+          {offerCustom && (
+            <li
+              role="option"
+              aria-selected={false}
+              data-highlighted={highlight === filtered.length}
+              onMouseEnter={() => setHighlight(filtered.length)}
+              onClick={() => commit(customId)}
+              className={optionClass(highlight === filtered.length)}
+            >
+              <span className="truncate">
+                Use custom id <span className="font-mono">{customId}</span>
+              </span>
+            </li>
+          )}
+          {optionCount === 0 && (
+            <li className="px-2 py-1.5 text-xs text-[var(--neutral-11)]">No models match.</li>
+          )}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function AISettings() {
   const ai = useAI();
   const settings = useSettings();
+  const [modelList, setModelList] = useState<ModelListState>(EMPTY_MODEL_LIST);
+  const loadSeq = useRef(0);
 
   const persistAI = (patch: Partial<typeof ai>) => {
     for (const [key, value] of Object.entries(patch)) {
@@ -871,6 +1047,52 @@ function AISettings() {
       }
     }
   };
+
+  const selectModel = (id: string) => {
+    ai.setModel(id);
+    persistAI({ model: id });
+  };
+
+  const needsKey = providerNeedsApiKey(ai.provider);
+  const canList = ai.enabled && (!needsKey || ai.apiKey.trim() !== "");
+
+  const loadModels = useCallback(async () => {
+    const seq = ++loadSeq.current;
+    const { provider, endpoint, apiKey } = useAI.getState();
+    setModelList((prev) => ({ ...prev, status: "loading", error: null }));
+    try {
+      const models = await listModels(provider, endpoint, apiKey);
+      if (seq !== loadSeq.current) return;
+      setModelList({ status: "ready", models, error: null });
+      const current = useAI.getState().model;
+      if (models.length > 0 && !models.some((m) => m.id === current)) {
+        useAI.getState().setModel(models[0].id);
+        useSettings.getState().setSetting("aiModel", models[0].id);
+      }
+    } catch (e) {
+      if (seq !== loadSeq.current) return;
+      setModelList({ status: "error", models: [], error: e instanceof Error ? e.message : String(e) });
+    }
+  }, []);
+
+  // Another provider's ids are never valid here; drop them immediately.
+  useEffect(() => {
+    setModelList(EMPTY_MODEL_LIST);
+  }, [ai.provider]);
+
+  useEffect(() => {
+    loadSeq.current += 1; // discard any response for the previous inputs
+    if (!canList) {
+      setModelList(EMPTY_MODEL_LIST);
+      return;
+    }
+    setModelList((prev) => ({ ...prev, status: "loading", error: null }));
+    const timer = window.setTimeout(() => void loadModels(), MODEL_LIST_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [ai.provider, ai.endpoint, ai.apiKey, canList, loadModels]);
+
+  const endpointHelp = AI_ENDPOINT_HELP[ai.provider];
+  const providerLabel = AI_PROVIDERS.find((p) => p.id === ai.provider)?.label ?? ai.provider;
 
   return (
     <div className="space-y-6">
@@ -896,21 +1118,16 @@ function AISettings() {
         <div>
           <label className="block text-xs font-medium mb-2">AI Provider</label>
           <div className="grid grid-cols-2 gap-2">
-            {[
-              { id: "openai", label: "OpenAI", icon: "🤖" },
-              { id: "google", label: "Google Gemini", icon: "✨" },
-              { id: "anthropic", label: "Anthropic", icon: "🏛️" },
-              { id: "local", label: "Local (Ollama)", icon: "🏠" },
-            ].map((p) => (
+            {AI_PROVIDERS.map((p) => (
               <button
                 key={p.id}
                 onClick={() => {
-                  ai.setProvider(p.id as AIProvider);
-                  persistAI({ provider: p.id as AIProvider });
+                  ai.setProvider(p.id);
+                  persistAI({ provider: p.id });
                 }}
                 className={`flex items-center gap-2 p-2 rounded border text-xs transition-all ${
-                  ai.provider === p.id 
-                    ? "bg-[var(--accent-3)] border-[var(--accent-8)] text-[var(--accent-11)] font-bold shadow-sm" 
+                  ai.provider === p.id
+                    ? "bg-[var(--accent-3)] border-[var(--accent-8)] text-[var(--accent-11)] font-bold shadow-sm"
                     : "bg-[var(--surface-base)] border-[var(--neutral-6)] hover:border-[var(--neutral-11)]"
                 }`}
               >
@@ -922,12 +1139,14 @@ function AISettings() {
         </div>
 
         <div>
-          <label className="block text-xs font-medium mb-2">API Key</label>
+          <label className="block text-xs font-medium mb-2">
+            API Key{!needsKey && <span className="font-normal text-[var(--neutral-11)]"> (optional)</span>}
+          </label>
           <div className="relative">
             <Bot className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--neutral-11)] opacity-50" />
             <input
               type="password"
-              placeholder={`Enter your ${ai.provider} API key...`}
+              placeholder={needsKey ? `Enter your ${providerLabel} API key...` : "Only if your local server requires one"}
               value={ai.apiKey}
               onChange={(e) => {
                 ai.setApiKey(e.target.value);
@@ -940,35 +1159,79 @@ function AISettings() {
         </div>
 
         <div>
-          <label className="block text-xs font-medium mb-2">Model Selection</label>
-          <Select
-            value={ai.model}
-            onValueChange={(v) => {
-              ai.setModel(v);
-              persistAI({ model: v });
-            }}
-            options={
-              ai.provider === "openai"
-                ? [
-                    { label: "GPT-4o (Recommended)", value: "gpt-4o" },
-                    { label: "GPT-4 Turbo", value: "gpt-4-turbo" },
-                    { label: "GPT-3.5 Turbo", value: "gpt-3.5-turbo" },
-                  ]
-                : ai.provider === "google"
-                  ? [
-                      { label: "Gemini 1.5 Pro", value: "gemini-1.5-pro" },
-                      { label: "Gemini 1.5 Flash", value: "gemini-1.5-flash" },
-                    ]
-                  : ai.provider === "anthropic"
-                    ? [
-                        { label: "Claude 3.5 Sonnet", value: "claude-3-5-sonnet" },
-                        { label: "Claude 3 Opus", value: "claude-3-opus" },
-                      ]
-                    : ai.provider === "local"
-                      ? [{ label: "Llama 3 (via Ollama)", value: "llama3" }]
-                      : []
-            }
-          />
+          <label className="block text-xs font-medium mb-2">
+            Endpoint <span className="font-normal text-[var(--neutral-11)]">(optional)</span>
+          </label>
+          <div className="relative">
+            <Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--neutral-11)] opacity-50" />
+            <input
+              type="text"
+              spellCheck={false}
+              placeholder={endpointHelp.placeholder}
+              value={ai.endpoint}
+              onChange={(e) => {
+                ai.setEndpoint(e.target.value);
+                persistAI({ endpoint: e.target.value });
+              }}
+              className="w-full pl-9 pr-3 py-2 text-sm rounded bg-[var(--surface-base)] border border-[var(--neutral-6)] outline-none focus:border-[var(--accent-8)] font-mono"
+            />
+          </div>
+          <p className="text-[10px] text-[var(--neutral-11)] mt-1.5 opacity-60">{endpointHelp.hint}</p>
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <label className="block text-xs font-medium">Model</label>
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => void loadModels()}
+              disabled={!canList || modelList.status === "loading"}
+              leftIcon={<RefreshCw className={`w-3 h-3 ${modelList.status === "loading" ? "animate-spin" : ""}`} />}
+            >
+              Refresh
+            </Button>
+          </div>
+
+          {modelList.models.length > 0 ? (
+            <ModelPicker models={modelList.models} value={ai.model} onChange={selectModel} />
+          ) : (
+            <input
+              type="text"
+              spellCheck={false}
+              placeholder="Type a model id"
+              value={ai.model}
+              onChange={(e) => selectModel(e.target.value)}
+              className="w-full px-3 py-2 text-sm rounded bg-[var(--surface-base)] border border-[var(--neutral-6)] outline-none focus:border-[var(--accent-8)] font-mono"
+            />
+          )}
+
+          {modelList.status === "error" && modelList.error ? (
+            <div className="mt-2 rounded border border-[var(--danger-9)]/30 bg-[var(--danger-9)]/10 px-3 py-2 text-xs flex items-start gap-1.5 text-[var(--danger-9)]">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+              <span className="whitespace-pre-wrap break-words min-w-0">
+                Couldn't load models: {modelList.error}
+                {"\n"}You can still type a model id above.
+              </span>
+            </div>
+          ) : (
+            <p className="text-[10px] text-[var(--neutral-11)] mt-1.5 opacity-60 flex items-center gap-1">
+              {modelList.status === "loading" ? (
+                <>
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  Loading models from {providerLabel}…
+                </>
+              ) : modelList.status === "ready" ? (
+                modelList.models.length > 0
+                  ? `${modelList.models.length} models available from ${providerLabel}.`
+                  : `${providerLabel} returned no chat models. Type a model id above.`
+              ) : needsKey ? (
+                "Enter an API key to load the models it can use."
+              ) : (
+                "Models load from your local server automatically."
+              )}
+            </p>
+          )}
         </div>
       </div>
     </div>
@@ -1479,11 +1742,17 @@ function ChannelOption({ value, current, label, description, onChange }: {
   );
 }
 
-const CLI_TOOL_KINDS: { kind: string; label: string; binary: string; defaultVersion: number }[] = [
-  { kind: "postgresql", label: "PostgreSQL", binary: "psql", defaultVersion: 16 },
-  { kind: "mysql", label: "MySQL", binary: "mysql", defaultVersion: 9 },
-  { kind: "mongodb", label: "MongoDB", binary: "mongosh", defaultVersion: 2 },
+const CLI_TOOL_KINDS: { kind: string; label: string; binary: string; usedFor: string }[] = [
+  { kind: "postgresql", label: "PostgreSQL", binary: "psql", usedFor: "psql console connections and \\d meta-commands" },
+  { kind: "mysql", label: "MySQL", binary: "mysql", usedFor: "detected only — not used by any feature yet" },
+  { kind: "mongodb", label: "MongoDB", binary: "mongosh", usedFor: "detected only — not used by any feature yet" },
 ];
+
+const CLI_SOURCE_LABEL: Record<string, string> = {
+  path: "Found on PATH",
+  install_dir: "Found in install folder",
+  cached: "Downloaded by QueryDen",
+};
 
 function formatBytes(bytes: number): string {
   if (bytes <= 0) return "0 MB";
@@ -1497,29 +1766,13 @@ function CliToolsSettings() {
   const confirmDialog = useConfirmDialog();
   const [refreshing, setRefreshing] = useState(false);
   const [downloadingKind, setDownloadingKind] = useState<string | null>(null);
-  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [removingKey, setRemovingKey] = useState<string | null>(null);
-  const [versionInputs, setVersionInputs] = useState<Record<string, string>>({});
-  // Per-kind download availability on this platform (`needsDownload`) plus
-  // the system-install hint for tools with no download (psql everywhere,
-  // mysql on Linux). Keyed by tool kind.
-  const [toolSupport, setToolSupport] = useState<Record<string, { needsDownload: boolean; installHint?: string | null }>>({});
 
   const refresh = async () => {
     setRefreshing(true);
     try {
       await Promise.all([cli.fetchTools(), cli.listCached()]);
-      const support = await Promise.all(
-        CLI_TOOL_KINDS.map(async ({ kind, defaultVersion }) => {
-          try {
-            const status = await cli.checkTool(kind, defaultVersion);
-            return [kind, { needsDownload: status.needsDownload, installHint: status.installHint ?? null }] as const;
-          } catch {
-            return [kind, { needsDownload: true }] as const;
-          }
-        })
-      );
-      setToolSupport(Object.fromEntries(support));
     } finally {
       setRefreshing(false);
     }
@@ -1530,17 +1783,14 @@ function CliToolsSettings() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleDownload = async (kind: string, defaultVersion: number) => {
-    const raw = versionInputs[kind];
-    const majorVersion = raw ? parseInt(raw, 10) : defaultVersion;
-    if (Number.isNaN(majorVersion) || majorVersion <= 0) return;
-    setDownloadError(null);
+  const handleDownload = async (kind: string) => {
+    setActionError(null);
     setDownloadingKind(kind);
     try {
-      await cli.downloadVersion(kind, majorVersion);
+      await cli.ensureTool(kind);
       await cli.listCached();
     } catch (e) {
-      setDownloadError(String(e));
+      setActionError(String(e));
     } finally {
       setDownloadingKind(null);
     }
@@ -1558,13 +1808,9 @@ function CliToolsSettings() {
     setRemovingKey(key);
     try {
       await cli.removeCached(kind, majorVersion);
-      await cli.listCached(); // Refresh the cached tools list after successful removal
     } catch (e) {
-      // Surface the error to the user using the same downloadError state
-      // mechanism used by handleDownload. The error banner is already
-      // wired to display at the top of the CLI Tools settings section.
       const errMsg = e instanceof Error ? e.message : String(e);
-      setDownloadError(`Failed to remove ${kind} v${majorVersion}: ${errMsg}`);
+      setActionError(`Failed to remove ${kind} v${majorVersion}: ${errMsg}`);
     } finally {
       setRemovingKey(null);
     }
@@ -1585,48 +1831,54 @@ function CliToolsSettings() {
         </Button>
       </div>
       <p className="text-xs text-[var(--neutral-11)] -mt-3">
-        Manage the database CLIs QueryDen uses for the psql console and CLI-based query execution.
-        Pre-download a version here to avoid waiting mid-query, or free up disk space by removing
-        cached versions you no longer use. Downloading during query execution remains available as
-        a fallback if a tool isn't set up here.
+        QueryDen looks for each tool on your PATH, then in the standard install folders
+        (Program Files, /Library/PostgreSQL, Postgres.app, Homebrew, /usr/lib/postgresql), so a
+        tool installed outside PATH is still found. Install a missing tool, then press Refresh.
       </p>
 
-      {downloadError && (
-        <div className="rounded border border-[var(--danger-9)]/30 bg-[var(--danger-9)]/10 px-3 py-2 text-xs flex items-center gap-1.5 text-[var(--danger-9)]">
-          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-          {downloadError}
+      {actionError && (
+        <div className="rounded border border-[var(--danger-9)]/30 bg-[var(--danger-9)]/10 px-3 py-2 text-xs flex items-start gap-1.5 text-[var(--danger-9)] whitespace-pre-wrap">
+          <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          {actionError}
         </div>
       )}
 
       <div className="space-y-3">
-        {CLI_TOOL_KINDS.map(({ kind, label, binary, defaultVersion }) => {
-          const systemInfo = cli.tools.find((t) => t.kind === kind);
+        {CLI_TOOL_KINDS.map(({ kind, label, binary, usedFor }) => {
+          const info = cli.tools.find((t) => t.kind === kind);
           const cachedVersions = cli.cachedTools.filter((t) => t.kind === kind);
           const isDownloading = downloadingKind === kind;
 
           return (
             <div key={kind} className="rounded border border-[var(--neutral-6)] bg-[var(--surface-panel)] p-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-sm font-medium">{label}</div>
-                  <div className="text-[11px] text-[var(--neutral-11)] font-mono">{binary}</div>
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium">
+                    {label} <span className="text-[11px] text-[var(--neutral-11)] font-mono">{binary}</span>
+                  </div>
+                  <div className="text-[11px] text-[var(--neutral-11)]">{usedFor}</div>
                 </div>
-                {systemInfo?.available ? (
-                  <div className="flex items-center gap-1.5 text-xs text-[var(--success-9)]">
+                {info?.available ? (
+                  <div className="flex items-center gap-1.5 text-xs text-[var(--success-9)] shrink-0">
                     <CheckCircle className="w-3.5 h-3.5" />
-                    On system PATH
+                    {CLI_SOURCE_LABEL[info.source ?? "path"]}
                   </div>
                 ) : (
-                  <div className="flex items-center gap-1.5 text-xs text-[var(--neutral-11)]">
+                  <div className="flex items-center gap-1.5 text-xs text-[var(--neutral-11)] shrink-0">
                     <AlertCircle className="w-3.5 h-3.5" />
-                    Not on system PATH
+                    {info ? "Not installed" : "Checking…"}
                   </div>
                 )}
               </div>
 
-              {systemInfo?.path && (
-                <div className="mt-1 text-[11px] text-[var(--neutral-11)] font-mono truncate" title={systemInfo.path}>
-                  {systemInfo.path}
+              {info?.available && (
+                <div className="mt-1.5 space-y-0.5 text-[11px] text-[var(--neutral-11)]">
+                  {info.version && <div className="text-[var(--neutral-12)]">{info.version}</div>}
+                  {info.path && (
+                    <div className="font-mono truncate" title={info.path}>
+                      {info.path}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1640,7 +1892,7 @@ function CliToolsSettings() {
                         className="flex items-center justify-between rounded bg-[var(--surface-base)] border border-[var(--neutral-6)] px-2 py-1.5"
                       >
                         <div className="text-xs">
-                          <span className="font-medium">v{cached.majorVersion}</span>
+                          <span className="font-medium">Downloaded v{cached.majorVersion}</span>
                           <span className="text-[var(--neutral-11)] ml-2">{formatBytes(cached.sizeBytes)}</span>
                         </div>
                         <IconButton
@@ -1657,35 +1909,24 @@ function CliToolsSettings() {
                 </div>
               )}
 
-              <div className="mt-2 flex items-center gap-2">
-                {toolSupport[kind]?.needsDownload !== false || systemInfo?.available ? (
-                  <>
-                    <input
-                      type="number"
-                      min={1}
-                      placeholder={String(defaultVersion)}
-                      value={versionInputs[kind] ?? ""}
-                      onChange={(e) => setVersionInputs((prev) => ({ ...prev, [kind]: e.target.value }))}
-                      className="w-20 px-2 py-1 text-xs rounded bg-[var(--surface-base)] border border-[var(--neutral-6)] outline-none focus:border-[var(--accent-8)] text-[var(--neutral-12)]"
-                    />
+              {info && !info.available && (
+                <div className="mt-2 space-y-2">
+                  {info.downloadable && (
                     <Button
                       variant="secondary"
                       size="xs"
                       leftIcon={<Download className="w-3 h-3" />}
                       loading={isDownloading}
-                      onClick={() => handleDownload(kind, defaultVersion)}
+                      onClick={() => handleDownload(kind)}
                     >
-                      Download version
+                      Download {binary}
                     </Button>
-                  </>
-                ) : (
-                  toolSupport[kind]?.installHint && (
-                    <p className="text-[11px] text-[var(--neutral-11)] leading-relaxed whitespace-pre-wrap">
-                      No auto-download on this platform — {toolSupport[kind]?.installHint}
-                    </p>
-                  )
-                )}
-              </div>
+                  )}
+                  <pre className="text-[11px] text-[var(--neutral-11)] leading-relaxed whitespace-pre-wrap font-sans">
+                    {info.systemInstallHint}
+                  </pre>
+                </div>
+              )}
             </div>
           );
         })}

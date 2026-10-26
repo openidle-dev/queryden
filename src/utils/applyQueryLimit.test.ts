@@ -148,3 +148,25 @@ $$;`;
     });
   });
 });
+
+describe("applyQueryLimit — never changes what a statement does", () => {
+  it.each([
+    "SELECT * INTO backup_t FROM t",
+    "SELECT * FROM t LIMIT ALL",
+    "SELECT * FROM t LIMIT $1",
+    "SELECT * FROM t LIMIT :n",
+    "SELECT * FROM t LIMIT (SELECT 5)",
+    "SELECT * FROM t FETCH FIRST 5 ROWS ONLY",
+    "SELECT * FROM t OFFSET 5 ROWS FETCH NEXT 5 ROWS ONLY",
+    "SELECT * FROM t WHERE id = 1 FOR UPDATE",
+    "SELECT * FROM t FOR NO KEY UPDATE SKIP LOCKED",
+    "SELECT * FROM t LOCK IN SHARE MODE",
+    "SELECT a INTO OUTFILE '/tmp/x' FROM t",
+  ])("leaves %s unchanged", (sql) => {
+    expect(applyQueryLimit(sql, 1000)).toBe(sql);
+  });
+
+  it("still limits a plain SELECT, and ignores INTO inside a string", () => {
+    expect(applyQueryLimit("SELECT 'insert into' AS note FROM t", 100)).toBe("SELECT 'insert into' AS note FROM t LIMIT 100");
+  });
+});

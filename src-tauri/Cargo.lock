@@ -5522,6 +5522,7 @@ name = "tauri-plugin-sql"
 version = "2.4.0"
 dependencies = [
  "futures-core",
+ "futures-util",
  "indexmap 2.14.0",
  "log",
  "rust_decimal",
@@ -5533,6 +5534,8 @@ dependencies = [
  "thiserror 2.0.18",
  "time",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 

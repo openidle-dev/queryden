@@ -217,3 +217,46 @@ describe("sqlDialect — resolveTabHashComments", () => {
     expect(resolveTabHashComments(undefined, [], null)).toEqual({ hashComments: false });
   });
 });
+
+describe("stripSqlToCode — dialect-correct lexing", () => {
+  it("ends a standard PostgreSQL string at the quote after a backslash", () => {
+    // The DELETE must stay visible to the safety check.
+    expect(cleanSqlForKeywords("SELECT 'C:\\'; DELETE FROM t")).toContain("DELETE FROM T");
+    expect(cleanSqlForKeywords("SELECT 'C:\\'; DELETE FROM t", { hashComments: true })).not.toContain("DELETE");
+    expect(cleanSqlForKeywords("SELECT E'it\\'s delete'")).not.toContain("DELETE");
+  });
+
+  it("blanks nested PostgreSQL comments entirely", () => {
+    expect(cleanSqlForKeywords("SELECT 1 /* a /* b */ DELETE */")).toBe("SELECT 1");
+  });
+});
+
+describe("classifyDestructive — statement-level", () => {
+  const flags = (sql: string) => classifyDestructive(sql);
+
+  it("flags DELETE and UPDATE without their own WHERE", () => {
+    expect(flags("DELETE FROM t").isDestructive).toBe(true);
+    expect(flags("UPDATE t SET a = 1").isDestructive).toBe(true);
+    expect(flags("UPDATE t SET a = (SELECT max(b) FROM s WHERE s.id = 1)").isDestructive).toBe(true);
+    expect(flags("WITH x AS (SELECT id FROM s WHERE ok) DELETE FROM t").isDestructive).toBe(true);
+  });
+
+  it("accepts DELETE/UPDATE with a WHERE of their own", () => {
+    expect(flags("DELETE FROM t WHERE id = 1").isDestructive).toBe(false);
+    expect(flags("UPDATE t SET a = 1 FROM s WHERE s.id = t.id").isDestructive).toBe(false);
+    expect(flags("WITH x AS (SELECT 1) UPDATE t SET a = 1 WHERE id IN (SELECT * FROM x)").isDestructive).toBe(false);
+  });
+
+  it("doesn't mistake other statements for UPDATE/DELETE", () => {
+    expect(flags("INSERT INTO t VALUES (1) ON CONFLICT (id) DO UPDATE SET a = 2").isDestructive).toBe(false);
+    expect(flags("INSERT INTO t VALUES (1) ON DUPLICATE KEY UPDATE a = 2").isDestructive).toBe(false);
+    expect(flags("SELECT * FROM t FOR UPDATE").isDestructive).toBe(false);
+    expect(flags("SELECT 'delete from t'").isDestructive).toBe(false);
+    expect(flags("DO $$ BEGIN DELETE FROM t; END $$").isDestructive).toBe(false);
+  });
+
+  it("flags TRUNCATE and DROP", () => {
+    expect(flags("TRUNCATE t").isTruncate).toBe(true);
+    expect(flags("DROP TABLE t").isDrop).toBe(true);
+  });
+});

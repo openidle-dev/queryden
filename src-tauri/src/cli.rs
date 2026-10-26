@@ -1,32 +1,26 @@
 //! Embedded CLI tools manager for QueryDen.
 //!
-//! ## Architecture
+//! ## Discovery
 //!
-//! CLI tools are cached **per major version** (e.g. `mysql-9`, `mongosh-2.3`).
+//! Each tool is looked up in this order:
+//!
+//! 1. The process `PATH`.
+//! 2. Well-known install locations for the current OS. Apps launched from a
+//!    desktop launcher, Finder or the Start menu do not inherit shell-profile
+//!    `PATH` edits, and several installers never touch `PATH` at all (EDB on
+//!    Windows/macOS, Postgres.app, keg-only Homebrew `libpq`/`mysql-client`,
+//!    Debian's `/usr/lib/postgresql/<ver>/bin`, PGDG's `/usr/pgsql-<ver>`).
+//! 3. Binaries downloaded by QueryDen into `<app data>/cli-tools/<tool>-<major>/bin`.
 //!
 //! ## Download sources
 //!
-//! - **PostgreSQL**: Auto-download removed. Users must install psql via their
-//!   system package manager or from https://www.postgresql.org/download/.
-//!   QueryDen detects the system psql on PATH automatically. On Windows,
-//!   common install paths in Program Files are checked as a fallback.
-//! - **MySQL**: https://dev.mysql.com/get/Downloads/
-//!   - Archives: mysql-{version}-macos{arch}.tar.gz, etc.
-//! - **MongoDB**: GitHub releases (mongosh)
-//!
-//! ## On-demand flow
-//!
-//! 1. User connects via libpq → server responds `SELECT version()`
-//! 2. App parses server version (e.g. "PostgreSQL 16.5")
-//! 3. For psql: checks system PATH, then Windows fallback paths. If not found, shows install guide.
-//! 4. For other tools: checks ~/queryden/cli-tools/{tool}-{version}/ for cached binaries
-//! 5. If not cached → dialog asks user to confirm download
-//! 6. Download + extract → cache forever under the versioned path
+//! - **PostgreSQL**: no download. psql must come from a system install.
+//! - **MySQL**: no download. Oracle's archives are 200+ MB, need their bundled
+//!   shared libraries next to the binary, and use `.tar.xz` on Linux.
+//! - **MongoDB**: mongosh from GitHub releases (self-contained binary).
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
-#[cfg(target_os = "windows")]
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::process::Command;
@@ -83,25 +77,23 @@ impl ToolKind {
                 Download: https://www.postgresql.org/download/\n\n\
                 Linux (Debian/Ubuntu): sudo apt install postgresql-client\n\
                 Linux (Fedora/RHEL):   sudo dnf install postgresql\n\
-                macOS:                 brew install libpq\n\
-                Windows (winget):     winget install PostgreSQL.PostgreSQL\n\
-                Windows (manual):     https://www.postgresql.org/download/windows/\n\
-                Windows (chocolatey): choco install postgresql\n\n\
-                If psql is already installed, make sure it's in your PATH\n\
-                or check C:\\Program Files\\PostgreSQL\\<version>\\bin\\.\n\n\
-                After installation, restart QueryDen.",
+                macOS (Homebrew):      brew install libpq\n\
+                macOS (app):           https://postgresapp.com\n\
+                Windows (winget):      winget install PostgreSQL.PostgreSQL\n\
+                Windows (manual):      https://www.postgresql.org/download/windows/\n\n\
+                QueryDen also finds psql in the standard install folders\n\
+                (Program Files\\PostgreSQL, /Library/PostgreSQL, Postgres.app,\n\
+                Homebrew, /usr/lib/postgresql) even when it is not on PATH.",
             ToolKind::MySql => "MySQL client not found.\n\n\
                 Linux (Debian/Ubuntu): sudo apt install mysql-client\n\
                 Linux (Fedora/RHEL):   sudo dnf install mysql\n\
                 macOS:                 brew install mysql-client\n\
-                Windows:              Download from dev.mysql.com",
+                Windows:               winget install Oracle.MySQL",
             ToolKind::Mongo => "mongosh not found.\n\n\
-                Install from mongosh.org",
+                Install from https://www.mongodb.com/try/download/shell",
         }
     }
 }
-
-
 
 impl std::fmt::Display for ToolKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -109,51 +101,265 @@ impl std::fmt::Display for ToolKind {
     }
 }
 
+fn parse_tool_kind(tool_kind: &str) -> Result<ToolKind, String> {
+    match tool_kind {
+        "postgresql" => Ok(ToolKind::Psql),
+        "mysql" => Ok(ToolKind::MySql),
+        "mongodb" => Ok(ToolKind::Mongo),
+        _ => Err(format!("Unknown tool: {}", tool_kind)),
+    }
+}
+
 // ─── Download URL resolver ────────────────────────────────────────────────────
 
 struct DownloadSpec {
-    url: String,
-    is_archive: bool,
+    url: &'static str,
+    /// Cache directory major version. Pinned to what the URL actually
+    /// contains, so a typed "5" never files mongosh 2.x under `mongodb-5`.
+    major: u32,
 }
 
-
-/// Returns a download spec for a tool at a specific major version.
-/// PostgreSQL auto-download has been removed — users must install psql via their
-/// system package manager or the official installer.
-/// For MongoDB: uses hardcoded GitHub URLs.
-/// For MySQL: uses hardcoded URLs.
-fn download_spec(kind: ToolKind, _major_version: Option<u32>) -> Option<DownloadSpec> {
+fn download_spec(kind: ToolKind) -> Option<DownloadSpec> {
     match kind {
-        ToolKind::Psql => None,
+        ToolKind::Psql | ToolKind::MySql => None,
         ToolKind::Mongo => {
-            // mongosh publishes platform binaries on GitHub
             let url = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
                 "https://github.com/mongodb-js/mongosh/releases/download/v2.3.8/mongosh-2.3.8-linux-x64.tgz"
+            } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+                "https://github.com/mongodb-js/mongosh/releases/download/v2.3.8/mongosh-2.3.8-linux-arm64.tgz"
             } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-                "https://github.com/mongodb-js/mongosh/releases/download/v2.3.8/mongosh-2.3.8-darwin-arm64.tgz"
+                "https://github.com/mongodb-js/mongosh/releases/download/v2.3.8/mongosh-2.3.8-darwin-arm64.zip"
             } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
-                "https://github.com/mongodb-js/mongosh/releases/download/v2.3.8/mongosh-2.3.8-darwin-x64.tgz"
+                "https://github.com/mongodb-js/mongosh/releases/download/v2.3.8/mongosh-2.3.8-darwin-x64.zip"
             } else if cfg!(target_os = "windows") {
                 "https://github.com/mongodb-js/mongosh/releases/download/v2.3.8/mongosh-2.3.8-win32-x64.zip"
             } else {
                 return None;
             };
-            Some(DownloadSpec { url: url.to_string(), is_archive: true })
-        }
-        ToolKind::MySql => {
-            // MySQL compressed archives on dev.mysql.com
-            let url = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-                "https://dev.mysql.com/get/Downloads/mysql-9.0.0-macos14-arm64.tar.gz"
-            } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
-                "https://dev.mysql.com/get/Downloads/mysql-9.0.0-macos14-x86_64.tar.gz"
-            } else if cfg!(target_os = "windows") {
-                "https://dev.mysql.com/get/Downloads/mysql-9.0.0-winx64.zip"
-            } else {
-                return None;
-            };
-            Some(DownloadSpec { url: url.to_string(), is_archive: true })
+            Some(DownloadSpec { url, major: 2 })
         }
     }
+}
+
+// ─── Discovery ────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolSource {
+    /// Found on the process PATH.
+    Path,
+    /// Found in a well-known install folder that is not on PATH.
+    InstallDir,
+    /// Downloaded by QueryDen into the app data cache.
+    Cached,
+}
+
+impl ToolSource {
+    fn as_str(&self) -> &'static str {
+        match self {
+            ToolSource::Path => "path",
+            ToolSource::InstallDir => "install_dir",
+            ToolSource::Cached => "cached",
+        }
+    }
+}
+
+struct FoundTool {
+    path: PathBuf,
+    source: ToolSource,
+    /// Major version of a cached download; 0 for system installs.
+    cached_major: u32,
+}
+
+fn exe_name(binary: &str) -> String {
+    format!("{}{}", binary, std::env::consts::EXE_SUFFIX)
+}
+
+fn major_of(name: &str) -> Option<u32> {
+    name.split(|c: char| !c.is_ascii_digit())
+        .find(|s| !s.is_empty())
+        .and_then(|s| s.parse().ok())
+}
+
+/// Collect every `<parent>/<prefix>*/<rel..>` that exists, tagged with the
+/// major version parsed from the directory name (0 when it has none).
+fn scan_versioned_dirs(parent: &Path, prefix: &str, rel: &[&str], out: &mut Vec<(u32, PathBuf)>) {
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let Some(rest) = name.strip_prefix(prefix) else {
+            continue;
+        };
+        let mut candidate = entry.path();
+        for part in rel {
+            candidate.push(part);
+        }
+        if candidate.is_file() {
+            out.push((major_of(rest).unwrap_or(0), candidate));
+        }
+    }
+}
+
+fn push_if_file(path: PathBuf, out: &mut Vec<(u32, PathBuf)>) {
+    if path.is_file() {
+        out.push((0, path));
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn program_files_roots() -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for var in ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"] {
+        if let Ok(v) = std::env::var(var) {
+            let p = PathBuf::from(v);
+            if !roots.contains(&p) {
+                roots.push(p);
+            }
+        }
+    }
+    if roots.is_empty() {
+        roots.push(PathBuf::from(r"C:\Program Files"));
+    }
+    roots
+}
+
+/// Install folders the OS installers use, regardless of PATH.
+fn install_dir_candidates(kind: ToolKind) -> Vec<(u32, PathBuf)> {
+    let mut out: Vec<(u32, PathBuf)> = Vec::new();
+    let bin = exe_name(kind.primary_binary());
+    let bin = bin.as_str();
+
+    #[cfg(target_os = "windows")]
+    {
+        let home = std::env::var("USERPROFILE").map(PathBuf::from).ok();
+        let local = std::env::var("LOCALAPPDATA").map(PathBuf::from).ok();
+        for root in program_files_roots() {
+            match kind {
+                ToolKind::Psql => {
+                    scan_versioned_dirs(&root.join("PostgreSQL"), "", &["bin", bin], &mut out);
+                    push_if_file(root.join("PostgreSQL").join("bin").join(bin), &mut out);
+                }
+                ToolKind::MySql => {
+                    scan_versioned_dirs(&root.join("MySQL"), "MySQL Server ", &["bin", bin], &mut out);
+                    scan_versioned_dirs(&root.join("MariaDB"), "", &["bin", bin], &mut out);
+                    scan_versioned_dirs(&root, "MariaDB ", &["bin", bin], &mut out);
+                }
+                ToolKind::Mongo => {
+                    scan_versioned_dirs(&root.join("MongoDB").join("Server"), "", &["bin", bin], &mut out);
+                    push_if_file(root.join("mongosh").join(bin), &mut out);
+                }
+            }
+        }
+        if let Some(home) = home {
+            let scoop_app = match kind {
+                ToolKind::Psql => "postgresql",
+                ToolKind::MySql => "mysql",
+                ToolKind::Mongo => "mongosh",
+            };
+            let scoop = home.join("scoop").join("apps").join(scoop_app).join("current");
+            push_if_file(scoop.join("bin").join(bin), &mut out);
+            push_if_file(scoop.join(bin), &mut out);
+        }
+        if let (Some(local), ToolKind::Mongo) = (local, kind) {
+            push_if_file(local.join("Programs").join("mongosh").join(bin), &mut out);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let brew_roots = [Path::new("/opt/homebrew"), Path::new("/usr/local")];
+        match kind {
+            ToolKind::Psql => {
+                for root in brew_roots {
+                    scan_versioned_dirs(&root.join("opt"), "postgresql@", &["bin", bin], &mut out);
+                    push_if_file(root.join("opt").join("libpq").join("bin").join(bin), &mut out);
+                    push_if_file(root.join("bin").join(bin), &mut out);
+                }
+                scan_versioned_dirs(
+                    Path::new("/Applications/Postgres.app/Contents/Versions"),
+                    "",
+                    &["bin", bin],
+                    &mut out,
+                );
+                scan_versioned_dirs(Path::new("/Library/PostgreSQL"), "", &["bin", bin], &mut out);
+                scan_versioned_dirs(Path::new("/opt/local/lib"), "postgresql", &["bin", bin], &mut out);
+            }
+            ToolKind::MySql => {
+                for root in brew_roots {
+                    push_if_file(root.join("opt").join("mysql-client").join("bin").join(bin), &mut out);
+                    scan_versioned_dirs(&root.join("opt"), "mysql-client@", &["bin", bin], &mut out);
+                    push_if_file(root.join("bin").join(bin), &mut out);
+                }
+                push_if_file(PathBuf::from("/usr/local/mysql/bin").join(bin), &mut out);
+            }
+            ToolKind::Mongo => {
+                for root in brew_roots {
+                    push_if_file(root.join("bin").join(bin), &mut out);
+                }
+            }
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        match kind {
+            ToolKind::Psql => {
+                // Debian/Ubuntu ship real binaries here; /usr/bin/psql is a
+                // Perl wrapper that needs postgresql-common to be healthy.
+                scan_versioned_dirs(Path::new("/usr/lib/postgresql"), "", &["bin", bin], &mut out);
+                // PGDG RPMs (RHEL, Fedora, Rocky, Alma).
+                scan_versioned_dirs(Path::new("/usr"), "pgsql-", &["bin", bin], &mut out);
+                push_if_file(PathBuf::from("/usr/local/pgsql/bin").join(bin), &mut out);
+            }
+            ToolKind::MySql | ToolKind::Mongo => {}
+        }
+        push_if_file(PathBuf::from("/usr/bin").join(bin), &mut out);
+        push_if_file(PathBuf::from("/usr/local/bin").join(bin), &mut out);
+        push_if_file(PathBuf::from("/home/linuxbrew/.linuxbrew/bin").join(bin), &mut out);
+        push_if_file(PathBuf::from("/snap/bin").join(bin), &mut out);
+    }
+
+    out
+}
+
+/// Newest install-folder match. Versioned folders win over unversioned
+/// ones, so `/usr/lib/postgresql/17` beats the `/usr/bin` wrapper.
+fn find_in_install_dirs(kind: ToolKind) -> Option<PathBuf> {
+    install_dir_candidates(kind)
+        .into_iter()
+        .max_by_key(|(major, _)| *major)
+        .map(|(_, path)| path)
+}
+
+/// PATH first, then the OS install folders. Never the download cache.
+fn find_system_tool(kind: ToolKind) -> Option<FoundTool> {
+    for binary in kind.all_binaries() {
+        if let Ok(path) = which::which(binary) {
+            return Some(FoundTool { path, source: ToolSource::Path, cached_major: 0 });
+        }
+    }
+    find_in_install_dirs(kind).map(|path| FoundTool { path, source: ToolSource::InstallDir, cached_major: 0 })
+}
+
+/// First line of `<binary> --version`, bounded so a hung binary can't stall
+/// the settings page.
+async fn binary_version(binary: &Path) -> Option<String> {
+    let mut cmd = Command::new(binary);
+    cmd.arg("--version").stdin(Stdio::null()).kill_on_drop(true);
+    no_console_window(&mut cmd);
+    let output = tokio::time::timeout(std::time::Duration::from_secs(5), cmd.output())
+        .await
+        .ok()?
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
 }
 
 // ─── CLI Manager ───────────────────────────────────────────────────────────────
@@ -173,182 +379,80 @@ impl CliManager {
         Self { tools_dir }
     }
 
-    /// Base directory for a tool+version: ~/cli-tools/postgresql-16/
+    /// Base directory for a tool+version: <app data>/cli-tools/mongodb-2/
     fn versioned_dir(&self, kind: ToolKind, major_version: u32) -> PathBuf {
         self.tools_dir
             .join(format!("{}-{}", kind.alias(), major_version))
     }
 
-    /// Path to a specific binary: ~/cli-tools/postgresql-16/bin/psql
+    /// Path to a specific binary: <app data>/cli-tools/mongodb-2/bin/mongosh
     fn binary_path(&self, kind: ToolKind, major_version: u32, binary: &str) -> PathBuf {
-        let ext = if cfg!(target_os = "windows") { ".exe" } else { "" };
         self.versioned_dir(kind, major_version)
             .join("bin")
-            .join(format!("{}{}", binary, ext))
+            .join(exe_name(binary))
     }
 
-    /// On Windows, check common PostgreSQL installation paths that aren't always
-    /// on PATH (EDB/BigSQL installers put psql.exe in Program Files without
-    /// adding it to the system PATH). Scans version subdirectories so new
-    /// major versions (18, 19, …) are found without code changes, and also
-    /// covers Scoop installs. Returns the newest match.
-    #[cfg(target_os = "windows")]
-    fn find_windows_psql_path(&self) -> Option<PathBuf> {
-        let mut roots: Vec<String> = Vec::new();
-        for var in ["ProgramFiles", "ProgramW6432"] {
-            if let Ok(v) = std::env::var(var) {
-                if !roots.contains(&v) {
-                    roots.push(v);
-                }
-            }
-        }
-        if roots.is_empty() {
-            roots.push(r"C:\Program Files".to_string());
-        }
-        if let Ok(x86) = std::env::var("ProgramFiles(x86)") {
-            if !roots.contains(&x86) {
-                roots.push(x86);
-            }
-        }
-
-        fn major_of(name: &str) -> Option<u32> {
-            name.split(|c: char| !c.is_ascii_digit())
-                .find(|s| !s.is_empty())
-                .and_then(|s| s.parse().ok())
-        }
-
-        let mut best: Option<(u32, PathBuf)> = None;
-        let mut consider = |major: u32, path: PathBuf| {
-            let better = best.as_ref().map(|(m, _)| major > *m).unwrap_or(true);
-            if better {
-                best = Some((major, path));
-            }
+    /// Cached downloads, as (major, primary binary path).
+    fn cached_versions(&self, kind: ToolKind) -> Vec<(u32, PathBuf)> {
+        let Ok(entries) = std::fs::read_dir(&self.tools_dir) else {
+            return Vec::new();
         };
-
-        for root in &roots {
-            // EDB-style: <root>\PostgreSQL\<version>\bin\psql.exe
-            let pg_root = Path::new(root).join("PostgreSQL");
-            if let Ok(entries) = std::fs::read_dir(&pg_root) {
-                for entry in entries.flatten() {
-                    if !entry.path().is_dir() {
-                        continue;
-                    }
-                    let candidate = entry.path().join("bin").join("psql.exe");
-                    if candidate.exists() {
-                        let name = entry.file_name().to_string_lossy().to_string();
-                        consider(major_of(&name).unwrap_or(0), candidate);
-                    }
-                }
-            }
-            // Scoop-style: <root>\PostgreSQL\bin\psql.exe (no version dir)
-            let direct = pg_root.join("bin").join("psql.exe");
-            if direct.exists() {
-                consider(0, direct);
-            }
-        }
-
-        // Scoop user installs: %USERPROFILE%\scoop\apps\postgresql\current\bin
-        if let Ok(home) = std::env::var("USERPROFILE") {
-            let scoop = Path::new(&home)
-                .join("scoop")
-                .join("apps")
-                .join("postgresql")
-                .join("current")
-                .join("bin")
-                .join("psql.exe");
-            if scoop.exists() {
-                consider(0, scoop);
-            }
-        }
-
-        best.map(|(_, path)| path)
-    }
-
-    /// Try system PATH, then Windows fallback paths, then bundled binaries.
-    /// Returns (path, major_version) of the first match.
-    async fn find_available(&self, kind: ToolKind) -> Option<(PathBuf, u32)> {
-        for binary in kind.all_binaries() {
-            if which::which(binary).is_ok() {
-                return which::which(binary).ok().map(|p| (p, 0)); // version 0 = system
-            }
-        }
-
-        // Windows: check common install paths (psql.exe often not on PATH)
-        #[cfg(target_os = "windows")]
-        if kind == ToolKind::Psql {
-            if let Some(path) = self.find_windows_psql_path() {
-                return Some((path, 0));
-            }
-        }
-
-        // Check bundled versioned directories
-        let entries = std::fs::read_dir(&self.tools_dir).ok()?;
+        let mut found = Vec::new();
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            // e.g. "postgresql-16" → extract kind and version
-            let parts: Vec<&str> = name.split('-').collect();
-            if parts.len() != 2 {
+            let Some((dir_kind, version_str)) = name.split_once('-') else {
                 continue;
-            }
-            let (dir_kind, version_str) = (parts[0], parts[1]);
+            };
             if dir_kind != kind.alias() {
                 continue;
             }
-            let major: u32 = version_str.parse().ok()?;
+            let Ok(major) = version_str.parse::<u32>() else {
+                continue;
+            };
             let primary = self.binary_path(kind, major, kind.primary_binary());
-            if primary.exists() {
-                return Some((primary, major));
+            if primary.is_file() {
+                found.push((major, primary));
             }
         }
-
-        None
+        found
     }
 
-    /// Check system PATH only (no bundled/auto-download) plus, on Windows,
-    /// the common Program Files install paths (psql.exe is usually NOT on
-    /// PATH there). Returns (path, version) if a system binary is found.
-    async fn find_system(&self, kind: ToolKind) -> Option<(PathBuf, u32)> {
-        for binary in kind.all_binaries() {
-            if which::which(binary).is_ok() {
-                return which::which(binary).ok().map(|p| (p, 0));
-            }
+    /// System install first, then the newest cached download.
+    fn find_available(&self, kind: ToolKind) -> Option<FoundTool> {
+        if let Some(found) = find_system_tool(kind) {
+            return Some(found);
         }
-        // Windows: EDB/Scoop installs are often missing from PATH entirely.
-        #[cfg(target_os = "windows")]
-        if kind == ToolKind::Psql {
-            if let Some(path) = self.find_windows_psql_path() {
-                return Some((path, 0));
-            }
-        }
-        None
+        self.cached_versions(kind)
+            .into_iter()
+            .max_by_key(|(major, _)| *major)
+            .map(|(major, path)| FoundTool { path, source: ToolSource::Cached, cached_major: major })
     }
 
-    /// Download and extract a versioned CLI tool.
-    async fn download_versioned(&self, kind: ToolKind, major_version: u32) -> Result<PathBuf, String> {
-        let spec = download_spec(kind, Some(major_version))
-            .ok_or_else(|| format!("Download not available for {} {}", kind, major_version))?;
+    /// Download and extract a CLI tool. Returns the binary path and the
+    /// major version it was cached under.
+    async fn download(&self, kind: ToolKind) -> Result<(PathBuf, u32), String> {
+        let spec = download_spec(kind)
+            .ok_or_else(|| format!("Download not available for {}", kind))?;
 
-        let dest_dir = self.versioned_dir(kind, major_version);
+        let dest_dir = self.versioned_dir(kind, spec.major);
         let bin_dir = dest_dir.join("bin");
         std::fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
 
         let tmp_path = dest_dir.join("download.tmp");
 
-        // Download with HTTP client
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(300))
             .build()
             .map_err(|e| e.to_string())?;
 
-        let download_url = spec.url.clone();
         let response = client
-            .get(&download_url)
+            .get(spec.url)
             .send()
             .await
             .map_err(|e| format!("Download failed: {}", e))?;
 
         if !response.status().is_success() {
-            return Err(format!("HTTP {} — {}", response.status(), download_url));
+            return Err(format!("HTTP {} — {}", response.status(), spec.url));
         }
 
         let bytes = response
@@ -358,102 +462,60 @@ impl CliManager {
 
         std::fs::write(&tmp_path, &bytes).map_err(|e| e.to_string())?;
 
-        if spec.is_archive {
-            let reader = std::fs::File::open(&tmp_path).map_err(|e| e.to_string())?;
-            if spec.url.ends_with(".tar.gz") || spec.url.ends_with(".tgz") {
-                let dec = flate2::read::GzDecoder::new(reader);
-                let mut arch = tar::Archive::new(dec);
-                arch.unpack(&dest_dir).map_err(|e| e.to_string())?;
-            } else {
-                // ZIP
-                let mut arch = zip::ZipArchive::new(reader).map_err(|e| e.to_string())?;
-                arch.extract(&dest_dir).map_err(|e| e.to_string())?;
-            }
-
-            // PostgreSQL tarballs contain a versioned subdirectory
-            // e.g. postgresql-16.8/bin/psql
-            // We need to find the actual binaries and move them to our bin/ dir
-            self.relocate_binaries(&dest_dir, kind, major_version)
-                .await?;
+        let reader = std::fs::File::open(&tmp_path).map_err(|e| e.to_string())?;
+        let extracted = if spec.url.ends_with(".tar.gz") || spec.url.ends_with(".tgz") {
+            let dec = flate2::read::GzDecoder::new(reader);
+            tar::Archive::new(dec).unpack(&dest_dir).map_err(|e| e.to_string())
         } else {
-            // Single file → put directly in bin/
-            let binary = self.binary_path(kind, major_version, kind.primary_binary());
-            std::fs::rename(&tmp_path, &binary).map_err(|e| e.to_string())?;
-        }
-
+            zip::ZipArchive::new(reader)
+                .and_then(|mut arch| arch.extract(&dest_dir))
+                .map_err(|e| e.to_string())
+        };
         std::fs::remove_file(&tmp_path).ok();
+        extracted?;
 
-        // Verify primary binary exists
-        let primary = self.binary_path(kind, major_version, kind.primary_binary());
-        if primary.exists() {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if let Ok(meta) = std::fs::metadata(&primary) {
-                    let mut perms = meta.permissions();
-                    perms.set_mode(0o755);
-                    std::fs::set_permissions(&primary, perms).ok();
-                }
-            }
-            Ok(primary)
+        self.relocate_binaries(&dest_dir, kind)?;
+
+        let primary = self.binary_path(kind, spec.major, kind.primary_binary());
+        if primary.is_file() {
+            Ok((primary, spec.major))
         } else {
             Err(format!("Binary not found after download. Expected: {}", primary.display()))
         }
     }
 
-    /// Find binaries inside the unpacked archive and move them to our bin/ dir.
-    /// PostgreSQL tarballs unpack to a top-level dir like postgresql-16.8/
-    async fn relocate_binaries(
-        &self,
-        extracted_dir: &PathBuf,
-        kind: ToolKind,
-        _major_version: u32,
-    ) -> Result<(), String> {
+    /// Archives unpack to a versioned top-level folder (`mongosh-2.3.8-linux-x64/bin/…`).
+    /// Move the binaries we need into `<dest>/bin` and mark them executable.
+    fn relocate_binaries(&self, extracted_dir: &Path, kind: ToolKind) -> Result<(), String> {
         let bin_dir = extracted_dir.join("bin");
         std::fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
 
-        let ext = if cfg!(target_os = "windows") { ".exe" } else { "" };
-
-        // Scan extracted_dir for the actual binaries (they're in a versioned subdir)
-        let entries = std::fs::read_dir(extracted_dir).map_err(|e| e.to_string())?;
-        let top_level_dirs: Vec<PathBuf> = entries
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().is_dir())
+        let primary = exe_name(kind.primary_binary());
+        let search_dir = std::fs::read_dir(extracted_dir)
+            .map_err(|e| e.to_string())?
+            .flatten()
             .map(|e| e.path())
-            .collect();
-
-        // Find the subdirectory that contains our binaries
-        // PostgreSQL: postgresql-16.8/bin/psql(.exe) exists
-        let subdir = top_level_dirs.iter().find(|d| {
-            let bin = d.join("bin");
-            bin.join(format!("{}{}", kind.primary_binary(), ext)).exists()
-        });
-
-        // Some archives (e.g. mongosh, mysql on Windows) extract binaries straight
-        // into extracted_dir/bin rather than a nested versioned subdir.
-        let search_dir = subdir.cloned().unwrap_or_else(|| extracted_dir.clone());
+            .find(|d| d.is_dir() && d.join("bin").join(&primary).is_file())
+            .unwrap_or_else(|| extracted_dir.to_path_buf());
 
         for binary in kind.all_binaries() {
-            let name = format!("{}{}", binary, ext);
+            let name = exe_name(binary);
             let src = search_dir.join("bin").join(&name);
-            if src.exists() {
-                let dst = bin_dir.join(&name);
-                if dst != src {
-                    if dst.exists() {
-                        std::fs::remove_file(&dst).ok();
-                    }
-                    std::fs::rename(&src, &dst).map_err(|e| e.to_string())?;
-
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::PermissionsExt;
-                        if let Ok(meta) = std::fs::metadata(&dst) {
-                            let mut perms = meta.permissions();
-                            perms.set_mode(0o755);
-                            std::fs::set_permissions(&dst, perms).ok();
-                        }
-                    }
+            let dst = bin_dir.join(&name);
+            if !src.is_file() {
+                continue;
+            }
+            if dst != src {
+                if dst.exists() {
+                    std::fs::remove_file(&dst).ok();
                 }
+                std::fs::rename(&src, &dst).map_err(|e| e.to_string())?;
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&dst, std::fs::Permissions::from_mode(0o755))
+                    .map_err(|e| e.to_string())?;
             }
         }
 
@@ -461,7 +523,104 @@ impl CliManager {
     }
 }
 
+// ─── Command builders ──────────────────────────────────────────────────────────
+
+struct ServerArgs<'a> {
+    host: &'a str,
+    port: u16,
+    database: &'a str,
+    username: &'a str,
+    password: &'a str,
+}
+
+/// psql with credentials in the environment (never argv, which `ps` shows),
+/// `~/.psqlrc` ignored (`-X`: a user's `\timing` or `\x auto` would corrupt
+/// parsed output) and a bounded connect so an unreachable host fails fast.
+fn psql_command(binary: &Path, server: &ServerArgs) -> Command {
+    let mut cmd = Command::new(binary);
+    cmd.env("PGPASSWORD", server.password)
+        // Force UTF-8 regardless of the Windows console code page —
+        // otherwise non-ASCII output is undecodable/mangled.
+        .env("PGCLIENTENCODING", "UTF8")
+        .env("PGCONNECT_TIMEOUT", "15")
+        .env("PGAPPNAME", "QueryDen")
+        .arg("-X")
+        .arg("-w")
+        .arg("-h")
+        .arg(server.host)
+        .arg("-p")
+        .arg(server.port.to_string())
+        .arg("-d")
+        .arg(server.database)
+        .arg("-U")
+        .arg(server.username)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    no_console_window(&mut cmd);
+    cmd
+}
+
+/// mysql with the password in `MYSQL_PWD` instead of `-p<password>` on argv.
+fn mysql_command(binary: &Path, server: &ServerArgs, with_database: bool) -> Command {
+    let mut cmd = Command::new(binary);
+    if !server.password.is_empty() {
+        cmd.env("MYSQL_PWD", server.password);
+    }
+    cmd.arg("-h")
+        .arg(server.host)
+        .arg("-P")
+        .arg(server.port.to_string())
+        .arg("-u")
+        .arg(server.username)
+        .arg("--connect-timeout=15");
+    if with_database && !server.database.is_empty() {
+        cmd.arg("-D").arg(server.database);
+    }
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    no_console_window(&mut cmd);
+    cmd
+}
+
+/// mongosh connection string with percent-encoded credentials.
+fn mongo_uri(server: &ServerArgs) -> Result<String, String> {
+    let mut uri = url::Url::parse(&format!("mongodb://{}:{}/", server.host, server.port))
+        .map_err(|e| format!("Invalid MongoDB host: {}", e))?;
+    uri.set_path(server.database);
+    if !server.username.is_empty() {
+        uri.set_username(server.username).map_err(|_| "Invalid MongoDB username".to_string())?;
+        uri.set_password(Some(server.password)).map_err(|_| "Invalid MongoDB password".to_string())?;
+    }
+    Ok(uri.to_string())
+}
+
+fn mongo_command(binary: &Path, server: &ServerArgs, script: &str) -> Result<Command, String> {
+    let mut cmd = Command::new(binary);
+    cmd.arg("--quiet")
+        .arg("--eval")
+        .arg(script)
+        .arg(mongo_uri(server)?)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    no_console_window(&mut cmd);
+    Ok(cmd)
+}
+
 // ─── Output parser ─────────────────────────────────────────────────────────────
+
+// psql's unaligned mode with control-character separators. Unlike `|` and
+// `\n`, these never occur in real data, so values containing pipes or line
+// breaks survive intact. NULL gets its own marker so it stays distinct from
+// an empty string.
+const FIELD_SEP: char = '\u{1f}';
+const RECORD_SEP: char = '\u{1e}';
+const NULL_MARK: &str = "\u{1a}";
 
 fn looks_like_command_tag(line: &str) -> bool {
     let t = line.trim();
@@ -495,80 +654,91 @@ fn looks_like_command_tag(line: &str) -> bool {
         "REVOKE", "COMMENT", "LISTEN", "UNLISTEN", "NOTIFY", "CLUSTER",
         "PREPARE", "EXECUTE", "DEALLOCATE",
     ];
-    if BARE_TAGS.contains(&t) {
-        return true;
-    }
-    false
+    BARE_TAGS.contains(&t)
 }
 
-/// Parse raw psql stdout into structured columns + rows.
+/// Row count carried by a DML tag (`UPDATE 5` → 5, `INSERT 0 3` → 3).
+fn tag_row_count(tag: &str) -> Option<i64> {
+    let (verb, rest) = tag.trim().split_once(' ')?;
+    if !matches!(verb, "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "MERGE" | "COPY" | "MOVE" | "FETCH") {
+        return None;
+    }
+    rest.split_whitespace().last()?.parse().ok()
+}
+
+#[derive(Debug, Default, PartialEq)]
+struct PsqlOutput {
+    columns: Vec<String>,
+    rows: Vec<Vec<Option<String>>>,
+    /// Trailing command tag (`INSERT 0 2` after `RETURNING` rows, or the
+    /// whole output of a statement that returns no rows).
+    tag: Option<String>,
+}
+
+/// Parse psql output produced with `-A -F <FIELD_SEP> -R <RECORD_SEP>
+/// -P footer=off -P null=<NULL_MARK>`.
 ///
-/// The execute path runs psql unaligned (`-A -F|`) WITH the header row and
-/// the footer suppressed (`-P footer=off`), so `lines[0]` is always the
-/// header — including single-column results like `SELECT 1` (`?column?`)
-/// and empty result sets like `SELECT id FROM t WHERE false` (header with
-/// zero data rows, which must keep its header).
-/// (The old code passed `-t`, which drops the header, so the first data
-/// row was misread as the header and single-column results vanished.)
-/// Meta-command output (`\d`, `\dt`, …) has no result-set shape: the query
-/// itself starts with `\`, so we return empty and the frontend renders the
-/// raw stdout instead. The query text — not a one-column heuristic — is the
-/// signal, because a single-column SELECT with zero rows must keep its
-/// header.
-///
-/// Only call this for psql output. MySQL runs with `-N` (no header row),
-/// so its first data row would be mistaken for a header and dropped;
-/// MongoDB output is not pipe-separated at all. Both return raw stdout.
-fn parse_psql_output(lines: &[String], query: &str) -> (Vec<String>, Vec<Vec<String>>) {
-    if lines.is_empty() {
-        return (Vec::new(), Vec::new());
+/// Shape: `header RS row RS row\n[TAG\n]`. A statement without a result set
+/// prints only `TAG\n`; an empty result set prints only `header\n`.
+fn parse_psql_output(stdout: &str) -> PsqlOutput {
+    let mut body = stdout.trim_end_matches(['\n', '\r']);
+
+    let mut tag = None;
+    let (head, last_line) = match body.rfind('\n') {
+        Some(i) => (&body[..i], &body[i + 1..]),
+        None => ("", body),
+    };
+    if looks_like_command_tag(last_line) {
+        tag = Some(last_line.trim().to_string());
+        body = head.trim_end_matches('\r');
     }
 
-    // psql meta-commands (`\d`, `\dt`, …) bypass grid parsing — the
-    // frontend shows their raw stdout.
-    if query.trim_start().starts_with('\\') {
-        return (Vec::new(), Vec::new());
+    if body.is_empty() {
+        return PsqlOutput { tag, ..Default::default() };
     }
 
-    // Successful non-SELECT commands emit a lone command tag (`CREATE TABLE`,
-    // `UPDATE 5`, `COMMIT`, …) with no header row. Without this check the tag
-    // would be returned as a one-column result and the frontend would paint
-    // a bogus grid instead of the raw status line. A genuine header-only
-    // result (`SELECT id … WHERE false` → `["id"]`) never matches the tag
-    // shape (see `looks_like_command_tag`), so it keeps its header below.
-    if lines.len() == 1 && looks_like_command_tag(&lines[0]) {
-        return (Vec::new(), Vec::new());
+    let mut records = body.split(RECORD_SEP);
+    let columns: Vec<String> = records
+        .next()
+        .unwrap_or_default()
+        .split(FIELD_SEP)
+        .map(|s| s.to_string())
+        .collect();
+
+    let rows = records
+        .map(|record| {
+            record
+                .split(FIELD_SEP)
+                .map(|v| if v == NULL_MARK { None } else { Some(v.to_string()) })
+                .collect::<Vec<_>>()
+        })
+        .filter(|row| row.len() == columns.len())
+        .collect();
+
+    PsqlOutput { columns, rows, tag }
+}
+
+/// Parse PostgreSQL version string and return the major version number.
+/// Input: "PostgreSQL 16.5" or "PostgreSQL 16.5 on x86_64..." etc.
+fn parse_pg_version(version_output: &str) -> Result<u32, String> {
+    let parts: Vec<&str> = version_output.split_whitespace().collect();
+    if parts.len() < 2 {
+        return Err(format!("Unexpected version format: {}", version_output));
     }
+    let version_num = parts[1];
+    version_num
+        .split('.')
+        .next()
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| format!("Could not parse major version from: {}", version_num))
+}
 
-    let header: Vec<String> = lines[0].split('|').map(|s| s.trim().to_string()).collect();
-    if header.iter().all(|h| h.is_empty()) {
-        return (Vec::new(), Vec::new());
-    }
-
-    let mut data_rows: Vec<Vec<String>> = Vec::new();
-
-    for line in lines.iter().skip(1) {
-        let trimmed = line.trim();
-        // Footer safety net (suppressed via `-P footer=off`, but keep it).
-        if trimmed.starts_with('(') && trimmed.ends_with("rows)") {
-            continue;
-        }
-        if trimmed.is_empty() {
-            continue;
-        }
-        let values: Vec<String> = line.split('|').map(|s| s.trim().to_string()).collect();
-        // Only treat as a data row if it has the same number of columns as the header
-        if values.len() == header.len() {
-            data_rows.push(values);
-        }
-    }
-
-    // NOTE: no one-column/empty heuristic here — meta-commands are detected
-    // from the query text (leading `\`) and command tags by shape above. A
-    // header-only result is a genuine empty result set
-    // (`SELECT … WHERE false`) and must keep its header.
-
-    (header, data_rows)
+fn stderr_lines(stderr: &[u8]) -> Vec<String> {
+    String::from_utf8_lossy(stderr)
+        .lines()
+        .map(|l| l.trim_end().to_string())
+        .filter(|l| !l.is_empty())
+        .collect()
 }
 
 // ─── Tauri commands ───────────────────────────────────────────────────────────
@@ -579,6 +749,12 @@ pub struct ToolInfo {
     pub major_version: Option<u32>,
     pub available: bool,
     pub path: Option<String>,
+    /// "path" | "install_dir" | "cached"
+    pub source: Option<String>,
+    /// First line of `--version`, e.g. "psql (PostgreSQL) 16.4".
+    pub version: Option<String>,
+    /// Whether QueryDen can download this tool on the current platform.
+    pub downloadable: bool,
     pub system_install_hint: String,
 }
 
@@ -592,7 +768,7 @@ pub struct CachedTool {
 }
 
 /// Recursively sum file sizes under `path`.
-fn dir_size(path: &std::path::Path) -> u64 {
+fn dir_size(path: &Path) -> u64 {
     let mut total = 0u64;
     if let Ok(entries) = std::fs::read_dir(path) {
         for entry in entries.flatten() {
@@ -607,15 +783,6 @@ fn dir_size(path: &std::path::Path) -> u64 {
     total
 }
 
-fn parse_tool_kind(tool_kind: &str) -> Result<ToolKind, String> {
-    match tool_kind {
-        "postgresql" => Ok(ToolKind::Psql),
-        "mysql" => Ok(ToolKind::MySql),
-        "mongodb" => Ok(ToolKind::Mongo),
-        _ => Err(format!("Unknown tool: {}", tool_kind)),
-    }
-}
-
 /// Check all tools — system and bundled — and return their status.
 #[tauri::command]
 pub async fn cli_check_tools(
@@ -624,16 +791,19 @@ pub async fn cli_check_tools(
     let mut infos = Vec::new();
 
     for kind in [ToolKind::Psql, ToolKind::MySql, ToolKind::Mongo] {
-        let (available, path, version) = match manager.find_available(kind).await {
-            Some((p, v)) => (true, Some(p.to_string_lossy().to_string()), Some(v)),
-            None => (false, None, None),
+        let found = manager.find_available(kind);
+        let version = match &found {
+            Some(f) => binary_version(&f.path).await,
+            None => None,
         };
-
         infos.push(ToolInfo {
             kind: kind.alias().to_string(),
-            major_version: if version == Some(0) { None } else { version },
-            available,
-            path,
+            major_version: found.as_ref().map(|f| f.cached_major).filter(|m| *m != 0),
+            available: found.is_some(),
+            path: found.as_ref().map(|f| f.path.to_string_lossy().to_string()),
+            source: found.as_ref().map(|f| f.source.as_str().to_string()),
+            version,
+            downloadable: download_spec(kind).is_some(),
             system_install_hint: kind.system_install_hint().to_string(),
         });
     }
@@ -651,20 +821,14 @@ pub async fn cli_list_cached(
     let entries = std::fs::read_dir(&manager.tools_dir).map_err(|e| e.to_string())?;
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        let parts: Vec<&str> = name.split('-').collect();
-        if parts.len() != 2 {
+        let Some((kind_str, version_str)) = name.split_once('-') else {
             continue;
-        }
-        let (kind_str, version_str) = (parts[0], parts[1]);
-        let major_version: u32 = match version_str.parse() {
-            Ok(v) => v,
-            Err(_) => continue,
         };
-        let kind = match kind_str {
-            "postgresql" => ToolKind::Psql,
-            "mysql" => ToolKind::MySql,
-            "mongodb" => ToolKind::Mongo,
-            _ => continue,
+        let Ok(major_version) = version_str.parse::<u32>() else {
+            continue;
+        };
+        let Ok(kind) = parse_tool_kind(kind_str) else {
+            continue;
         };
 
         let bin_dir = manager.versioned_dir(kind, major_version).join("bin");
@@ -676,10 +840,9 @@ pub async fn cli_list_cached(
             .filter(|e| e.path().is_file())
             .map(|e| {
                 let n = e.file_name().to_string_lossy().to_string();
-                if cfg!(target_os = "windows") {
-                    n.trim_end_matches(".exe").to_string()
-                } else {
-                    n
+                match n.strip_suffix(".exe") {
+                    Some(stem) if cfg!(target_os = "windows") => stem.to_string(),
+                    _ => n,
                 }
             })
             .collect();
@@ -712,7 +875,8 @@ pub async fn cli_remove_cached(
     std::fs::remove_dir_all(&dir).map_err(|e| format!("Failed to remove cached tool: {}", e))
 }
 
-/// Download a specific version of a CLI tool.
+/// Download a CLI tool. `major_version` is advisory: each tool has one
+/// pinned download, cached under its real major version.
 #[tauri::command]
 pub async fn cli_download_version(
     app: AppHandle,
@@ -720,28 +884,22 @@ pub async fn cli_download_version(
     major_version: u32,
     manager: State<'_, CliManager>,
 ) -> Result<String, String> {
-    let kind = match tool_kind.as_str() {
-        "postgresql" => ToolKind::Psql,
-        "mysql" => ToolKind::MySql,
-        "mongodb" => ToolKind::Mongo,
-        _ => return Err(format!("Unknown tool: {}", tool_kind)),
-    };
+    let kind = parse_tool_kind(&tool_kind)?;
 
-    // Check if already cached
-    if let Some((path, v)) = manager.find_available(kind).await {
-        if v == major_version {
-            return Ok(path.to_string_lossy().to_string());
-        }
-    }
-
-    // Guard: refuse to download if there's no spec for this tool
-    if download_spec(kind, Some(major_version)).is_none() {
+    let Some(spec) = download_spec(kind) else {
         return Err(format!(
-            "Auto-download is not available for {} {}. {}",
+            "Auto-download is not available for {}. {}",
             tool_kind,
-            major_version,
             kind.system_install_hint()
         ));
+    };
+
+    if let Some((_, path)) = manager
+        .cached_versions(kind)
+        .into_iter()
+        .find(|(major, _)| *major == spec.major)
+    {
+        return Ok(path.to_string_lossy().to_string());
     }
 
     let _ = app.emit("cli-download-progress", serde_json::json!({
@@ -750,19 +908,19 @@ pub async fn cli_download_version(
         "status": "downloading"
     }));
 
-    let path = manager.download_versioned(kind, major_version).await?;
+    let result = manager.download(kind).await;
 
     let _ = app.emit("cli-download-progress", serde_json::json!({
         "tool": tool_kind,
-        "version": major_version,
-        "status": "done"
+        "version": spec.major,
+        "status": if result.is_ok() { "done" } else { "error" }
     }));
 
-    Ok(path.to_string_lossy().to_string())
+    result.map(|(path, _)| path.to_string_lossy().to_string())
 }
 
 /// Check what a CLI tool's status is for a given version.
-/// Returns { available, path, needsDownload, downloadUrl, downloadFilename, installHint }.
+/// Returns { available, path, needsDownload, downloadUrl, downloadFilename, cachedVersion, installHint }.
 /// Does NOT auto-download — lets the frontend decide whether to prompt the user.
 #[tauri::command]
 pub async fn cli_check_tool(
@@ -770,30 +928,25 @@ pub async fn cli_check_tool(
     major_version: u32,
     manager: State<'_, CliManager>,
 ) -> Result<serde_json::Value, String> {
-    let kind = match tool_kind.as_str() {
-        "postgresql" => ToolKind::Psql,
-        "mysql" => ToolKind::MySql,
-        "mongodb" => ToolKind::Mongo,
-        _ => return Err(format!("Unknown tool: {}", tool_kind)),
-    };
+    let kind = parse_tool_kind(&tool_kind)?;
 
-    // Check system + cached first
-    if let Some((path, v)) = manager.find_available(kind).await {
-        if v == 0 || v == major_version {
+    // A system install always qualifies (psql talks to older and newer
+    // servers alike); a cached download only for its own major version.
+    if let Some(found) = manager.find_available(kind) {
+        if found.cached_major == 0 || found.cached_major == major_version {
             return Ok(serde_json::json!({
                 "available": true,
-                "path": path.to_string_lossy(),
+                "path": found.path.to_string_lossy(),
                 "needsDownload": false,
                 "downloadUrl": serde_json::Value::Null,
                 "downloadFilename": serde_json::Value::Null,
-                "cachedVersion": if v == 0 { serde_json::Value::Null } else { serde_json::json!(v) },
+                "cachedVersion": if found.cached_major == 0 { serde_json::Value::Null } else { serde_json::json!(found.cached_major) },
+                "installHint": serde_json::Value::Null,
             }));
         }
-        // Cached but wrong version — treat as not matching
     }
 
-    // No exact match — see if we can provide a download spec or install hint
-    match download_spec(kind, Some(major_version)) {
+    match download_spec(kind) {
         Some(spec) => Ok(serde_json::json!({
             "available": false,
             "path": serde_json::Value::Null,
@@ -815,30 +968,17 @@ pub async fn cli_check_tool(
     }
 }
 
-/// Check system PATH only for a tool kind. Used when server version is unknown
-/// and we just want to know if a system psql exists.
+/// Check for a system install only (PATH or OS install folders). Used when
+/// server version is unknown and we just want to know if a system psql exists.
 #[tauri::command]
 pub async fn cli_check_system_tool(
     tool_kind: String,
-    manager: State<'_, CliManager>,
 ) -> Result<serde_json::Value, String> {
-    let kind = match tool_kind.as_str() {
-        "postgresql" => ToolKind::Psql,
-        "mysql" => ToolKind::MySql,
-        "mongodb" => ToolKind::Mongo,
-        _ => return Err(format!("Unknown tool: {}", tool_kind)),
-    };
-
-    if let Some((path, _)) = manager.find_system(kind).await {
-        return Ok(serde_json::json!({
-            "available": true,
-            "path": path.to_string_lossy(),
-        }));
-    }
-
+    let kind = parse_tool_kind(&tool_kind)?;
+    let found = find_system_tool(kind);
     Ok(serde_json::json!({
-        "available": false,
-        "path": serde_json::Value::Null,
+        "available": found.is_some(),
+        "path": found.map(|f| f.path.to_string_lossy().to_string()),
     }))
 }
 
@@ -850,25 +990,18 @@ pub async fn cli_ensure(
     major_version: Option<u32>,
     manager: State<'_, CliManager>,
 ) -> Result<String, String> {
-    let kind = match tool_kind.as_str() {
-        "postgresql" => ToolKind::Psql,
-        "mysql" => ToolKind::MySql,
-        "mongodb" => ToolKind::Mongo,
-        _ => return Err(format!("Unknown tool: {}", tool_kind)),
-    };
+    let _ = major_version;
+    let kind = parse_tool_kind(&tool_kind)?;
 
-    // Try system binary first
-    if let Some((path, _)) = manager.find_available(kind).await {
-        return Ok(path.to_string_lossy().to_string());
+    if let Some(found) = manager.find_available(kind) {
+        return Ok(found.path.to_string_lossy().to_string());
     }
 
-    // No download available for this platform → return system install hint
-    if download_spec(kind, major_version).is_none() {
+    if download_spec(kind).is_none() {
         return Err(kind.system_install_hint().to_string());
     }
 
-    let maj = major_version.unwrap_or(16); // default to latest stable
-    let path = manager.download_versioned(kind, maj).await?;
+    let (path, _) = manager.download(kind).await?;
     Ok(path.to_string_lossy().to_string())
 }
 
@@ -879,35 +1012,14 @@ pub async fn cli_get_version(
     _major_version: Option<u32>,
     manager: State<'_, CliManager>,
 ) -> Result<String, String> {
-    let kind = match tool_kind.as_str() {
-        "postgresql" => ToolKind::Psql,
-        "mysql" => ToolKind::MySql,
-        "mongodb" => ToolKind::Mongo,
-        _ => return Err(format!("Unknown tool: {}", tool_kind)),
-    };
-
-    let (binary, _) = manager.find_available(kind).await
-        .ok_or_else(|| "Tool not found".to_string())?;
-
-    let flag = match kind {
-        ToolKind::Psql | ToolKind::MySql => "--version",
-        ToolKind::Mongo => "--version",
-    };
-
-    let mut cmd = Command::new(&binary);
-    cmd.arg(flag);
-    no_console_window(&mut cmd);
-    let output = cmd.output().await.map_err(|e| e.to_string())?;
-
-    if !output.status.success() {
-        return Err("Version check failed".to_string());
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    let kind = parse_tool_kind(&tool_kind)?;
+    let found = manager.find_available(kind).ok_or_else(|| "Tool not found".to_string())?;
+    binary_version(&found.path)
+        .await
+        .ok_or_else(|| "Version check failed".to_string())
 }
 
-/// Detect the major version of a PostgreSQL server.
-/// Uses psql's version output to extract the major version.
+/// Detect the major version of a PostgreSQL server via psql.
 #[tauri::command]
 pub async fn cli_detect_pg_version(
     host: String,
@@ -917,30 +1029,13 @@ pub async fn cli_detect_pg_version(
     password: String,
     manager: tauri::State<'_, CliManager>,
 ) -> Result<u32, String> {
-    // Try to use psql to get server version
-    // Uses find_available which checks PATH, Windows fallback paths, and cached dirs
-    let (binary, _) = manager
+    let found = manager
         .find_available(ToolKind::Psql)
-        .await
         .ok_or_else(|| ToolKind::Psql.system_install_hint().to_string())?;
 
-    let mut cmd = Command::new(&binary);
-    cmd.env("PGPASSWORD", &password)
-        .env("PGCLIENTENCODING", "UTF8")
-        .arg("-h")
-        .arg(&host)
-        .arg("-p")
-        .arg(port.to_string())
-        .arg("-d")
-        .arg(&database)
-        .arg("-U")
-        .arg(&username)
-        .arg("-t") // tuples only
-        .arg("-A") // unaligned
-        .arg("-w") // never prompt
-        .arg("-c")
-        .arg("SELECT version()");
-    no_console_window(&mut cmd);
+    let server = ServerArgs { host: &host, port, database: &database, username: &username, password: &password };
+    let mut cmd = psql_command(&found.path, &server);
+    cmd.arg("-t").arg("-A").arg("-c").arg("SELECT version()");
     let output = cmd.output().await.map_err(|e| e.to_string())?;
 
     if !output.status.success() {
@@ -948,27 +1043,10 @@ pub async fn cli_detect_pg_version(
         return Err(format!("Connection failed: {}", stderr.trim()));
     }
 
-    let version_output = String::from_utf8_lossy(&output.stdout);
-    parse_pg_version(&version_output)
+    parse_pg_version(&String::from_utf8_lossy(&output.stdout))
 }
 
-/// Parse PostgreSQL version string and return the major version number.
-/// Input: "PostgreSQL 16.5" or "PostgreSQL 16.5 on x86_64..." etc.
-fn parse_pg_version(version_output: &str) -> Result<u32, String> {
-    let parts: Vec<&str> = version_output.split_whitespace().collect();
-    if parts.len() < 2 {
-        return Err(format!("Unexpected version format: {}", version_output));
-    }
-    let version_num = parts[1]; // e.g. "16.5" or "16.5 on..."
-    let major: u32 = version_num
-        .split('.')
-        .next()
-        .and_then(|s| s.parse().ok())
-        .ok_or_else(|| format!("Could not parse major version from: {}", version_num))?;
-    Ok(major)
-}
-
-/// Test a connection using the versioned CLI tool.
+/// Test a connection using the CLI tool.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // Tauri command — args mirror the IPC contract
 pub async fn cli_test_connection(
@@ -981,53 +1059,26 @@ pub async fn cli_test_connection(
     _major_version: u32,
     manager: tauri::State<'_, CliManager>,
 ) -> Result<String, String> {
-    let kind = match tool_kind.as_str() {
-        "postgresql" => ToolKind::Psql,
-        "mysql" => ToolKind::MySql,
-        "mongodb" => ToolKind::Mongo,
-        _ => return Err(format!("Unknown tool: {}", tool_kind)),
-    };
+    let kind = parse_tool_kind(&tool_kind)?;
+    let found = manager
+        .find_available(kind)
+        .ok_or_else(|| kind.system_install_hint().to_string())?;
 
-    let binary = manager.find_available(kind).await
-        .ok_or_else(|| "Tool not found — call cli_download_version first".to_string())?
-        .0;
-
-    let test_query = match kind {
-        ToolKind::Psql => "SELECT 1",
-        ToolKind::MySql => "SELECT 1",
-        ToolKind::Mongo => "db.runCommand({ ping: 1 })",
-    };
-
-    let mut cmd = Command::new(&binary);
-    match kind {
+    let server = ServerArgs { host: &host, port, database: &database, username: &username, password: &password };
+    let mut cmd = match kind {
         ToolKind::Psql => {
-            cmd.env("PGPASSWORD", &password);
-            cmd.env("PGCLIENTENCODING", "UTF8");
-            cmd.arg("-h").arg(&host);
-            cmd.arg("-p").arg(port.to_string());
-            cmd.arg("-d").arg(&database);
-            cmd.arg("-U").arg(&username);
-            cmd.arg("-t").arg("-A").arg("-w");
-            cmd.arg("-c").arg(test_query);
+            let mut cmd = psql_command(&found.path, &server);
+            cmd.arg("-t").arg("-A").arg("-c").arg("SELECT 1");
+            cmd
         }
         ToolKind::MySql => {
-            cmd.arg("-h").arg(&host);
-            cmd.arg("-P").arg(port.to_string());
-            cmd.arg("-D").arg(&database);
-            cmd.arg("-u").arg(&username);
-            if !password.is_empty() {
-                cmd.arg(format!("-p{}", password));
-            }
-            cmd.arg("-N").arg("-e").arg(test_query);
+            let mut cmd = mysql_command(&found.path, &server, true);
+            cmd.arg("-N").arg("-e").arg("SELECT 1");
+            cmd
         }
-        ToolKind::Mongo => {
-            cmd.arg("--quiet").arg("--eval").arg(test_query);
-            cmd.arg(format!("mongodb://{}:{}@{}:{}/{}",
-                username, password, host, port, database));
-        }
-    }
+        ToolKind::Mongo => mongo_command(&found.path, &server, "db.runCommand({ ping: 1 })")?,
+    };
 
-    no_console_window(&mut cmd);
     let output = cmd.output().await.map_err(|e| e.to_string())?;
 
     if !output.status.success() {
@@ -1037,7 +1088,13 @@ pub async fn cli_test_connection(
     Ok("Connected successfully".to_string())
 }
 
-/// Execute a query using the versioned CLI tool.
+/// Execute a query using the CLI tool.
+///
+/// psql results come back as structured `columns` + `rows` (NULL as JSON
+/// null). Meta-commands (`\d`, `\dt`, …) and expanded display (`-x`) run in
+/// psql's normal aligned format and come back as raw `stdout` lines, exactly
+/// as an interactive psql would print them. Server NOTICEs (stderr on a
+/// successful run) come back in `notices`.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // Tauri command — args mirror the IPC contract
 pub async fn cli_execute_query(
@@ -1052,75 +1109,54 @@ pub async fn cli_execute_query(
     expanded_display: bool,
     manager: tauri::State<'_, CliManager>,
 ) -> Result<serde_json::Value, String> {
-    let kind = match tool_kind.as_str() {
-        "postgresql" => ToolKind::Psql,
-        "mysql" => ToolKind::MySql,
-        "mongodb" => ToolKind::Mongo,
-        _ => return Err(format!("Unknown tool: {}", tool_kind)),
-    };
+    let _ = major_version;
+    let kind = parse_tool_kind(&tool_kind)?;
+    let found = manager
+        .find_available(kind)
+        .ok_or_else(|| kind.system_install_hint().to_string())?;
 
-    let (binary, cached_version) = manager.find_available(kind).await
-        .ok_or_else(|| "Tool not found — call cli_download_version first".to_string())?;
+    let server = ServerArgs { host: &host, port, database: &database, username: &username, password: &password };
+    run_cli_query(&found.path, kind, &server, &query, expanded_display).await
+}
 
-    // If the cached version doesn't match required version, warn but proceed
-    if cached_version != 0 && cached_version != major_version {
-        // For query execution we can tolerate a different minor version,
-        // but for pg_dump/pg_restore this would be a problem
-    }
+/// One query through `binary`; the body of `cli_execute_query`.
+async fn run_cli_query(
+    binary: &Path,
+    kind: ToolKind,
+    server: &ServerArgs<'_>,
+    query: &str,
+    expanded_display: bool,
+) -> Result<serde_json::Value, String> {
+    let is_meta_command = query.trim_start().starts_with('\\');
+    let structured = kind == ToolKind::Psql && !expanded_display && !is_meta_command;
 
-    let mut cmd = Command::new(&binary);
-
-    match kind {
+    let mut cmd = match kind {
         ToolKind::Psql => {
-            cmd.env("PGPASSWORD", &password);
-            // Force UTF-8 regardless of the Windows console code page —
-            // otherwise non-ASCII output is undecodable/mangled.
-            cmd.env("PGCLIENTENCODING", "UTF8");
-            cmd.arg("-h").arg(&host);
-            cmd.arg("-p").arg(port.to_string());
-            cmd.arg("-d").arg(&database);
-            cmd.arg("-U").arg(&username);
-            cmd.arg("-w");           // never prompt
+            let mut cmd = psql_command(binary, server);
             if expanded_display {
-                cmd.arg("-x");       // expanded display — frontend renders raw stdout
-            } else {
-                // Unaligned pipe-separated output WITH header row and no
-                // footer. (Never `-t`: tuples-only mode drops the header,
-                // making the first data row indistinguishable from it.)
-                cmd.arg("-A");       // unaligned
-                cmd.arg("-F").arg("|");
-                cmd.arg("-P").arg("footer=off");
+                cmd.arg("-x");
+            } else if structured {
+                cmd.arg("-A")
+                    .arg("-F")
+                    .arg(FIELD_SEP.to_string())
+                    .arg("-R")
+                    .arg(RECORD_SEP.to_string())
+                    .arg("-P")
+                    .arg("footer=off")
+                    .arg("-P")
+                    .arg(format!("null={}", NULL_MARK));
             }
-            cmd.arg("-c").arg(&query);
+            cmd.arg("-c").arg(query);
+            cmd
         }
         ToolKind::MySql => {
-            cmd.arg("-h").arg(&host);
-            cmd.arg("-P").arg(port.to_string());
-            cmd.arg("-D").arg(&database);
-            cmd.arg("-u").arg(&username);
-            if !password.is_empty() {
-                cmd.arg(format!("-p{}", password));
-            }
-            cmd.arg("-N").arg("-b").arg("-e").arg(&query);
+            let mut cmd = mysql_command(binary, server, true);
+            cmd.arg("-t").arg("-e").arg(query);
+            cmd
         }
-        ToolKind::Mongo => {
-            if !password.is_empty() {
-                cmd.env("MONGOSH_WIRED_TIGER_KEY", &password);
-            }
-            cmd.arg("--quiet").arg("--eval").arg(&query);
-            cmd.arg(format!("mongodb://{}:{}@{}:{}/{}",
-                username, password, host, port, database));
-        }
-    }
+        ToolKind::Mongo => mongo_command(binary, server, query)?,
+    };
 
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-    no_console_window(&mut cmd);
-
-    // Read stdout AND stderr via a single `output()` call. The previous
-    // spawn + manual stdout-drain + `wait()` + stderr-after-wait pattern
-    // could deadlock when stderr filled its pipe buffer while the parent
-    // was blocked reading stdout, and it discarded stderr content.
     let start = std::time::Instant::now();
     let output = cmd.output().await.map_err(|e| format!("Spawn failed: {}", e))?;
     let ms = start.elapsed().as_millis() as u64;
@@ -1130,34 +1166,41 @@ pub async fn cli_execute_query(
         return Err(format!("CLI error: {}", stderr.trim()));
     }
 
-    // `str::lines` handles both `\n` and Windows `\r\n` endings.
     let stdout_text = String::from_utf8_lossy(&output.stdout);
+    let notices = stderr_lines(&output.stderr);
+
+    if structured {
+        let parsed = parse_psql_output(&stdout_text);
+        let rows_affected = parsed
+            .tag
+            .as_deref()
+            .and_then(tag_row_count)
+            .unwrap_or(parsed.rows.len() as i64);
+        return Ok(serde_json::json!({
+            "columns": parsed.columns,
+            "rows": parsed.rows,
+            "stdout": parsed.tag.into_iter().collect::<Vec<_>>(),
+            "notices": notices,
+            "rowsAffected": rows_affected,
+            "executionTimeMs": ms,
+            "error": serde_json::Value::Null,
+        }));
+    }
+
+    // `str::lines` handles both `\n` and Windows `\r\n` endings.
     let stdout_lines: Vec<String> = stdout_text.lines().map(|l| l.to_string()).collect();
-
-    // Parse stdout into columns + rows for regular psql results only.
-    // MySQL runs with `-N` (no header) and MongoDB output is not
-    // pipe-separated — sending either through the psql grid parser drops
-    // the first data row / produces a bogus grid. Both render raw stdout.
-    let (columns, rows): (Vec<String>, Vec<Vec<String>>) = if expanded_display {
-        (Vec::new(), Vec::new())
-    } else {
-        match kind {
-            ToolKind::Psql => parse_psql_output(&stdout_lines, &query),
-            ToolKind::MySql | ToolKind::Mongo => (Vec::new(), Vec::new()),
-        }
-    };
-
     Ok(serde_json::json!({
-        "columns": columns,
-        "rows": rows,
+        "columns": Vec::<String>::new(),
+        "rows": Vec::<Vec<String>>::new(),
         "stdout": stdout_lines,
-        "rowsAffected": rows.len() as i64,
+        "notices": notices,
+        "rowsAffected": 0,
         "executionTimeMs": ms,
         "error": serde_json::Value::Null,
     }))
 }
 
-/// List databases via the versioned CLI tool.
+/// List databases via the CLI tool.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // Tauri command — args mirror the IPC contract
 pub async fn cli_list_databases(
@@ -1170,46 +1213,25 @@ pub async fn cli_list_databases(
     _major_version: u32,
     manager: tauri::State<'_, CliManager>,
 ) -> Result<Vec<String>, String> {
-    let kind = match tool_kind.as_str() {
-        "postgresql" => ToolKind::Psql,
-        "mysql" => ToolKind::MySql,
-        _ => return Err("Database listing not supported for this tool".to_string()),
-    };
+    let kind = parse_tool_kind(&tool_kind)?;
+    let found = manager.find_available(kind).ok_or_else(|| "Tool not found".to_string())?;
 
-    let (binary, _) = manager.find_available(kind).await
-        .ok_or_else(|| "Tool not found".to_string())?;
-
-    let query = match kind {
-        ToolKind::Psql => "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname",
-        ToolKind::MySql => "SHOW DATABASES",
-        _ => unreachable!(),
-    };
-
-    let mut cmd = Command::new(&binary);
-    match kind {
+    let server = ServerArgs { host: &host, port, database: &database, username: &username, password: &password };
+    let mut cmd = match kind {
         ToolKind::Psql => {
-            cmd.env("PGPASSWORD", &password);
-            cmd.env("PGCLIENTENCODING", "UTF8");
-            cmd.arg("-h").arg(&host);
-            cmd.arg("-p").arg(port.to_string());
-            cmd.arg("-d").arg(&database);
-            cmd.arg("-U").arg(&username);
-            cmd.arg("-t").arg("-A").arg("-F").arg("|").arg("-w");
-            cmd.arg("-c").arg(query);
+            let mut cmd = psql_command(&found.path, &server);
+            cmd.arg("-t").arg("-A").arg("-c")
+                .arg("SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname");
+            cmd
         }
         ToolKind::MySql => {
-            cmd.arg("-h").arg(&host);
-            cmd.arg("-P").arg(port.to_string());
-            cmd.arg("-u").arg(&username);
-            if !password.is_empty() {
-                cmd.arg(format!("-p{}", password));
-            }
-            cmd.arg("-N").arg("-e").arg(query);
+            let mut cmd = mysql_command(&found.path, &server, false);
+            cmd.arg("-N").arg("-e").arg("SHOW DATABASES");
+            cmd
         }
-        _ => unreachable!(),
-    }
+        ToolKind::Mongo => return Err("Database listing not supported for this tool".to_string()),
+    };
 
-    no_console_window(&mut cmd);
     let output = cmd.output().await.map_err(|e| e.to_string())?;
 
     if !output.status.success() {
@@ -1220,106 +1242,204 @@ pub async fn cli_list_databases(
     Ok(stdout.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn lines(v: &[&str]) -> Vec<String> {
-        v.iter().map(|s| s.to_string()).collect()
+    fn out(records: &[&[&str]], tail: &str) -> String {
+        let body: Vec<String> = records
+            .iter()
+            .map(|r| r.join(&FIELD_SEP.to_string()))
+            .collect();
+        format!("{}\n{}", body.join(&RECORD_SEP.to_string()), tail)
+    }
+
+    fn row(v: &[Option<&str>]) -> Vec<Option<String>> {
+        v.iter().map(|s| s.map(|s| s.to_string())).collect()
     }
 
     #[test]
     fn parses_multi_column_select_with_header() {
-        let (cols, rows) = parse_psql_output(&lines(&["id|name", "1|Alice", "2|Bob"]), "SELECT id, name FROM t");
-        assert_eq!(cols, vec!["id", "name"]);
-        assert_eq!(rows, vec![vec!["1".to_string(), "Alice".to_string()], vec!["2".to_string(), "Bob".to_string()]]);
+        let p = parse_psql_output(&out(&[&["id", "name"], &["1", "Alice"], &["2", "Bob"]], ""));
+        assert_eq!(p.columns, vec!["id", "name"]);
+        assert_eq!(p.rows, vec![row(&[Some("1"), Some("Alice")]), row(&[Some("2"), Some("Bob")])]);
+        assert_eq!(p.tag, None);
     }
 
     #[test]
     fn parses_single_column_select() {
-        // `SELECT 1` yields header `?column?` + one data line (no pipes).
-        let (cols, rows) = parse_psql_output(&lines(&["?column?", "1"]), "SELECT 1");
-        assert_eq!(cols, vec!["?column?"]);
-        assert_eq!(rows, vec![vec!["1".to_string()]]);
+        let p = parse_psql_output(&out(&[&["?column?"], &["1"]], ""));
+        assert_eq!(p.columns, vec!["?column?"]);
+        assert_eq!(p.rows, vec![row(&[Some("1")])]);
     }
 
     #[test]
-    fn meta_command_output_falls_back_to_raw() {
-        // Meta-commands are detected from the query text (leading `\`),
-        // not from the output shape — a header-only single-column SELECT
-        // must keep its header (see empty-result test below).
-        let (cols, rows) = parse_psql_output(&lines(&[
-            "List of relations",
-            "Schema|Name|Type|Owner",
-            "public|foo|table|user",
-        ]), "\\dt");
-        assert!(cols.is_empty() && rows.is_empty());
+    fn keeps_pipes_newlines_and_nulls_in_values() {
+        let p = parse_psql_output(&out(
+            &[&["a", "b", "c"], &["x|y", "multi\nline", NULL_MARK], &["", "z", "w"]],
+            "",
+        ));
+        assert_eq!(p.columns, vec!["a", "b", "c"]);
+        assert_eq!(
+            p.rows,
+            vec![
+                row(&[Some("x|y"), Some("multi\nline"), None]),
+                row(&[Some(""), Some("z"), Some("w")]),
+            ]
+        );
+    }
+
+    #[test]
+    fn returning_rows_keep_trailing_tag_separate() {
+        let p = parse_psql_output(&out(&[&["id", "v"], &["1", "a"], &["2", "b"]], "INSERT 0 2\n"));
+        assert_eq!(p.columns, vec!["id", "v"]);
+        assert_eq!(p.rows.len(), 2);
+        assert_eq!(p.rows[1], row(&[Some("2"), Some("b")]));
+        assert_eq!(p.tag.as_deref(), Some("INSERT 0 2"));
+        assert_eq!(tag_row_count("INSERT 0 2"), Some(2));
     }
 
     #[test]
     fn empty_result_keeps_header() {
-        // `SELECT id FROM t WHERE false`: header + zero rows is a genuine
-        // empty result set, not meta-command output.
-        let (cols, rows) = parse_psql_output(&lines(&["id"]), "SELECT id FROM t WHERE false");
-        assert_eq!(cols, vec!["id"]);
-        assert!(rows.is_empty());
+        let p = parse_psql_output("id\n");
+        assert_eq!(p.columns, vec!["id"]);
+        assert!(p.rows.is_empty());
+        let p = parse_psql_output(&format!("id{}name\n", FIELD_SEP));
+        assert_eq!(p.columns, vec!["id", "name"]);
+        assert!(p.rows.is_empty());
     }
 
     #[test]
-    fn command_tags_fall_back_to_raw() {
-        // Successful non-SELECT commands emit a lone status tag with no
-        // header row — the frontend must render stdout, not a grid.
+    fn command_tags_have_no_grid() {
         for tag in [
-            "CREATE TABLE",
-            "DROP TABLE",
-            "ALTER TABLE",
-            "CREATE INDEX",
-            "TRUNCATE TABLE",
-            "GRANT",
-            "COMMIT",
-            "ROLLBACK",
-            "BEGIN",
-            "DO",
-            "SET",
-            "VACUUM",
-            "START TRANSACTION",
-            "SELECT 1",
-            "INSERT 0 1",
-            "UPDATE 5",
-            "DELETE 3",
-            "COPY 10",
+            "CREATE TABLE", "DROP TABLE", "ALTER TABLE", "CREATE INDEX", "TRUNCATE TABLE",
+            "GRANT", "COMMIT", "ROLLBACK", "BEGIN", "DO", "SET", "VACUUM",
+            "START TRANSACTION", "SELECT 1", "INSERT 0 1", "UPDATE 5", "DELETE 3", "COPY 10",
         ] {
-            let (cols, rows) = parse_psql_output(&lines(&[tag]), "CREATE TABLE t (id int)");
-            assert!(cols.is_empty() && rows.is_empty(), "tag rendered as grid: {tag}");
+            let p = parse_psql_output(&format!("{}\n", tag));
+            assert!(p.columns.is_empty() && p.rows.is_empty(), "tag rendered as grid: {tag}");
+            assert_eq!(p.tag.as_deref(), Some(tag));
         }
+        assert_eq!(tag_row_count("UPDATE 5"), Some(5));
+        assert_eq!(tag_row_count("CREATE TABLE"), None);
     }
 
     #[test]
     fn header_shaped_like_words_still_grids() {
-        // A header-only result whose text is ordinary words is a genuine
-        // empty result set — only command-tag shapes go raw.
-        let (cols, rows) = parse_psql_output(&lines(&["status"]), "SELECT status FROM t WHERE false");
-        assert_eq!(cols, vec!["status"]);
-        assert!(rows.is_empty());
+        let p = parse_psql_output("status\n");
+        assert_eq!(p.columns, vec!["status"]);
         // Case-sensitive: a quoted lowercase column never matches a tag.
-        let (cols, rows) = parse_psql_output(&lines(&["commit"]), "SELECT \"commit\" FROM t WHERE false");
-        assert_eq!(cols, vec!["commit"]);
-        assert!(rows.is_empty());
+        let p = parse_psql_output("commit\n");
+        assert_eq!(p.columns, vec!["commit"]);
     }
 
     #[test]
-    fn empty_and_header_only_input() {
-        assert_eq!(parse_psql_output(&[], "SELECT 1"), (Vec::new(), Vec::new()));
-        let (cols, rows) = parse_psql_output(&lines(&["id|name"]), "SELECT id, name FROM t WHERE false");
-        assert_eq!(cols, vec!["id", "name"]);
-        assert!(rows.is_empty());
+    fn windows_line_endings() {
+        let p = parse_psql_output(&format!("id{}1\r\nUPDATE 1\r\n", RECORD_SEP));
+        assert_eq!(p.columns, vec!["id"]);
+        assert_eq!(p.rows, vec![row(&[Some("1")])]);
+        assert_eq!(p.tag.as_deref(), Some("UPDATE 1"));
+    }
+
+    #[test]
+    fn empty_output() {
+        assert_eq!(parse_psql_output(""), PsqlOutput::default());
     }
 
     #[test]
     fn parses_pg_version_strings() {
         assert_eq!(parse_pg_version("PostgreSQL 16.5 on x86_64-pc-linux-gnu").unwrap(), 16);
         assert_eq!(parse_pg_version("PostgreSQL 18.1").unwrap(), 18);
+    }
+
+    #[test]
+    fn major_from_install_dir_names() {
+        assert_eq!(major_of("16"), Some(16));
+        assert_eq!(major_of("postgresql@17"), Some(17));
+        assert_eq!(major_of("MySQL Server 8.0"), Some(8));
+        assert_eq!(major_of("libpq"), None);
+    }
+
+    #[test]
+    fn scan_picks_versioned_dirs() {
+        let root = std::env::temp_dir().join(format!("qd-cli-scan-{}", std::process::id()));
+        for v in ["14", "17"] {
+            let bin = root.join(v).join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            std::fs::write(bin.join("psql"), b"").unwrap();
+        }
+        std::fs::create_dir_all(root.join("15").join("bin")).unwrap();
+        let mut found = Vec::new();
+        scan_versioned_dirs(&root, "", &["bin", "psql"], &mut found);
+        found.sort();
+        assert_eq!(found.iter().map(|(m, _)| *m).collect::<Vec<_>>(), vec![14, 17]);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn mongo_uri_encodes_credentials() {
+        let server = ServerArgs { host: "db.local", port: 27017, database: "app", username: "u@x", password: "p:w/d" };
+        assert_eq!(mongo_uri(&server).unwrap(), "mongodb://u%40x:p%3Aw%2Fd@db.local:27017/app");
+    }
+
+    /// The psql console path end to end: real `psql`, real server. Runs when
+    /// `QUERYDEN_TEST_PG_URL` (postgres://user[:pass]@host:port/db) is set
+    /// and a psql binary is installed; skipped otherwise.
+    #[test]
+    fn psql_console_against_a_live_server() {
+        let Ok(raw) = std::env::var("QUERYDEN_TEST_PG_URL") else { return };
+        let Some(psql) = find_system_tool(ToolKind::Psql) else { return };
+        let url = url::Url::parse(&raw).expect("QUERYDEN_TEST_PG_URL");
+        let host = url.host_str().unwrap_or("localhost").to_string();
+        let database = url.path().trim_start_matches('/').to_string();
+        let server = ServerArgs {
+            host: &host,
+            port: url.port().unwrap_or(5432),
+            database: &database,
+            username: url.username(),
+            password: url.password().unwrap_or(""),
+        };
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let run = |q: &str, expanded: bool| rt.block_on(run_cli_query(&psql.path, ToolKind::Psql, &server, q, expanded));
+        let ok = |q: &str| run(q, false).unwrap_or_else(|e| panic!("{q}: {e}"));
+
+        ok("DROP SCHEMA IF EXISTS qd_cli CASCADE");
+        let created = ok("CREATE SCHEMA qd_cli");
+        assert_eq!(created["stdout"], serde_json::json!(["CREATE SCHEMA"]));
+        ok("CREATE TABLE qd_cli.t (id int PRIMARY KEY, v text)");
+
+        let sel = ok("SELECT 1 AS a, NULL AS b, 'x|y' AS c, E'line1\\nline2' AS d, 'ünïcode' AS e");
+        assert_eq!(sel["columns"], serde_json::json!(["a", "b", "c", "d", "e"]));
+        assert_eq!(sel["rows"], serde_json::json!([["1", null, "x|y", "line1\nline2", "ünïcode"]]));
+
+        let ins = ok("INSERT INTO qd_cli.t VALUES (1, 'a'), (2, 'b') RETURNING id");
+        assert_eq!(ins["rows"], serde_json::json!([["1"], ["2"]]));
+        assert_eq!(ins["stdout"], serde_json::json!(["INSERT 0 2"]));
+        assert_eq!(ins["rowsAffected"], serde_json::json!(2));
+
+        let upd = ok("UPDATE qd_cli.t SET v = 'z'");
+        assert_eq!(upd["columns"], serde_json::json!([]));
+        assert_eq!(upd["stdout"], serde_json::json!(["UPDATE 2"]));
+        assert_eq!(upd["rowsAffected"], serde_json::json!(2));
+
+        let empty = ok("SELECT id FROM qd_cli.t WHERE false");
+        assert_eq!(empty["columns"], serde_json::json!(["id"]));
+        assert_eq!(empty["rows"], serde_json::json!([]));
+
+        let notice = ok("DO $$ BEGIN RAISE NOTICE 'hello from DO'; END $$");
+        assert_eq!(notice["stdout"], serde_json::json!(["DO"]));
+        assert!(notice["notices"].to_string().contains("hello from DO"), "{notice}");
+
+        let meta = ok("\\dt qd_cli.*");
+        let meta_text = meta["stdout"].to_string();
+        assert!(meta_text.contains("List of relations") && meta_text.contains("qd_cli"), "{meta}");
+
+        let expanded = run("SELECT 1 AS a", true).unwrap();
+        assert!(expanded["stdout"].to_string().contains("RECORD 1"), "{expanded}");
+
+        let err = run("SELECT * FROM qd_cli.missing", false).unwrap_err();
+        assert!(err.contains("does not exist"), "{err}");
+
+        ok("DROP SCHEMA qd_cli CASCADE");
     }
 }
