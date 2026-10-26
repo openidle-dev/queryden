@@ -37,11 +37,9 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 /// Suppress the flashing console window Windows spawns for each subprocess.
 /// No-op on other platforms.
 fn no_console_window(cmd: &mut Command) -> &mut Command {
+    // tokio's Command has `creation_flags` built in on Windows.
     #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    cmd.creation_flags(CREATE_NO_WINDOW);
     cmd
 }
 

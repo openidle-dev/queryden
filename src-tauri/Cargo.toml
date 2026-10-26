@@ -40,7 +40,7 @@ keyring = { version = "3" }
 ssh2 = "0.9"
 tokio = { version = "1", features = ["process", "io-util", "rt-multi-thread", "fs", "rt"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-zip = "2"
+zip = { version = "9", default-features = false, features = ["deflate"] }
 flate2 = "1"
 tar = "0.4"
 which = "7"

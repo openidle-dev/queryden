@@ -4,6 +4,10 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 
 ## [Unreleased]
 
+### Security
+- **Dependency advisories cleared.** rustls 0.23.46, rustls-webpki 0.103.16 and webpki-roots 1.0.11 (TLS downgrade, handshake and distrusted-intermediate fixes); quinn-proto, crossbeam-epoch, quick-xml (via plist), tokio. The app's own `zip` moves 2 → 9 (symlink, permission and SUID handling in `extract()`, used for CLI-tool downloads) with only the deflate codec, dropping the bzip2/lzma C libraries. Frontend: Vite, PostCSS, nanoid and Babel patched; Vitest 3 → 4 (Tinypool RCE, dev-only); Monaco 0.55 → 0.57 (bundled DOMPurify). Docs site: in-range Astro dependency fixes.
+- **Not yet fixable here:** `zip` 4.x inside `tauri-plugin-updater` (no patched 4.x; update archives are signature-verified before extraction), `rsa` in sqlx's MySQL driver (no fixed release; QueryDen only encrypts with the server's public key), `rkyv` (in the lockfile, not compiled in), and Astro ≥ 7.2.8 for the docs site (needs Node ≥ 22.23 on the build host).
+
 ### Added
 - **MySQL column-level autocompletion.** `loadSchema` now loads `information_schema.COLUMNS` for MySQL/MariaDB, populating `schema.columns` so typing `SELECT tablename.` shows all columns for that table. Previously `schema.columns` was always empty on MySQL, making table.column and alias.column completion structurally blind.
 - **MySQL scalar function completion.** `loadSchema` now loads `information_schema.ROUTINES` (`ROUTINE_TYPE = 'FUNCTION'`) for MySQL/MariaDB, so typing `fn(` shows schema-loaded function names with snippet tab-stop placeholders.
