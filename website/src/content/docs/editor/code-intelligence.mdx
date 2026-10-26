@@ -1,0 +1,56 @@
+---
+title: Completion and navigation
+description: Context-aware autocomplete, parameter hints, hover info, Ctrl+click definitions, and DataGrip-style highlighting.
+section: editor
+order: 12
+updated: 2026-10-26
+---
+
+import Callout from '../../../components/Callout.astro';
+
+The editor reads your schema — tables, views, columns with their types, functions, user-defined types and foreign keys — and uses it everywhere: suggestions, hints, hovers and colours. It is loaded when you open a database and refreshed with **Refresh Schema** on the database's right-click menu.
+
+## Autocomplete
+
+What's offered depends on where the cursor is in the statement:
+
+| Where | Suggestions |
+|-------|-------------|
+| `SELECT ▮`, `WHERE ▮`, `ON ▮`, `SET ▮`, `ORDER BY ▮` | Columns of the tables the statement uses — even when `FROM` comes after the cursor — in table order, with their types. Then functions, then keywords. |
+| `FROM ▮`, `JOIN ▮`, `UPDATE ▮`, `INTO ▮` | Tables, views and schemas. After `JOIN`, ready-made joins along foreign keys (`orders o ON o.user_id = u.id`). |
+| `alias.▮` / `table.▮` | That table's columns. |
+| `schema.▮` | That schema's tables, views and functions. |
+| `::▮`, `CAST(x AS ▮` | Data types, including your own enums, domains and composites. |
+| After a complete table reference | The clauses that can follow (`WHERE`, `JOIN`, `GROUP BY`, …). |
+
+Identifiers that need quoting are inserted quoted (`"createdAt"`). Choosing a function inserts `name()` and opens its parameter hints.
+
+**Which schema?** A tab completes against **its own** connection and database — the one shown in the tab header — even when the sidebar has another selected. A tab on a server that isn't open in the sidebar loads its schema in the background.
+
+## Parameter hints
+
+Type `my_function(` and a hint lists every overload with argument names, types, return type and the function's comment, highlighting the argument you're on. `Ctrl+Shift+Space` brings it back. Calls to routines with named parameters also show the names inline, before each argument (`p_env: 'prod'`). Built-in functions are covered for PostgreSQL, MySQL and SQLite.
+
+## Hover
+
+- A **table or view** shows its columns and types.
+- A **function** shows its signatures and description.
+- A **column** shows its type and table.
+
+## Ctrl+click definitions
+
+`Ctrl+Click` (macOS: `Cmd+Click`) a name to see its definition, built by the server's own deparsers — the same source `psql \d` and `pg_dump` use:
+
+- **Functions and procedures**: every overload's `CREATE OR REPLACE FUNCTION`, including set-returning functions called in `FROM`.
+- **Views**: the view definition.
+- **Tables**: exact column types (`varchar(80)`, `numeric(12,2)`, identity columns), constraints, indexes and comments.
+
+A schema-qualified name is looked up exactly; an unqualified one follows the `search_path`, and if it isn't there, any schema that has it.
+
+## Highlighting
+
+Colours follow DataGrip's Darcula and IntelliJ Light schemes: keywords, functions, types, strings, numbers and comments from a grammar that understands each dialect (dollar-quoted bodies, `E''` strings, nested comments, backticks, `::type`), plus colours that need context — table names, schema names, and aliases in italics.
+
+<Callout type="info" title="No suggestions?">
+Completion needs the schema: open a database in the explorer (or wait for a background load on a tab that targets another server), and use **Refresh Schema** after DDL changes. Keywords and built-in functions are always offered, even before a schema is loaded.
+</Callout>

@@ -3,21 +3,19 @@ title: Install
 description: Native installers for macOS, Windows, and Linux. ~11 MB across platforms.
 section: getting-started
 order: 10
-updated: 2026-05-13
+updated: 2026-10-26
 ---
 
-QueryDen ships native installers built by GitHub Actions from the public source tree. Pick your OS:
+QueryDen ships native installers built by GitHub Actions from the public source tree. Pick your OS on the [download page](/download) or the [GitHub release](https://github.com/openidle-dev/queryden/releases/latest):
 
 | Platform | File | Size |
 |----------|------|------|
-| macOS (Apple Silicon) | `QueryDen_1.0.11_aarch64.dmg` | ~11 MB |
-| Windows (x86_64) | `QueryDen_1.0.11_x64-setup.exe` | ~8 MB |
-| Linux (.deb) | `QueryDen_1.0.11_amd64.deb` | ~11 MB |
-| Linux (AppImage) | `QueryDen_1.0.11_amd64.AppImage` | ~84 MB |
+| macOS (Intel + Apple Silicon) | `QueryDen_<version>_universal.dmg` | ~20 MB |
+| Windows (x86_64) | `QueryDen_<version>_x64-setup.exe` | ~6 MB |
+| Linux (.deb) | `QueryDen_<version>_amd64.deb` | ~9 MB |
+| Linux (AppImage) | `QueryDen_<version>_amd64.AppImage` | ~80 MB |
 
-The AppImage bundles its own runtime, which is why it's larger. Use the `.deb` if your distribution supports it.
-
-[Download page →](/download)
+The macOS build is a single universal binary, so the same `.dmg` runs on Intel and Apple Silicon Macs (releases up to 1.0.23 shipped an Apple Silicon-only `_aarch64.dmg`). The AppImage bundles its own runtime, which is why it's larger; use the `.deb` if your distribution supports it.
 
 ## Verify the download
 
@@ -25,22 +23,28 @@ Every installer ships with a matching `.sha256` next to it on the GitHub release
 
 ```powershell
 # Windows (PowerShell)
-Get-FileHash QueryDen_1.0.11_x64-setup.exe -Algorithm SHA256
+Get-FileHash QueryDen_<version>_x64-setup.exe -Algorithm SHA256
 ```
 
 ```bash
 # macOS / Linux
-shasum -a 256 QueryDen_1.0.11_aarch64.dmg
-sha256sum QueryDen_1.0.11_amd64.deb
+shasum -a 256 QueryDen_<version>_universal.dmg
+sha256sum QueryDen_<version>_amd64.deb
 ```
 
 If the hashes don't match, don't run the installer — open an issue.
 
 ## System requirements
 
-- **macOS** 11 Big Sur or newer. Apple Silicon only (no Intel build right now).
-- **Windows** 10 1809 or newer. x86_64. WebView2 runtime is auto-installed by the setup .exe.
-- **Linux** glibc 2.31+ (Debian 11 / Ubuntu 22.04+). `webkit2gtk` 4.1. `libsecret` / GNOME Keyring for the vault.
+- **macOS** 11 Big Sur or newer, Intel or Apple Silicon.
+- **Windows** 10 1809 or newer, x86_64. The WebView2 runtime is installed by the setup `.exe` if it's missing.
+- **Linux** glibc 2.35+ (Ubuntu 22.04+, Debian 12+, Fedora 36+) and `webkit2gtk` 4.1.
+
+Optional: a PostgreSQL client (`psql`) for the [psql console](/docs/editor/psql-console). QueryDen finds it on your `PATH` or in the standard install folders.
+
+## Updates
+
+Installed builds update themselves: QueryDen checks the signed release feed and offers the update in-app. To get fixes before they're tagged, see the [beta channel](/docs/getting-started/beta-channel).
 
 ## Build from source
 

@@ -10,14 +10,14 @@ QueryDen does not run an inference server. When you use the AI features, the cal
 
 ## Configuring a provider
 
-**Settings → AI → Add provider**. Pick one of:
+Open **Settings → AI Assistant**, turn it on, and pick a provider:
 
 - **OpenAI** — paste an `sk-...` key.
 - **Anthropic** — paste an `sk-ant-...` key.
 - **Google (Gemini)** — paste an `AIza...` key.
-- **Ollama** — point at a local Ollama instance (`http://localhost:11434` by default). No key needed.
+- **Local** — Ollama (`http://localhost:11434` by default) or any OpenAI-compatible server such as LM Studio (`http://localhost:1234`). No key needed.
 
-The key is written to the encrypted vault, alongside your connections. It never leaves your machine except as the `Authorization` header on the request to the provider.
+The key is sealed with AES-256-GCM, using the same machine-locked key as the credential vault — never stored in plain text. Requests to the provider are made by QueryDen's backend, so the key never passes through the web view; it leaves your machine only in the request to the provider.
 
 ## Where the AI is actually used
 
@@ -26,16 +26,7 @@ The key is written to the encrypted vault, alongside your connections. It never 
 
 ## Model selection
 
-Default models per provider:
-
-| Provider | Default | Why |
-|----------|---------|-----|
-| OpenAI | `gpt-4o-mini` | Cheap, fast, good enough for plan-tree analysis |
-| Anthropic | `claude-3-5-haiku-latest` | Cheapest tier; switch to `sonnet` for harder plans |
-| Google | `gemini-1.5-flash` | Free tier covers most use |
-| Ollama | `llama3.1:8b` | Local; no network call |
-
-Override per-provider in settings.
+The model list comes from the provider itself: once a key (or a local endpoint) is entered, **Settings → AI** asks the provider which models your key can use and lists them — new models appear without a QueryDen update. Press **Refresh** after enabling a new model on your account. If the list can't be loaded (offline, restricted key), type a model id by hand.
 
 ## Privacy posture
 

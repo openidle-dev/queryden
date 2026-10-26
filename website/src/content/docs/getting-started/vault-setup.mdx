@@ -1,40 +1,44 @@
 ---
-title: Set up the vault
-description: On first launch you create a master password. The vault is encrypted and machine-bound.
+title: The vault
+description: How QueryDen stores connections and credentials — encrypted at rest, locked to this machine, no setup step.
 section: getting-started
 order: 20
-updated: 2026-05-13
+updated: 2026-10-26
 ---
 
-On first launch, QueryDen asks you to create a **master password** for the encrypted vault. The vault stores every connection string, every saved query, and every local-history snapshot.
+import Callout from '../../../components/Callout.astro';
 
-> The master password never leaves your machine. It is mixed with a machine fingerprint to derive the AES-256-GCM encryption key. The key never leaves your machine either.
+There is nothing to set up. The first time QueryDen saves a connection it creates its encryption key, and from then on everything sensitive is written encrypted and locked to this computer.
 
-## What you choose
+## What's protected
 
-- A passphrase you'll remember. A long one is better than a clever short one — Argon2id is memory-hard, so the slow KDF is doing the heavy lifting either way.
-- That's it. There is no recovery flow. If you forget it, the vault is unreadable.
+Every secret QueryDen keeps — connection passwords, SSH passwords and key passphrases, credential profiles, your AI provider key — plus your saved queries, query history and local history is encrypted with **AES-256-GCM** before it touches disk. Nothing sensitive is ever written in plain text.
 
-## What QueryDen does behind the scenes
+The data lives in QueryDen's app data folder: `~/.local/share/com.queryden.app/` on Linux, `~/Library/Application Support/com.queryden.app/` on macOS and `%APPDATA%\com.queryden.app\` on Windows.
 
-1. Reads a machine fingerprint — `/etc/machine-id` on Linux, `IOPlatformUUID` on macOS, `CSP UUID` on Windows.
-2. Loads (or creates) the OS-keychain entry for the master key.
-3. Derives the AES-256-GCM key from your passphrase + the machine fingerprint via Argon2id.
-4. Writes the encrypted vault file to the Tauri app data directory.
+## How the key is made
 
-Full layer-by-layer walkthrough lives on [the security page](/security#vault).
+1. On first use QueryDen generates a random 256-bit key, stored in your user profile with owner-only access.
+2. It reads this machine's hardware identity, so the key only works on this computer.
+3. Both, plus a random per-vault salt, go through **Argon2id** — a memory-hard key-derivation function — to produce the encryption key.
 
-## Brute-force lockout
+Every write is atomic (temporary file, flush, rename), so a crash or power loss mid-save can't leave a half-written file.
 
-After 5 failed unlock attempts, the vault locks for an exponentially increasing duration. State persists across app restarts via the encrypted state file, so a relaunch doesn't reset the counter.
+<Callout type="info" title="Machine-locked by design">
+Copy the folder to another computer — a backup, a synced drive — and it won't decrypt there, even with everything else intact. On your own machine the vault is protected by your OS account, so keep full-disk encryption and a screen lock turned on. An optional master password and OS-keychain storage are on the [roadmap](/roadmap).
+</Callout>
 
-## Moving machines
+## Credential profiles
 
-By design, the vault file does **not** load on a different computer — even with the correct password. The machine fingerprint changes; the derived key changes; the MAC fails.
+**Settings → Credential Vault** holds named username/password pairs. Pick a profile in a connection instead of typing the password there, and changing the profile updates every connection that uses it.
 
-If you want to move connections between machines:
+## Moving to a new machine
 
-1. Export the connection list (plaintext JSON of the structure you choose — passwords are not exported by default).
-2. Set the same passwords on the new machine after import.
+By design the files don't decrypt on another computer, even if you copy the whole folder. To move your connections:
 
-A future release will add an explicit "move vault" flow.
+1. **Export** them with the **Import / Export Connections** button in the Database Explorer toolbar. You choose whether to include passwords; the export is a plain JSON file, so treat one with passwords like a password.
+2. **Import** the file on the new machine. QueryDen re-encrypts everything with that machine's key.
+
+If a file fails to decrypt (for example after copying the folder between machines), QueryDen shows a banner and refuses to save over it, so nothing on disk is lost while you sort it out.
+
+Full details: [Vault internals](/docs/security/vault-internals).

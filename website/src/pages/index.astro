@@ -23,9 +23,8 @@ const ROWS: Array<{ label: string; values: Array<string | boolean>; wedge: boole
   { label: 'Native (no Chromium bundled)',   values: [true, false, true, false, false, false],          wedge: true  },
   { label: 'Installer size',                 values: ['~11 MB', '~250 MB', '~50 MB', '~700 MB', '~200 MB', '~200 MB'], wedge: true },
   { label: 'Machine-locked vault',           values: [true, false, false, false, false, false],         wedge: true  },
-  { label: 'Brute-force lockout',            values: [true, false, false, false, false, false],         wedge: true  },
   { label: 'Local history · diffs',          values: [true, 'Yes', 'Yes', 'Yes', 'Yes', 'Limited'],     wedge: false },
-  { label: 'Integrated psql · per-version',  values: [true, false, false, false, false, 'bundled'],     wedge: true  },
+  { label: 'Integrated psql console',        values: [true, false, false, false, false, 'bundled'],     wedge: true  },
   { label: 'AI assistant · BYO key',         values: ['OpenAI · Anthropic · Google · Ollama', 'Yes (paid)', false, 'Paid', 'Yes (BYO)', false], wedge: true },
   { label: 'Visual EXPLAIN ANALYZE',         values: [true, 'Yes', false, 'Yes', 'Yes', 'Yes'],         wedge: false },
   { label: 'SSH tunneling',                  values: [true, true, true, true, true, true],              wedge: false },
@@ -475,18 +474,18 @@ const FOOTPRINT = [
           <p class="b-cap">Pick the engines, run once, get merged rows tagged with their source.</p>
         </div>
 
-        <!-- ============== Tile 5 — Version-matched embedded CLI ============== -->
+        <!-- ============== Tile 5 — Integrated psql console ============== -->
         <div class="bento-tile bento-cli">
           <div class="b-eye mono">Embedded CLI</div>
-          <h3 class="b-title"><code class="b-codetag mono">psql</code>, but the right version.</h3>
+          <h3 class="b-title"><code class="b-codetag mono">psql</code>, one right-click away.</h3>
           <div class="cli-term mono" aria-hidden="true">
-            <div class="cli-line"><span class="cli-prompt">$</span> queryden cli pg://db.acme.dev</div>
-            <div class="cli-line cli-good">→ detected PostgreSQL <strong>16.4</strong></div>
-            <div class="cli-line cli-good">→ using <strong>psql 16.4</strong> <span class="cli-ok">✓ matched</span></div>
+            <div class="cli-line"><span class="cli-prompt">$</span> Open PSQL (Console) · db.acme.dev</div>
+            <div class="cli-line cli-good">→ found <strong>psql 17.2</strong> in the PostgreSQL install folder</div>
+            <div class="cli-line cli-good">→ server PostgreSQL <strong>16.4</strong> <span class="cli-ok">✓ compatible</span></div>
             <div class="cli-line cli-fade">psql (16.4)</div>
             <div class="cli-line cli-fade">db=#&nbsp;<span class="cli-cursor"></span></div>
           </div>
-          <p class="b-cap">Auto-downloads the matching server-version client. No "version mismatch" surprises.</p>
+          <p class="b-cap">Uses the newest psql on your machine — found even when it isn't on PATH — with the connection's credentials and SSH tunnel already applied.</p>
         </div>
 
       </div>
@@ -535,22 +534,22 @@ const FOOTPRINT = [
         <div class="sec-pillar">
           <div class="eyebrow">Layer</div>
           <h4>AES-256-GCM</h4>
-          <p>Authenticated encryption for every connection, every saved query, every vault entry. Tampering invalidates the MAC; the file refuses to decrypt.</p>
+          <p>Authenticated encryption for every stored secret, saved query and history entry. Tampering invalidates the tag; the data refuses to decrypt.</p>
         </div>
         <div class="sec-pillar">
           <div class="eyebrow">Layer</div>
           <h4>Argon2id KDF</h4>
-          <p>Master password → key via a memory-hard KDF, making brute-force orders of magnitude slower than a GPU farm.</p>
+          <p>Per-install secret + machine identity + per-vault salt → key via a memory-hard KDF, making brute-force orders of magnitude slower than a GPU farm.</p>
         </div>
         <div class="sec-pillar">
           <div class="eyebrow">Layer</div>
           <h4>Machine fingerprint</h4>
-          <p>Mixed into the KDF. Linux: <code class="inline">/etc/machine-id</code>. macOS: <code class="inline">IOPlatformUUID</code>. Windows: <code class="inline">CSP UUID</code>. Change machines, the vault refuses to load.</p>
+          <p>Mixed into the KDF. Linux: <code class="inline">/etc/machine-id</code>. macOS: <code class="inline">IOPlatformUUID</code>. Windows: the system UUID. Change machines, the vault refuses to load.</p>
         </div>
         <div class="sec-pillar">
           <div class="eyebrow">Layer</div>
-          <h4>OS keychain</h4>
-          <p>Master key in macOS Keychain (Secure Enclave-bound), Windows Credential Manager (DPAPI), or libsecret on Linux.</p>
+          <h4>Per-install key</h4>
+          <p>256 random bits from the operating system's secure random source, generated on first launch and readable only by your user account.</p>
         </div>
       </div>
 
@@ -559,8 +558,8 @@ const FOOTPRINT = [
           <div class="eyebrow">Deep dive</div>
           <h3 class="sd-title">See the bytes of an encrypted vault.</h3>
           <p class="sd-cap">
-            The Security page walks the full file format — magic header, Argon2id salt,
-            GCM nonce, ciphertext, MAC — annotated against the source. Plus the threat
+            The Security page walks the encryption layers — Argon2id, per-vault salt,
+            GCM nonce, ciphertext, authentication tag. Plus the threat
             model: what we defend against, and what we don't.
           </p>
           <span class="sd-cta mono">Open the threat model <span class="sd-arrow">→</span></span>
@@ -648,11 +647,11 @@ const FOOTPRINT = [
             </li>
             <li>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4.5 4.5L19 7"/></svg>
-              Machine-locked vault, brute-force lockout
+              Machine-locked vault
             </li>
             <li>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4.5 4.5L19 7"/></svg>
-              Integrated psql (per Postgres version)
+              Integrated psql console
             </li>
             <li>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4.5 4.5L19 7"/></svg>

@@ -3,10 +3,10 @@ title: Keyboard shortcuts
 description: Default keymap. Edit the JSON in Settings to customize per feature.
 section: editor
 order: 10
-updated: 2026-05-22
+updated: 2026-10-26
 ---
 
-QueryDen is keyboard-first. The defaults below are wired in `src/App.tsx` (global) and the per-feature stores. Bindings can be remapped per feature in **Settings → Keymap**.
+QueryDen is keyboard-first. The global shortcuts below are wired in `src/utils/globalShortcuts.ts`; inside the editor, QueryDen adds its run and intention keys on top of Monaco's (VS Code's) standard bindings. On macOS, read `Ctrl` as `Cmd`.
 
 ## Global
 
@@ -19,23 +19,26 @@ QueryDen is keyboard-first. The defaults below are wired in `src/App.tsx` (globa
 | `Ctrl+Shift+L` | Format SQL |
 | `Ctrl+Shift+F` | Toggle global search bar |
 | `Ctrl+Shift+E` | Toggle Database Explorer pane |
+| `Ctrl+PageUp` / `Ctrl+PageDown` | Previous / next tab |
 | `Ctrl+Alt+S` | Open settings |
-| `Ctrl+H` | Open help |
+| `F1` or `Ctrl+H` | Open help (outside the editor — inside it, Monaco uses `F1` for its command palette and `Ctrl+H` for find & replace) |
 
 ## In the editor
 
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl+Click` on an identifier | Jump to definition |
-| Hover an identifier | Live `CREATE TABLE` tooltip with columns |
+| `Ctrl+Click` on an identifier | Open its definition — table, view, or function with every overload |
+| Hover an identifier | Columns and types of a table, signature of a function, type of a column |
 | `Alt+Enter` | Intention actions (JetBrains-style refactor popup) |
 | `Ctrl+Space` | Trigger autocomplete |
+| `Ctrl+Shift+Space` | Show parameter hints for the call under the cursor |
 | `Ctrl+/` | Toggle line comment |
-| `Ctrl+D` | Duplicate line / add selection to next occurrence |
-| `Ctrl+Y` | Delete line |
-| `Ctrl+W` | Expand selection |
-| `Ctrl+Shift+W` | Shrink selection |
-| `Alt+Shift+Up/Down` | Move line up/down |
+| `Ctrl+D` | Add selection to next occurrence (multi-cursor) |
+| `Ctrl+Shift+K` | Delete line |
+| `Alt+Up` / `Alt+Down` | Move line up / down |
+| `Shift+Alt+Up` / `Shift+Alt+Down` | Copy line up / down |
+| `Shift+Alt+Right` / `Shift+Alt+Left` | Expand / shrink selection |
+| `Ctrl+F` | Find |
 
 ## In the results grid
 
@@ -48,10 +51,10 @@ QueryDen is keyboard-first. The defaults below are wired in `src/App.tsx` (globa
 
 ## Keymap presets
 
-The default "DataGrip" preset only lists bindings the app actually wires. DataGrip-flavored shortcuts whose handlers don't exist yet (global search, in-app console, go-to-definition keybinding, rename, structure view, tab cycling, local/clipboard history) are intentionally omitted — they'll come back as each feature lands. Previously [issue #11](https://github.com/openidle-dev/queryden/issues/11) tracked the fact that the preset advertised these as available when pressing them did nothing.
+**Settings → Keymap** lists the default bindings and the "DataGrip" preset. DataGrip-flavored shortcuts whose handlers don't exist yet are intentionally omitted — they'll come back as each feature lands. Previously [issue #11](https://github.com/openidle-dev/queryden/issues/11) tracked the fact that the preset advertised these as available when pressing them did nothing.
 
 > Shortcuts that conflict with operating system behavior (such as Ctrl+W closing the window, Ctrl+\ sending SIGQUIT on Linux, or F4 being captured by macOS) are avoided. The keymap uses Ctrl+Shift+E for the Database Explorer to prevent these conflicts.
 
 ## Customizing
 
-Open **Settings → Keymap** to remap any per-feature binding. The keymap is stored encrypted alongside your connections, so it follows your master password — not your operating system's preferences.
+Edits in **Settings → Keymap** are saved to `keymaps.json` in the app data folder (plain JSON — it holds no secrets) and shown in toolbar tooltips. Applying remapped keys to the editor itself isn't wired yet; until it is, the bindings above are the ones that fire.

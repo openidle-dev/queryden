@@ -18,9 +18,9 @@ const verifyCmds = [
 ];
 
 const requirements = [
-  { title: 'macOS',   items: ['macOS 11 Big Sur or newer', 'Apple Silicon only (no Intel build right now)', 'Universal WKWebView (system)'] },
+  { title: 'macOS',   items: ['macOS 11 Big Sur or newer', 'Intel and Apple Silicon (universal build)', 'Universal WKWebView (system)'] },
   { title: 'Windows', items: ['Windows 10 1809 or newer', 'x86_64', 'WebView2 runtime (auto-installed)'] },
-  { title: 'Linux',   items: ['glibc 2.31+ (Debian 11 / Ubuntu 22.04+)', 'webkit2gtk 4.1', 'libsecret / GNOME Keyring for the vault'] },
+  { title: 'Linux',   items: ['glibc 2.35+ (Ubuntu 22.04+ / Debian 12+)', 'webkit2gtk 4.1'] },
 ];
 ---
 <Layout title="Download · QueryDen" active="download">

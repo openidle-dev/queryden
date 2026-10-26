@@ -14,32 +14,30 @@ const principles = [
   },
   {
     title: 'You can audit every line',
-    body: 'The source is on GitHub under MIT. The encryption code is ~300 lines of Rust in `src-tauri/src/storage.rs`. The CI pipeline that builds the binaries is in the same repo. There is no closed-source layer.',
+    body: 'The source is on GitHub under MIT. The CI pipeline that builds the binaries is in the same repo. There is no closed-source layer.',
   },
 ];
 
 const threats = [
   { actor: 'Someone copies your QueryDen vault file off your laptop',
-    defense: 'The vault is encrypted with a key derived from your master password + a machine fingerprint. Without the original machine, the file does not decrypt — even with the correct password.' },
-  { actor: 'Malware on your laptop tries to brute-force the vault',
-    defense: 'After 5 failed unlock attempts the vault locks for an exponentially increasing duration. Argon2id key derivation makes each attempt slow on purpose.' },
+    defense: 'The vault is encrypted with a key bound to this machine\'s hardware identity. Copied to any other computer, the file does not decrypt.' },
+  { actor: 'Someone tries to brute-force a copied vault file',
+    defense: 'There is no short password to guess: the key comes from a random 256-bit secret plus this machine\'s identity, stretched through memory-hard Argon2id.' },
   { actor: 'You lose the laptop',
-    defense: 'The vault file is encrypted at rest. The master key in your OS keychain is hardware-bound (Secure Enclave on macOS, DPAPI on Windows, libsecret on Linux). A wiped login means the vault becomes permanently unreadable.' },
+    defense: 'Every secret is encrypted at rest. Pair it with full-disk encryption (FileVault, BitLocker, LUKS) and a lost laptop gives up nothing.' },
   { actor: 'A QueryDen update ships a backdoor',
     defense: 'Every release is built by GitHub Actions from a public tag. The SHA-256 of each installer is published. Reproduce the build yourself from the same commit and compare — the hash must match.' },
   { actor: 'You connect to a malicious database server',
     defense: 'QueryDen is the client. The server can return malicious result rows, but the result grid renders them as text. We do not eval, we do not exec, we do not auto-run a follow-up query based on a result.' },
 ];
 
-// Illustrative bytes from a QueryDen vault file. Layout reflects the real
-// AES-256-GCM file format: magic+version, salt, nonce, ciphertext body, MAC.
+// Illustrative bytes of one encrypted value. Layout reflects the real
+// AES-256-GCM layout: nonce, ciphertext body, authentication tag.
 // Bytes themselves are random — this is a visual, not a live decryption.
-type Region = 'magic' | 'salt' | 'nonce' | 'cipher' | 'tag';
+type Region = 'nonce' | 'cipher' | 'tag';
 const VAULT_BYTES: { hex: string; region: Region }[] = (() => {
   const make = (s: string, region: Region) => s.split(' ').map(hex => ({ hex, region }));
   return [
-    ...make('51 44 56 4e 5f 02', 'magic'),
-    ...make('e7 3a 9c 1f b8 4d 02 91 75 c0 ae 6b 32 d8 49 a7', 'salt'),
     ...make('c4 8e 1a 7f 5d b2 09 33 e6 4c 91 a8', 'nonce'),
     ...make('6f 92 b1 04 d7 8a 3e cc f1 27 5b 84 a0 19 6d e3 48 0c b7 95 22 fe d4 7a 91 c8 0b 64 e7 a2', 'cipher'),
     ...make('5f b8 14 6a 92 f3 0d 4e 27 c5 91 a8 6f 14 d3 02', 'tag'),
@@ -47,11 +45,11 @@ const VAULT_BYTES: { hex: string; region: Region }[] = (() => {
 })();
 
 const layers = [
-  { name: 'AES-256-GCM',                detail: 'Authenticated encryption for every connection, every saved query, every vault entry. Tampering invalidates the MAC; the file refuses to decrypt.' },
-  { name: 'Argon2id (memory-hard KDF)', detail: 'Master password → encryption key. Memory-hard by design, making brute-force orders of magnitude slower than a GPU farm.' },
+  { name: 'AES-256-GCM',                detail: 'Authenticated encryption for every stored secret, saved query and history entry. Tampering invalidates the tag; the data refuses to decrypt.' },
+  { name: 'Argon2id (memory-hard KDF)', detail: 'Per-install secret + machine identity + per-vault salt → encryption key. Memory-hard by design, making brute-force orders of magnitude slower than a GPU farm.' },
   { name: 'Machine fingerprint',        detail: 'Linux: /etc/machine-id. macOS: IOPlatformUUID. Windows: Win32_ComputerSystemProduct.UUID. Mixed into the KDF — change machines, the vault refuses to load.' },
-  { name: 'OS keychain master key',     detail: 'macOS Keychain (Secure Enclave-bound) · Windows Credential Manager (DPAPI) · libsecret on Linux. Falls back to a file-based key only if the OS keyring is unavailable.' },
-  { name: 'Brute-force lockout',        detail: '5 failed unlocks → exponential backoff. Implemented in atomic counters in-process; the lock persists across app restarts via the encrypted state file.' },
+  { name: 'Per-install random key',     detail: '256 bits from the operating system\'s secure random source, generated on first launch and readable only by your user account.' },
+  { name: 'Crash-safe writes',          detail: 'Temporary file, flush, atomic rename — a crash never leaves a torn file, and a file that fails to decrypt is never overwritten.' },
   { name: 'CSP locked to self',         detail: "Tauri's default-src policy disables remote script loading. The renderer cannot fetch arbitrary code from the internet, even if you find an XSS vector." },
 ];
 ---
@@ -117,7 +115,7 @@ const layers = [
         </div>
 
         <div class="vb-side vb-side-out">
-          <div class="vb-eye mono">▲ &nbsp;Disk · vault.json bytes</div>
+          <div class="vb-eye mono">▲ &nbsp;Disk · one encrypted value</div>
           <div class="vault-dump" aria-hidden="true">
             {Array.from({ length: Math.ceil(VAULT_BYTES.length / 8) }).map((_, rowIdx) => (
               <div class="vd-row" style={`--i:${rowIdx}`}>
@@ -129,8 +127,6 @@ const layers = [
             ))}
           </div>
           <div class="vault-legend mono">
-            <span class="vl-item"><span class="vl-sw vd-magic-bg"></span>magic</span>
-            <span class="vl-item"><span class="vl-sw vd-salt-bg"></span>salt · 16 B</span>
             <span class="vl-item"><span class="vl-sw vd-nonce-bg"></span>nonce · 12 B</span>
             <span class="vl-item"><span class="vl-sw vd-cipher-bg"></span>ciphertext</span>
             <span class="vl-item"><span class="vl-sw vd-tag-bg"></span>tag · 16 B</span>
@@ -139,10 +135,8 @@ const layers = [
       </div>
 
       <p class="vault-bytes-caption mono">
-        Illustrative bytes from a vault file. Field layout reflects the real format in
-        <a href={`${SITE.repo}/blob/main/src-tauri/src/storage.rs`} class="src-link">storage.rs</a>:
-        magic header, Argon2id salt, GCM nonce, encrypted payload, authentication tag.
-        Every byte after the header looks like noise — because it is.
+        Illustrative bytes of one encrypted value: a random GCM nonce, the encrypted payload,
+        and the authentication tag. Every byte looks like noise — because it is.
       </p>
 
       <div class="vault-layers-eyebrow mono">The six layers, one by one</div>
@@ -155,9 +149,6 @@ const layers = [
           </div>
         ))}
       </div>
-      <p style="margin-top: 36px; font-size: 13.5px; color: var(--ink-3);">
-        Source: <a href={`${SITE.repo}/blob/main/src-tauri/src/storage.rs`} class="src-link">src-tauri/src/storage.rs</a>
-      </p>
     </div>
   </section>
 
@@ -177,7 +168,7 @@ const layers = [
         <div class="eyebrow" style="margin-bottom: 12px;">What we do <em>not</em> defend against</div>
         <ul>
           <li>A rooted/compromised OS. If an attacker controls your kernel they control your memory; no userland app can recover from this.</li>
-          <li>A keylogger that captures your master password at the keyboard.</li>
+          <li>Malware running as your own user account while you're logged in.</li>
           <li>A network attacker between you and a database that lacks TLS. Use SSL/TLS or our SSH tunnel — that's what they're for.</li>
           <li>You sharing a connection string in Slack. We can't fix that.</li>
         </ul>
@@ -190,10 +181,10 @@ const layers = [
       <div class="eyebrow">04 · Verify everything</div>
       <h2 class="s-title" style="max-width: 760px;">Don't trust this page. Trust the code.</h2>
       <div class="verify-grid s-content">
-        <a class="card verify-card" href={`${SITE.repo}/blob/main/src-tauri/src/storage.rs`}>
+        <a class="card verify-card" href={SITE.repo}>
           <div class="vc-eye">Source</div>
-          <div class="vc-title">Read the encryption code</div>
-          <div class="vc-meta">~300 lines of Rust. AES-GCM, Argon2id, machine fingerprint. No closed-source layer.</div>
+          <div class="vc-title">Read the source</div>
+          <div class="vc-meta">Open source under MIT. AES-GCM, Argon2id, machine binding. No closed-source layer.</div>
         </a>
         <a class="card verify-card" href={`${SITE.repo}/blob/main/.github/workflows/release.yml`}>
           <div class="vc-eye">Build</div>

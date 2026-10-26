@@ -1,0 +1,30 @@
+---
+title: Exporting results
+description: Save a result set as Excel, CSV, JSON, XML, HTML or SQL, or turn selected rows into INSERT, UPDATE and DELETE statements.
+section: editor
+order: 70
+updated: 2026-10-26
+---
+
+Every result grid — in a query tab and in Multi Query — has an **Export data** menu above it. Pick a format, choose where to save, and a confirmation appears briefly in the corner.
+
+## Formats
+
+| Format | Details |
+|--------|---------|
+| **Excel (.xlsx)** | A real Excel workbook, written natively — opens in Excel, LibreOffice and Google Sheets. Bold, frozen header row, columns sized to their content, numbers and booleans stored as numbers and booleans (large integers and high-precision decimals stay exact as text). The sheet is named after the table. |
+| **CSV** | RFC 4180: values with commas, quotes or line breaks are quoted, quotes doubled, CRLF line endings. |
+| **JSON** | An array of row objects, pretty-printed. |
+| **XML** | One `<row>` element per row, column names made into valid XML element names, values escaped. |
+| **HTML** | A `<table>` with escaped values — paste into a document or email. |
+| **SQL INSERT** | One `INSERT` per row, with identifiers and values quoted for the connection's dialect. |
+
+Choose which formats appear in the menu under **Settings → Import/Export**.
+
+## Generate SQL from rows
+
+Select rows in the grid, right-click → **Generate SQL** → **SQL INSERTs**, **SQL UPDATEs** or **SQL DELETEs**. UPDATE and DELETE statements identify each row by its primary key and use `IS NULL` where a key value is NULL, so they match exactly the rows you selected. The SQL goes to the clipboard.
+
+## Copy
+
+`Ctrl+C` copies the selected cells as tab-separated text, ready to paste into a spreadsheet.
