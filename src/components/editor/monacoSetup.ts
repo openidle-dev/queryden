@@ -10,18 +10,20 @@ import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 //   • all 80+ `basic-languages/*` Monarch tokenizers
 //   • the JSON / TypeScript / CSS / HTML language services (and their workers)
 //
-// We then re-add only the SQL Monarch contribution for syntax highlighting in
+// We then register only QueryDen's own SQL tokenizer (`sqlLanguage.ts`) for
 // the query editor, Compare dialog, and Definition viewer. SQL autocomplete
 // and hover providers are registered dynamically in QueryEditor at mount time.
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-expect-error - no .d.ts shipped for this internal path; we re-type via
 // the main `monaco-editor` types below.
 import * as monacoRuntime from "monaco-editor/esm/vs/editor/edcore.main.js";
-import "monaco-editor/esm/vs/basic-languages/sql/sql.contribution.js";
+import { registerSqlLanguage } from "./sqlLanguage";
 
 // Borrow the namespace types from the main entry without dragging its runtime.
 import type * as MonacoTypes from "monaco-editor";
 const monaco = monacoRuntime as typeof MonacoTypes;
+
+registerSqlLanguage(monaco);
 
 // Wire the editor worker so Monaco doesn't log "Could not create web worker(s)"
 // and fall back to main-thread execution for diff / search / link computation.

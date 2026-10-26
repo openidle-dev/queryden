@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
-const COMMANDS: &[&str] = &["load", "execute", "select", "close"];
+const COMMANDS: &[&str] = &["load", "execute", "select", "close", "run", "cancel", "end_session"];
 
 fn main() {
     tauri_plugin::Builder::new(COMMANDS)

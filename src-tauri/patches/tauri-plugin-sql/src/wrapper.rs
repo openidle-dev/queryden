@@ -32,6 +32,7 @@ use sqlx::Sqlite;
 
 use crate::LastInsertId;
 
+#[derive(Clone)]
 pub enum DbPool {
     #[cfg(feature = "sqlite")]
     Sqlite(Pool<Sqlite>),
@@ -212,6 +213,66 @@ impl DbPool {
             DbPool::None => (),
         }
         Ok(())
+    }
+
+    /// A dedicated connection for an editor session, taken from this pool
+    /// and detached so it doesn't count against the pool's limit.
+    pub(crate) async fn open_session(&self, time_zone: Option<&str>) -> Result<crate::session::Session, crate::Error> {
+        use crate::session::{Session, SessionConn};
+        // IANA names only (`Africa/Johannesburg`, `UTC`, `Etc/GMT+2`): the
+        // value is spliced into SET, which takes no bind parameters.
+        let time_zone = time_zone.filter(|tz| {
+            !tz.is_empty() && tz.len() <= 64 && tz.chars().all(|c| c.is_ascii_alphanumeric() || "/_+-".contains(c))
+        });
+        Ok(match self {
+            #[cfg(feature = "postgres")]
+            DbPool::Postgres(pool) => {
+                let mut conn = pool.acquire().await?.detach();
+                // sqlx starts sessions in UTC; show timestamptz in the user's
+                // zone like psql/DataGrip do. `SET` keeps working afterwards.
+                if let Some(tz) = time_zone {
+                    conn.execute(format!("SET TimeZone = '{tz}'").as_str()).await?;
+                }
+                let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()").fetch_one(&mut conn).await?;
+                Session::new(SessionConn::Postgres(conn), Some(pid as i64))
+            }
+            #[cfg(feature = "mysql")]
+            DbPool::MySql(pool) => {
+                let mut conn = pool.acquire().await?.detach();
+                let id: u64 = sqlx::query_scalar("SELECT CONNECTION_ID()").fetch_one(&mut conn).await?;
+                Session::new(SessionConn::MySql(conn), Some(id as i64))
+            }
+            #[cfg(feature = "sqlite")]
+            DbPool::Sqlite(pool) => {
+                let conn = pool.acquire().await?.detach();
+                Session::new(SessionConn::Sqlite(conn), None)
+            }
+            #[cfg(not(any(feature = "sqlite", feature = "mysql", feature = "postgres")))]
+            DbPool::None => return Err(crate::Error::InvalidDbUrl("no database driver enabled".into())),
+        })
+    }
+
+    /// Ask the server to cancel whatever `backend_id` is running, over a
+    /// separate pooled connection. Returns false where unsupported (SQLite).
+    pub(crate) async fn cancel_backend(&self, backend_id: i64) -> Result<bool, crate::Error> {
+        Ok(match self {
+            #[cfg(feature = "postgres")]
+            DbPool::Postgres(pool) => {
+                sqlx::query_scalar::<_, bool>("SELECT pg_cancel_backend($1)")
+                    .bind(backend_id as i32)
+                    .fetch_one(pool)
+                    .await?
+            }
+            #[cfg(feature = "mysql")]
+            DbPool::MySql(pool) => {
+                pool.execute(format!("KILL QUERY {backend_id}").as_str()).await?;
+                true
+            }
+            #[cfg(feature = "sqlite")]
+            DbPool::Sqlite(_) => false,
+            #[cfg(not(any(feature = "sqlite", feature = "mysql", feature = "postgres")))]
+            DbPool::None => false,
+        })
     }
 
     pub(crate) async fn close(&self) {

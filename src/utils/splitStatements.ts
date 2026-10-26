@@ -15,11 +15,15 @@
  * genuinely at top level.
  *
  * Contexts that are skipped:
- *   - `'single-quoted strings'` (with `''` and `\` escapes for MySQL / E'..')
+ *   - `'single-quoted strings'` (with `''`; `\` escapes only in MySQL mode
+ *     and PostgreSQL `E'..'` strings — `'C:\'` is a complete PostgreSQL string)
  *   - `"double-quoted identifiers"` (with `""` escape)
  *   - `` `backtick identifiers` `` (MySQL, with ```` `` ```` and `\` escapes)
  *   - `$$ ... $$` and `$tag$ ... $tag$` dollar-quoted bodies
- *   - `--` line comments and `/* block comments *‌/`
+ *   - `--` line comments and `/* block comments *‌/` (nested in PostgreSQL)
+ *   - PostgreSQL `BEGIN ATOMIC … END` function bodies
+ *   - `COPY … FROM STDIN` data up to the `\.` line (never run as SQL)
+ *   - psql meta-commands (`\dt`, `\x`): one statement per line
  *   - `#` line comments, but ONLY with `{ hashComments: true }` (MySQL):
  *     by default `#` is code so PostgreSQL `#>`/`#>>` operators survive.
  *
@@ -62,6 +66,9 @@ export function splitStatements(sql: string, opts?: { hashComments?: boolean }):
   // it whenever stmtStart moves. The expensive DELIMITER scan below only
   // runs while the flag is still true (a few leading chars per statement).
   let atStmtStart = true;
+  // Open `BEGIN ATOMIC` bodies, and CASE expressions inside them.
+  let atomicDepth = 0;
+  let caseDepth = 0;
 
   const emit = (end: number) => {
     const raw = sql.slice(stmtStart, end);
@@ -130,14 +137,25 @@ export function splitStatements(sql: string, opts?: { hashComments?: boolean }):
       }
     }
 
+    // psql meta-command (`\dt`, `\x on`): runs to the end of its line.
+    if (c === "\\" && atStmtStart && !hashComments) {
+      const eol = sql.indexOf("\n", i);
+      const end = eol === -1 ? sql.length : eol;
+      stmtStart = i;
+      emit(end);
+      i = end;
+      stmtStart = i;
+      continue;
+    }
+
     if (c === "'") {
       atStmtStart = false;
+      // Backslash escapes exist in MySQL strings and PostgreSQL E'…' strings
+      // only. In a standard PostgreSQL string `'C:\'` the quote closes it.
+      const backslashEscapes = hashComments || ((sql[i - 1] === "E" || sql[i - 1] === "e") && !/[\w$]/.test(sql[i - 2] ?? ""));
       i++;
       while (i < sql.length) {
-        // Backslash escapes (MySQL \' \\, Postgres E'\'' / E'\\').
-        // Treated universally: trailing-backslash-in-standard-string is far
-        // rarer than MySQL backslash escapes, and missing it corrupts splits.
-        if (sql[i] === "\\" && i + 1 < sql.length) {
+        if (backslashEscapes && sql[i] === "\\" && i + 1 < sql.length) {
           i += 2;
           continue;
         }
@@ -201,12 +219,34 @@ export function splitStatements(sql: string, opts?: { hashComments?: boolean }):
     }
 
     if (c === "/" && sql[i + 1] === "*") {
+      // PostgreSQL block comments nest; MySQL's don't.
+      let depth = 1;
       i += 2;
-      while (i < sql.length) {
-        if (sql[i] === "*" && sql[i + 1] === "/") { i += 2; break; }
+      while (i < sql.length && depth > 0) {
+        if (!hashComments && sql[i] === "/" && sql[i + 1] === "*") { depth++; i += 2; continue; }
+        if (sql[i] === "*" && sql[i + 1] === "/") { depth--; i += 2; continue; }
         i++;
       }
       continue;
+    }
+
+    // PostgreSQL 14+ SQL-standard bodies: `BEGIN ATOMIC stmt; stmt; END`.
+    // CASE … END inside the body doesn't close it.
+    if (!hashComments && (c === "B" || c === "b" || c === "E" || c === "e" || c === "C" || c === "c") && !/[\w$]/.test(sql[i - 1] ?? "")) {
+      const word = /^[A-Za-z_]+/.exec(sql.slice(i, i + 12))?.[0]?.toUpperCase();
+      if (word === "BEGIN" && /^BEGIN\s+ATOMIC\b/i.test(sql.slice(i, i + 40))) {
+        atomicDepth++;
+      } else if (atomicDepth > 0 && word === "CASE") {
+        caseDepth++;
+      } else if (atomicDepth > 0 && word === "END") {
+        if (caseDepth > 0) caseDepth--;
+        else atomicDepth--;
+      }
+      if (word) {
+        atStmtStart = false;
+        i += word.length;
+        continue;
+      }
     }
 
     if (c === "$" && delimiter === ";") {
@@ -221,9 +261,16 @@ export function splitStatements(sql: string, opts?: { hashComments?: boolean }):
       }
     }
 
-    if (delimiter === ";" && c === ";") {
+    if (delimiter === ";" && c === ";" && atomicDepth === 0) {
       emit(i);
       i++;
+      // `COPY … FROM STDIN;` is followed by data rows ending in a `\.` line.
+      // They are payload, never SQL — skip them so they can't run.
+      const last = statements[statements.length - 1];
+      if (last && !hashComments && /^COPY\b[\s\S]*\bFROM\s+STDIN\b/i.test(last.text)) {
+        const terminator = /\n\\\.[ \t]*(\r?\n|$)/.exec(sql.slice(i));
+        if (terminator) i += terminator.index + terminator[0].length;
+      }
       stmtStart = i;
       atStmtStart = true;
       continue;

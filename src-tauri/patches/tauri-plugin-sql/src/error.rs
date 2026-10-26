@@ -16,6 +16,9 @@ pub enum Error {
     DatabaseNotLoaded(String),
     #[error("unsupported datatype: {0}")]
     UnsupportedDatatype(String),
+    /// A statement failed; the text is psql-style (message, DETAIL, HINT…).
+    #[error("{0}")]
+    Query(String),
 }
 
 impl Serialize for Error {

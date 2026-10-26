@@ -295,6 +295,18 @@
       "type": "string",
       "oneOf": [
         {
+          "description": "Enables the cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cancel",
+          "markdownDescription": "Enables the cancel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cancel",
+          "markdownDescription": "Denies the cancel command without any pre-configured scope."
+        },
+        {
           "description": "Enables the close command without any pre-configured scope.",
           "type": "string",
           "const": "allow-close",
@@ -305,6 +317,18 @@
           "type": "string",
           "const": "deny-close",
           "markdownDescription": "Denies the close command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the end_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-end-session",
+          "markdownDescription": "Enables the end_session command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the end_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-end-session",
+          "markdownDescription": "Denies the end_session command without any pre-configured scope."
         },
         {
           "description": "Enables the execute command without any pre-configured scope.",
@@ -331,6 +355,18 @@
           "markdownDescription": "Denies the load command without any pre-configured scope."
         },
         {
+          "description": "Enables the run command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-run",
+          "markdownDescription": "Enables the run command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the run command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-run",
+          "markdownDescription": "Denies the run command without any pre-configured scope."
+        },
+        {
           "description": "Enables the select command without any pre-configured scope.",
           "type": "string",
           "const": "allow-select",
@@ -343,10 +379,10 @@
           "markdownDescription": "Denies the select command without any pre-configured scope."
         },
         {
-          "description": "### Default Permissions\n\nThis permission set configures what kind of\ndatabase operations are available from the sql plugin.\n\n### Granted Permissions\n\nAll reading related operations are enabled.\nAlso allows to load or close a connection.\n\n\n#### This default permission set includes:\n\n- `allow-close`\n- `allow-load`\n- `allow-select`",
+          "description": "### Default Permissions\n\nThis permission set configures what kind of\ndatabase operations are available from the sql plugin.\n\n### Granted Permissions\n\nAll reading related operations are enabled.\nAlso allows to load or close a connection, and to run, cancel and end\neditor sessions (QueryDen's query console).\n\n\n#### This default permission set includes:\n\n- `allow-close`\n- `allow-load`\n- `allow-select`\n- `allow-run`\n- `allow-cancel`\n- `allow-end-session`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "### Default Permissions\n\nThis permission set configures what kind of\ndatabase operations are available from the sql plugin.\n\n### Granted Permissions\n\nAll reading related operations are enabled.\nAlso allows to load or close a connection.\n\n\n#### This default permission set includes:\n\n- `allow-close`\n- `allow-load`\n- `allow-select`"
+          "markdownDescription": "### Default Permissions\n\nThis permission set configures what kind of\ndatabase operations are available from the sql plugin.\n\n### Granted Permissions\n\nAll reading related operations are enabled.\nAlso allows to load or close a connection, and to run, cancel and end\neditor sessions (QueryDen's query console).\n\n\n#### This default permission set includes:\n\n- `allow-close`\n- `allow-load`\n- `allow-select`\n- `allow-run`\n- `allow-cancel`\n- `allow-end-session`"
         }
       ]
     }

@@ -128,8 +128,14 @@ export interface CliToolInfoDto {
   major_version: number | null;
   available: boolean;
   path: string | null;
+  source: CliToolSource | null;
+  version: string | null;
+  downloadable: boolean;
   system_install_hint: string;
 }
+
+/** Where `cli.rs` found a tool: PATH, an OS install folder, or the download cache. */
+export type CliToolSource = "path" | "install_dir" | "cached";
 
 /** Mirrors `cli.rs::CachedTool`. */
 export interface CachedToolDto {
@@ -160,9 +166,12 @@ export interface CheckSystemToolResult {
 /** Result of `cli_execute_query`. */
 export interface CliQueryResult {
   columns: string[];
-  rows: string[][];
-  /** Raw stdout lines exactly as the CLI printed them. */
+  /** Cell values; `null` is SQL NULL (distinct from an empty string). */
+  rows: (string | null)[][];
+  /** Raw stdout lines: command tags, meta-command and expanded (`\x`) output. */
   stdout: string[];
+  /** Server NOTICE/WARNING lines from a successful run. */
+  notices: string[];
   rowsAffected: number;
   executionTimeMs: number;
   error: string | null;
@@ -181,6 +190,12 @@ export interface SystemInfoDto {
   memory_free_kb: number;
   uptime_seconds: number;
   app_version: string;
+}
+
+/** Mirrors `ai.rs::AiModel`. */
+export interface AiModelDto {
+  id: string;
+  label: string;
 }
 
 /** Mirrors `storage.rs::MasterKeyStorageStatus`. */
@@ -396,6 +411,12 @@ export interface IpcCommands {
     result: string[];
   };
 
+  // export
+  export_xlsx: {
+    args: { path: string; sheetName: string | null; columns: string[]; rows: unknown[][] };
+    result: number;
+  };
+
   // sysinfo + build info (updater itself now goes through tauri-plugin-updater)
   get_build_info: { args: void; result: string };
   get_system_info: { args: void; result: SystemInfoDto };
@@ -406,6 +427,23 @@ export interface IpcCommands {
   check_for_update_on_channel: {
     args: { channel: "stable" | "beta" };
     result: UpdateMetadataDto | null;
+  };
+
+  // ai — provider HTTP runs in Rust (the webview CSP blocks provider hosts)
+  ai_list_models: {
+    args: { provider: string; endpoint: string | null; apiKey: string | null };
+    result: AiModelDto[];
+  };
+  ai_complete: {
+    args: {
+      provider: string;
+      endpoint: string | null;
+      apiKey: string | null;
+      model: string;
+      systemPrompt: string;
+      userPrompt: string;
+    };
+    result: string;
   };
 }
 

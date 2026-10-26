@@ -7,6 +7,7 @@ use serde_json::Value as JsonValue;
 use sqlx::migrate::Migrator;
 use tauri::{command, AppHandle, Runtime, State};
 
+use crate::session::{self, RunOutput, Sessions};
 use crate::{DbInstances, DbPool, Error, LastInsertId, Migrations};
 
 #[command]
@@ -56,8 +57,17 @@ pub(crate) async fn load<R: Runtime>(
 #[command]
 pub(crate) async fn close(
     db_instances: State<'_, DbInstances>,
+    sessions: State<'_, Sessions>,
     db: Option<String>,
 ) -> Result<bool, crate::Error> {
+    // Editor sessions ride on these pools' servers; drop them with the pool.
+    {
+        let mut open = sessions.0.lock().await;
+        match &db {
+            Some(db) => open.retain(|(session_db, _), _| session_db != db),
+            None => open.clear(),
+        }
+    }
     let mut instances = db_instances.0.write().await;
 
     let pools = if let Some(db) = db {
@@ -105,4 +115,105 @@ pub(crate) async fn select(
 
     let db = instances.get(&db).ok_or(Error::DatabaseNotLoaded(db))?;
     db.select(query, values).await
+}
+
+/// Run editor SQL on the session's own connection (see `session.rs`).
+/// Returns one result set per statement plus captured server notices.
+#[command]
+pub(crate) async fn run(
+    db_instances: State<'_, DbInstances>,
+    sessions: State<'_, Sessions>,
+    db: String,
+    session: String,
+    query: String,
+    max_rows: Option<u32>,
+    time_zone: Option<String>,
+) -> Result<RunOutput, crate::Error> {
+    let key = (db.clone(), session);
+    let mut existing = sessions.0.lock().await.get(&key).cloned();
+    let mut reconnected = false;
+    if let Some(s) = &existing {
+        if !s.is_alive(session::IDLE_PING_AFTER).await {
+            sessions.0.lock().await.remove(&key);
+            existing = None;
+            reconnected = true;
+        }
+    }
+    let active = match existing {
+        Some(s) => s,
+        None => {
+            let pool = db_instances
+                .0
+                .read()
+                .await
+                .get(&db)
+                .cloned()
+                .ok_or_else(|| Error::DatabaseNotLoaded(db.clone()))?;
+            let opened = pool.open_session(time_zone.as_deref()).await?;
+            sessions
+                .0
+                .lock()
+                .await
+                .entry(key.clone())
+                .or_insert_with(|| std::sync::Arc::new(opened))
+                .clone()
+        }
+    };
+
+    let max_rows = max_rows.map(|m| m as usize).unwrap_or(usize::MAX);
+    let (result, mut notices) = session::with_notice_capture(active.run(&query, max_rows)).await;
+    if reconnected {
+        notices.insert(0, session::RECONNECTED_NOTICE.to_string());
+    }
+    match result {
+        Ok(results) => Ok(RunOutput { results, notices }),
+        Err(e) => {
+            let mut message = notices.join("\n");
+            if !message.is_empty() {
+                message.push('\n');
+            }
+            message.push_str(&session::describe_error(&e));
+            if session::is_connection_lost(&e) {
+                sessions.0.lock().await.remove(&key);
+                message.push_str("\n(The connection was lost; the next run reconnects. Any open transaction was rolled back.)");
+            }
+            Err(Error::Query(message))
+        }
+    }
+}
+
+/// Cancel the statement running in a session (PostgreSQL `pg_cancel_backend`,
+/// MySQL `KILL QUERY`). Never waits for the running statement.
+#[command]
+pub(crate) async fn cancel(
+    db_instances: State<'_, DbInstances>,
+    sessions: State<'_, Sessions>,
+    db: String,
+    session: String,
+) -> Result<bool, crate::Error> {
+    let Some(backend_id) = sessions
+        .0
+        .lock()
+        .await
+        .get(&(db.clone(), session))
+        .and_then(|s| s.backend_id)
+    else {
+        return Ok(false);
+    };
+    let pool = db_instances.0.read().await.get(&db).cloned();
+    match pool {
+        Some(pool) => pool.cancel_backend(backend_id).await,
+        None => Ok(false),
+    }
+}
+
+/// Close a session's connection (editor tab closed). An open transaction is
+/// rolled back by the server when the connection ends.
+#[command]
+pub(crate) async fn end_session(
+    sessions: State<'_, Sessions>,
+    db: String,
+    session: String,
+) -> Result<bool, crate::Error> {
+    Ok(sessions.0.lock().await.remove(&(db, session)).is_some())
 }

@@ -81,6 +81,8 @@ export interface DBSettings {
 
   // Export Formats
   enabledExportFormats: string[];
+  /** Excel export was enabled once for users who saved settings before it existed. */
+  excelExportOffered: boolean;
   
   // Actions
   setSetting: <K extends keyof DBSettings>(key: K, value: DBSettings[K]) => void;
@@ -153,7 +155,8 @@ const defaultSettings: Omit<DBSettings, "setSetting" | "resetSettings"> = {
   updateChannel: "stable",
 
   // Export Formats
-  enabledExportFormats: ["csv", "json", "xml", "html", "sql"],
+  enabledExportFormats: ["csv", "excel", "json", "xml", "html", "sql"],
+  excelExportOffered: true,
 
   // AI Assistant
   aiProvider: "openai",
@@ -185,6 +188,10 @@ export const settingsReady: Promise<void> = new Promise<void>((res) => {
   resolveSettingsReady = res;
 });
 
+// Set when settings.json exists but couldn't be read: saving the in-memory
+// defaults afterwards would overwrite every setting the user has.
+let settingsReadFailed = false;
+
 const loadFromFile = async (): Promise<Partial<DBSettings>> => {
   if (!isTauri()) return {};
   try {
@@ -192,13 +199,15 @@ const loadFromFile = async (): Promise<Partial<DBSettings>> => {
     // Settings are user-mutable JSON; treat as unknown and narrow via the
     // defaultSettings spread below rather than trusting the shape blindly.
     return (settings as Partial<DBSettings>) ?? {};
-  } catch {
+  } catch (e) {
+    settingsReadFailed = true;
+    logger.error("Failed to load settings — changes will not be saved this session:", e);
     return {};
   }
 };
 
 const saveToFile = async (settings: Partial<DBSettings>) => {
-  if (!isTauri()) return;
+  if (!isTauri() || settingsReadFailed) return;
   try {
     await invokeCmd("save_settings", { settings });
   } catch (e) {
@@ -227,7 +236,17 @@ if (typeof window !== "undefined") {
       // Load from encrypted Rust storage
       const fileSettings = await loadFromFile();
       if (fileSettings && Object.keys(fileSettings).length > 0) {
-        useSettings.setState({ ...defaultSettings, ...fileSettings });
+        const merged = { ...defaultSettings, ...fileSettings };
+        // One-time: Excel (.xlsx) export arrived after users saved their
+        // format list; switch it on once rather than leaving it hidden.
+        if (!merged.excelExportOffered) {
+          merged.excelExportOffered = true;
+          if (!merged.enabledExportFormats.includes("excel")) {
+            merged.enabledExportFormats = [...merged.enabledExportFormats, "excel"];
+          }
+          saveToFile(merged);
+        }
+        useSettings.setState(merged);
       }
 
       // Initialize vault state from loaded settings

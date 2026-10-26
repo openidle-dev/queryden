@@ -3,12 +3,15 @@ import {
   AlertCircle, Table2, Hash, Type, Calendar, Binary, Code as CodeIcon, 
   Filter, Shield, Download, FileJson, XCircle, Search, Copy, 
   Trash2, Maximize2, Plus, RefreshCw, Zap, CheckCircle, Clock, ChevronDown, X,
-  FileCode, Globe, Database, History as HistoryIcon, Image, File
+  FileCode, Globe, Database, History as HistoryIcon, Image, File, Sheet
 } from "lucide-react";
 import { useQueryHistory } from "../../store/queryHistoryStore";
 import { useSettings } from "../../store/settingsStore";
 import { useConfirmDialog } from "../ui/ConfirmDialog";
 import { AddRowModal } from "../tools/AddRowModal";
+import { invokeCmd } from "../../lib/ipc";
+import { toCsv, toDeleteStatements, toHtml, toInsertStatements, toTsv, toUpdateStatements, toXml } from "../../utils/exportFormats";
+import { dialectForDbType } from "../editor/sqlBuiltins";
 import { VisualOptimizer } from "./VisualOptimizer";
 import { GridView, GridViewRef } from "../ui/GridView";
 import { CompactSelection } from "@glideapps/glide-data-grid";
@@ -51,7 +54,10 @@ interface ResultsPanelProps {
   tableSchema?: {
     columns: { name: string; type: string; nullable: boolean; default: string | null }[];
     foreignKeys: { columns: string[]; refTable: string; refColumns: string[] }[];
+    primaryKeys?: string[];
   };
+  /** Engine of the result's connection — identifier quoting in Copy as SQL / export. */
+  dbType?: string;
   loadFKOptions?: (fk: { refTable: string; refColumns: string[] }, search: string) => Promise<{ pk: any; label: string }[]>;
   onFkCellClick?: (fk: { refTable: string; refColumns: string[] }, fkValue: any) => void;
   optimizerData?: any;
@@ -59,6 +65,8 @@ interface ResultsPanelProps {
   isReadOnly?: boolean;
   /** When true, success/error messages won't auto-switch the active tab. */
   suppressTabSwitch?: boolean;
+  /** Server NOTICE/WARNING lines from the last run (RAISE NOTICE etc.). */
+  serverOutput?: string[];
   multiResults?: {
     query: string;
     rows?: any[];
@@ -75,7 +83,7 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
   results, error, isLoading, executionTime = 0, tableName,
   onUpdateRow, onDeleteRow, onAddRow, onResultsChange, onRefresh,
   successMessage, forcedColumns, columnTypes, tableSchema, loadFKOptions, onFkCellClick, optimizerData, onApplyFix, onSave, onDiscard,
-  multiResults, isReadOnly = false, suppressTabSwitch = false
+  multiResults, isReadOnly = false, suppressTabSwitch = false, serverOutput = [], dbType
 }: ResultsPanelProps) {
   const settings = useSettings();
   const { history, clearHistory, searchHistory, getRecentQueries } = useQueryHistory();
@@ -106,6 +114,18 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
   const [searchTerm, setSearchTerm] = useState("");
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
   const [toastMessage, setToastMessage] = useState("Copied to clipboard");
+  // One timer for every toast, so a newer message isn't cut short by an
+  // older one's timeout and none is left on screen.
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flashToast = (message: string) => {
+    setToastMessage(message);
+    setShowCopyToast(true);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setShowCopyToast(false), 2500);
+  };
+  useEffect(() => () => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+  }, []);
   const [selectedMultiResultIdx, setSelectedMultiResultIdx] = useState<number>(0);
   const [binaryPreview, setBinaryPreview] = useState<{
     col: string; bytes: number[]; fileType: FileType; blobUrl: string;
@@ -367,11 +387,30 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
       });
       if (!path) return;
       await writeFile(path, new Uint8Array(bytes));
-      setToastMessage("Download complete");
-      setShowCopyToast(true);
-      setTimeout(() => setShowCopyToast(false), 2000);
+      flashToast("Download complete");
     } catch (e: any) {
       confirmDialog.dialog({ title: "Download Failed", message: e.message, type: "danger" });
+    }
+  };
+
+  // Open the previewed file in the system viewer. The webview blocks
+  // `window.open(dataUrl)`, so the bytes go to the app's own data folder
+  // (inside the fs scope) and the OS opens them from there.
+  const handleBinaryOpen = async () => {
+    if (!binaryPreview) return;
+    const { col, bytes, fileType } = binaryPreview;
+    try {
+      const { appLocalDataDir, join } = await import("@tauri-apps/api/path");
+      const { mkdir, writeFile } = await import("@tauri-apps/plugin-fs");
+      const { openPath } = await import("@tauri-apps/plugin-opener");
+      const dir = await join(await appLocalDataDir(), "previews");
+      await mkdir(dir, { recursive: true });
+      const safeName = col.replace(/[^\w.-]+/g, "_").slice(0, 60) || "value";
+      const path = await join(dir, `${safeName}-${Date.now()}.${fileType.extension}`);
+      await writeFile(path, new Uint8Array(bytes));
+      await openPath(path);
+    } catch (e: any) {
+      confirmDialog.dialog({ title: "Open Failed", message: e?.message || String(e), type: "danger" });
     }
   };
 
@@ -410,9 +449,7 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
-    setToastMessage("Copied to clipboard");
-    setShowCopyToast(true);
-    setTimeout(() => setShowCopyToast(false), 2000);
+    flashToast("Copied to clipboard");
   };
 
   const handleExport = async (format: "csv" | "excel" | "json" | "xml" | "html" | "sql" | "tsv") => {
@@ -421,7 +458,7 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
       const { save } = await import("@tauri-apps/plugin-dialog");
       const { writeTextFile } = await import("@tauri-apps/plugin-fs");
       const mapping: Record<string, string> = {
-        csv: "csv", json: "json", excel: "xls", xml: "xml", html: "html", sql: "sql"
+        csv: "csv", json: "json", excel: "xlsx", xml: "xml", html: "html", sql: "sql", tsv: "tsv"
       };
       const extension = mapping[format] || "txt";
       
@@ -431,37 +468,36 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
       });
       if (!path) return;
       
+      if (format === "excel") {
+        // Real .xlsx, written natively by the backend (export.rs).
+        const written = await invokeCmd("export_xlsx", {
+          path,
+          sheetName: tableName ?? null,
+          columns,
+          rows: results.map(r => columns.map(c => r[c] ?? null)),
+        });
+        flashToast(`Exported ${written} rows to Excel`);
+        return;
+      }
+
+      const dialect = dialectForDbType(dbType);
       let content = "";
       if (format === "csv") {
-        content = [columns.join(","), ...results.map(r => columns.map(c => JSON.stringify(r[c])).join(","))].join("\n");
+        content = toCsv(columns, results);
       } else if (format === "json") {
         content = JSON.stringify(results, null, 2);
       } else if (format === "xml") {
-        content = `<?xml version="1.0" encoding="UTF-8"?>\n<results>\n` + 
-                  results.map(r => `  <row>\n${columns.map(c => `    <${c}>${formatCellValue(r[c])}</${c}>`).join("\n")}\n  </row>`).join("\n") +
-                  `\n</results>`;
+        content = toXml(columns, results);
       } else if (format === "html") {
-        content = `<table border="1">\n  <thead>\n    <tr>${columns.map(c => `<th>${c}</th>`).join("")}</tr>\n  </thead>\n  <tbody>\n` +
-                  results.map(r => `    <tr>${columns.map(c => `<td>${formatCellValue(r[c])}</td>`).join("")}</tr>`).join("\n") +
-                  `\n  </tbody>\n</table>`;
+        content = toHtml(columns, results);
       } else if (format === "sql") {
-        const table = tableName || "exported_data";
-        content = results.map(r => `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${columns.map(c => {
-          const v = r[c];
-          if (v === null || v === undefined) return "NULL";
-          if (typeof v === "number") return v;
-          if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
-          return `'${String(v).replace(/'/g, "''")}'`;
-        }).join(", ")});`).join("\n");
-      } else if (format === "tsv") {
-        content = [columns.join("\t"), ...results.map(r => columns.map(c => String(r[c]).replace(/\t/g, "    ")).join("\t"))].join("\n");
+        content = toInsertStatements(tableName || "exported_data", columns, results, dialect);
       } else {
-        content = [columns.join("\t"), ...results.map(r => columns.map(c => JSON.stringify(r[c])).join("\t"))].join("\n");
+        content = toTsv(columns, results);
       }
-      
+
       await writeTextFile(path, content);
-      setToastMessage(`Exported ${format.toUpperCase()} successfully`);
-      setShowCopyToast(true);
+      flashToast(`Exported ${format.toUpperCase()} successfully`);
     } catch (e: any) {
       confirmDialog.dialog({ title: "Export Failed", message: e.message, type: "danger" });
     }
@@ -495,32 +531,14 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
     if (selectedRows.length === 0) return;
 
     const table = tableName || "target_table";
-    const sqlColumns = selectedRows.length > 0 
-      ? Object.keys(selectedRows[0]).filter(k => !k.startsWith('_'))
-      : columns.filter(k => !k.startsWith('_'));
+    const sqlColumns = (selectedRows.length > 0 ? Object.keys(selectedRows[0]) : columns).filter(k => !k.startsWith('_'));
+    const dialect = dialectForDbType(dbType);
+    const keys = (tableSchema?.primaryKeys ?? []).filter(k => sqlColumns.includes(k));
 
     let sql = "";
-
-    if (type === "INSERT") {
-      sql = selectedRows.map((r: any) => `INSERT INTO ${table} (${sqlColumns.join(", ")}) VALUES (${sqlColumns.map(c => {
-        const v = r[c];
-        if (v === null || v === undefined) return "NULL";
-        if (typeof v === "number") return v;
-        if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
-        return `'${String(v).replace(/'/g, "''")}'`;
-      }).join(", ")});`).join("\n");
-    } else if (type === "DELETE") {
-      sql = selectedRows.map((r: any) => {
-        const where = sqlColumns.map(c => `${c} = ${typeof r[c] === 'number' ? r[c] : (r[c] === null ? 'NULL' : `'${String(r[c]).replace(/'/g, "''")}'`)}`).join(" AND ");
-        return `DELETE FROM ${table} WHERE ${where};`;
-      }).join("\n");
-    } else if (type === "UPDATE") {
-      sql = selectedRows.map((r: any) => {
-        const set = sqlColumns.map(c => `${c} = ${typeof r[c] === 'number' ? r[c] : (r[c] === null ? 'NULL' : `'${String(r[c]).replace(/'/g, "''")}'`)}`).join(", ");
-        const where = sqlColumns.map(c => `${c} = ${typeof r[c] === 'number' ? r[c] : (r[c] === null ? 'NULL' : `'${String(r[c]).replace(/'/g, "''")}'`)}`).join(" AND ");
-        return `UPDATE ${table} SET ${set} WHERE ${where};`;
-      }).join("\n");
-    }
+    if (type === "INSERT") sql = toInsertStatements(table, sqlColumns, selectedRows, dialect);
+    else if (type === "DELETE") sql = toDeleteStatements(table, sqlColumns, keys, selectedRows, dialect);
+    else sql = toUpdateStatements(table, sqlColumns, keys, selectedRows, dialect);
 
     copyToClipboard(sql);
     setContextMenu(null);
@@ -533,6 +551,14 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
     <div className="h-9 flex items-center gap-2 px-3 bg-[var(--surface-panel)] border-b border-[var(--neutral-6)] text-xs shrink-0 select-none">
       <button onClick={() => setActiveTab("messages")} className={`h-full flex items-center px-1 border-b transition-all cursor-pointer ${activeTab === "messages" ? (error ? "text-[var(--danger-11)] border-[var(--danger-11)]" : "text-[var(--accent-11)] border-[var(--accent-9)]") : "text-[var(--neutral-11)] border-transparent hover:text-[var(--neutral-12)]"}`}>
         <AlertCircle className="w-3.5 h-3.5 mr-1" /> Messages
+        {serverOutput.length > 0 && (
+          <span
+            className="ml-1 min-w-[16px] h-4 px-1 rounded-full bg-[var(--accent-9)] text-[9px] font-bold text-white flex items-center justify-center"
+            title={`${serverOutput.length} server message${serverOutput.length === 1 ? "" : "s"} (NOTICE / WARNING)`}
+          >
+            {serverOutput.length}
+          </span>
+        )}
       </button>
       {hasResults && (
         <button onClick={() => setActiveTab("result")} className={`h-full flex items-center px-1 border-b transition-all cursor-pointer ${activeTab === "result" ? "text-[var(--accent-11)] border-[var(--accent-9)]" : "text-[var(--neutral-11)] border-transparent hover:text-[var(--neutral-12)]"}`}>
@@ -767,6 +793,11 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
                     <Download className="w-3.5 h-3.5 text-[var(--neutral-11)]" /> CSV
                   </button>
                 )}
+                {settings.enabledExportFormats.includes("excel") && (
+                  <button onClick={() => { handleExport("excel"); setShowExportDropdown(false); }} className="w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--accent-3)] flex items-center gap-2 transition-colors cursor-pointer">
+                    <Sheet className="w-3.5 h-3.5 text-[var(--neutral-11)]" /> Excel (.xlsx)
+                  </button>
+                )}
                 {settings.enabledExportFormats.includes("json") && (
                   <button onClick={() => { handleExport("json"); setShowExportDropdown(false); }} className="w-full px-3 py-1.5 text-left text-xs hover:bg-[var(--accent-3)] flex items-center gap-2 transition-colors cursor-pointer">
                     <FileJson className="w-3.5 h-3.5 text-[var(--neutral-11)]" /> JSON
@@ -959,7 +990,7 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
                       <pre className="font-mono text-[10px] leading-relaxed whitespace-pre select-all bg-[var(--surface-base)] p-3 rounded-lg border border-[var(--neutral-6)] text-[var(--neutral-11)] overflow-x-auto">{hexDump}{bytes.length > 4096 ? `\n\u2026 ${(bytes.length - 4096).toLocaleString()} more bytes` : ""}</pre>
                     </div>
                     <div className="flex justify-center">
-                      <Button size="sm" className={binaryActionClass} onClick={() => { navigator.clipboard.writeText(hexCompact); setToastMessage("Hex copied"); setShowCopyToast(true); setTimeout(() => setShowCopyToast(false), 2000); }} leftIcon={<Copy className="w-3 h-3" />}>Copy Hex</Button>
+                      <Button size="sm" className={binaryActionClass} onClick={() => { navigator.clipboard.writeText(hexCompact); flashToast("Hex copied"); }} leftIcon={<Copy className="w-3 h-3" />}>Copy Hex</Button>
                     </div>
                   </div>
                 ) : viewMode === "text" ? (
@@ -990,10 +1021,10 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
                     )}
                     <div className="flex gap-2 justify-center">
                       {base64 && (
-                        <Button size="sm" className={binaryActionClass} onClick={() => { navigator.clipboard.writeText(base64); setToastMessage("Base64 copied"); setShowCopyToast(true); setTimeout(() => setShowCopyToast(false), 2000); }} leftIcon={<Copy className="w-3 h-3" />}>Copy Base64</Button>
+                        <Button size="sm" className={binaryActionClass} onClick={() => { navigator.clipboard.writeText(base64); flashToast("Base64 copied"); }} leftIcon={<Copy className="w-3 h-3" />}>Copy Base64</Button>
                       )}
                       {utf8 !== null && (
-                        <Button size="sm" className={binaryActionClass} onClick={() => { navigator.clipboard.writeText(utf8); setToastMessage("Text copied"); setShowCopyToast(true); setTimeout(() => setShowCopyToast(false), 2000); }} leftIcon={<Copy className="w-3 h-3" />}>Copy Text</Button>
+                        <Button size="sm" className={binaryActionClass} onClick={() => { navigator.clipboard.writeText(utf8); flashToast("Text copied"); }} leftIcon={<Copy className="w-3 h-3" />}>Copy Text</Button>
                       )}
                     </div>
                   </div>
@@ -1004,8 +1035,8 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
                     </div>
                     <div className="flex gap-2 justify-center py-3 shrink-0">
                       <Button size="sm" className={binaryActionClass} onClick={handleBinaryDownload} leftIcon={<Download className="w-3 h-3" />}>Save</Button>
-                      <Button size="sm" className={binaryActionClass} onClick={() => { navigator.clipboard.writeText(dataUrl); setToastMessage("Image URL copied"); setShowCopyToast(true); setTimeout(() => setShowCopyToast(false), 2000); }} leftIcon={<Copy className="w-3 h-3" />}>Copy</Button>
-                      <Button size="sm" className={binaryActionClass} onClick={() => { if (bytes.length > 5 * 1024 * 1024) { setToastMessage("Image too large for inline open — use Save instead"); setShowCopyToast(true); setTimeout(() => setShowCopyToast(false), 2000); } else { window.open(dataUrl, "_blank"); } }} leftIcon={<Maximize2 className="w-3 h-3" />}>Open</Button>
+                      <Button size="sm" className={binaryActionClass} onClick={() => { navigator.clipboard.writeText(dataUrl); flashToast("Image URL copied"); }} leftIcon={<Copy className="w-3 h-3" />}>Copy</Button>
+                      <Button size="sm" className={binaryActionClass} onClick={() => { void handleBinaryOpen(); }} leftIcon={<Maximize2 className="w-3 h-3" />}>Open</Button>
                     </div>
                   </div>
                 ) : isPdf ? (
@@ -1053,7 +1084,22 @@ type ResultsTab = "messages" | "result" | "history" | "optimizer";
                  <span className="flex items-center gap-1"><Table2 className="w-3 h-3" /> {results.length} rows</span>
                </div>
             </div>
-          ) : <div className="flex flex-col items-center justify-center h-full opacity-30 select-none"><AlertCircle className="w-8 h-8 mb-2" /><p>No messages to display</p></div>}
+          ) : serverOutput.length === 0 ? <div className="flex flex-col items-center justify-center h-full opacity-30 select-none"><AlertCircle className="w-8 h-8 mb-2" /><p>No messages to display</p></div> : null}
+          {serverOutput.length > 0 && (
+            <div className="mt-3 rounded-lg border border-[var(--neutral-6)] bg-[var(--surface-panel)] p-3">
+              <div className="mb-2 text-[10px] font-bold uppercase tracking-widest text-[var(--neutral-11)]">Server output</div>
+              <pre className="text-xs whitespace-pre-wrap leading-relaxed">
+                {serverOutput.map((line, i) => (
+                  <div
+                    key={i}
+                    className={line.startsWith("WARNING") || line.startsWith("QUERYDEN") ? "text-[var(--warning-11)]" : "text-[var(--neutral-12)]"}
+                  >
+                    {line}
+                  </div>
+                ))}
+              </pre>
+            </div>
+          )}
         </div>
       )}
 

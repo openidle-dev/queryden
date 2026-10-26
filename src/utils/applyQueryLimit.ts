@@ -48,9 +48,21 @@ export function applyQueryLimit(query: string, maxRows: number, opts?: SqlLexerO
     return query;
   }
 
-  // Skip if already has LIMIT (checked on stripped SQL so a literal
-  // like 'LIMIT 10' doesn't count).
-  if (/\bLIMIT\s+\d+/i.test(cleanQuery)) {
+  // Skip if the statement already bounds its rows in any form — LIMIT n,
+  // LIMIT ALL, LIMIT $1 / :n / (expr), FETCH FIRST|NEXT — checked on
+  // stripped SQL so a literal like 'LIMIT 10' doesn't count.
+  if (/\bLIMIT\b/i.test(cleanQuery) || /\bFETCH\s+(FIRST|NEXT)\b/i.test(cleanQuery)) {
+    return query;
+  }
+
+  // Never change what the statement DOES:
+  //  - `SELECT … INTO new_table` / `INTO OUTFILE` would copy only N rows;
+  //  - a LIMIT appended after `FOR UPDATE` / `FOR SHARE` / `LOCK IN SHARE
+  //    MODE` is a syntax error (it must come before the locking clause).
+  if (
+    /\bINTO\b/i.test(cleanQuery) ||
+    /\bFOR\s+(NO\s+KEY\s+)?(UPDATE|SHARE)\b|\bFOR\s+KEY\s+SHARE\b|\bLOCK\s+IN\s+SHARE\s+MODE\b/i.test(cleanQuery)
+  ) {
     return query;
   }
 

@@ -58,14 +58,23 @@ function toDto(h: QueryHistoryItem): QueryHistoryItemDto {
   };
 }
 
-const loadFromFile = async (): Promise<QueryHistoryItem[]> => {
+/** `null` when the file exists but could not be read. */
+const loadFromFile = async (): Promise<QueryHistoryItem[] | null> => {
   if (!isTauri()) return [];
   try {
     const history = await invokeCmd("load_query_history");
     return history.map(fromDto);
-  } catch {
-    return [];
+  } catch (e) {
+    logger.error("Failed to load query history — it will not be saved this session:", e);
+    return null;
   }
+};
+
+// Resolves to whether the file was read. Writes wait for it and are skipped
+// after a failed read, so an unreadable file is never replaced by [].
+let historyLoaded: Promise<boolean> = Promise.resolve(true);
+const persist = async (history: QueryHistoryItem[]) => {
+  if (await historyLoaded) await saveToFile(history);
 };
 
 const saveToFile = async (history: QueryHistoryItem[]) => {
@@ -88,20 +97,22 @@ export const useQueryHistory = create<QueryHistoryState>()((set, get) => ({
       executedAt: Date.now(),
     };
     
+    await historyLoaded;
     const newHistory = [newItem, ...get().history].slice(0, get().maxHistorySize);
     set({ history: newHistory });
-    saveToFile(newHistory);
+    await persist(newHistory);
   },
   
   removeQuery: async (id) => {
+    await historyLoaded;
     const newHistory = get().history.filter((item) => item.id !== id);
     set({ history: newHistory });
-    saveToFile(newHistory);
+    await persist(newHistory);
   },
   
   clearHistory: async () => {
     set(() => ({ history: [] }));
-    saveToFile([]);
+    await persist([]);
   },
 
   searchHistory: (term: string) => {
@@ -120,11 +131,10 @@ export const useQueryHistory = create<QueryHistoryState>()((set, get) => ({
 
 // Initialize history from file
 if (typeof window !== "undefined") {
-  (async () => {
-    // Load from encrypted Rust storage
-    const fileHistory = await loadFromFile();
+  historyLoaded = loadFromFile().then((fileHistory) => {
     if (fileHistory && fileHistory.length > 0) {
       useQueryHistory.setState({ history: fileHistory });
     }
-  })();
+    return fileHistory !== null;
+  });
 }

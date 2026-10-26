@@ -147,9 +147,47 @@ describe("splitStatements — engines and corner cases", () => {
     expect(out.map(s => s.text)).toEqual(["CREATE TABLE `a;b` (id int)", "SELECT 1"]);
   });
 
-  it("handles backslash escapes in strings (MySQL / E-strings)", () => {
-    const out = splitStatements("SELECT 'a\\';b'; SELECT 2");
-    expect(out.map(s => s.text)).toEqual(["SELECT 'a\\';b'", "SELECT 2"]);
+  it("honours backslash escapes only in MySQL strings and PostgreSQL E-strings", () => {
+    // MySQL: \' is an escaped quote inside the string.
+    expect(splitStatements("SELECT 'a\\';b'; SELECT 2", { hashComments: true }).map(s => s.text))
+      .toEqual(["SELECT 'a\\';b'", "SELECT 2"]);
+    // PostgreSQL E-string: same.
+    expect(splitStatements("SELECT E'a\\';b'; SELECT 2").map(s => s.text))
+      .toEqual(["SELECT E'a\\';b'", "SELECT 2"]);
+    // PostgreSQL standard string: the backslash is literal, the quote closes it.
+    expect(splitStatements("SELECT replace(p, '\\', '/') FROM t; SELECT 2").map(s => s.text))
+      .toEqual(["SELECT replace(p, '\\', '/') FROM t", "SELECT 2"]);
+    expect(splitStatements("SELECT 'C:\\'; SELECT 2").map(s => s.text)).toEqual(["SELECT 'C:\\'", "SELECT 2"]);
+  });
+
+  it("nests PostgreSQL block comments (MySQL's don't nest)", () => {
+    expect(splitStatements("SELECT 1 /* a /* b */ ; still comment */; SELECT 2").map(s => s.text))
+      .toEqual(["SELECT 1 /* a /* b */ ; still comment */", "SELECT 2"]);
+  });
+
+  it("keeps BEGIN ATOMIC function bodies whole, including CASE … END inside", () => {
+    const fn = `CREATE FUNCTION f(x int) RETURNS int LANGUAGE sql
+BEGIN ATOMIC
+  SELECT CASE WHEN x > 0 THEN 1 ELSE 0 END;
+  SELECT x;
+END`;
+    const out = splitStatements(`${fn};
+SELECT f(1)`);
+    expect(out.map(s => s.text)).toEqual([fn, "SELECT f(1)"]);
+  });
+
+  it("does not treat a transaction BEGIN as an ATOMIC body", () => {
+    expect(splitStatements("BEGIN; UPDATE t SET a = 1; COMMIT").map(s => s.text)).toEqual(["BEGIN", "UPDATE t SET a = 1", "COMMIT"]);
+  });
+
+  it("skips COPY … FROM STDIN data rows", () => {
+    const sql = "COPY t (a, b) FROM STDIN;\n1\tone; two\n2\tthree\n\\.\nSELECT count(*) FROM t";
+    expect(splitStatements(sql).map(s => s.text)).toEqual(["COPY t (a, b) FROM STDIN", "SELECT count(*) FROM t"]);
+  });
+
+  it("splits psql meta-commands per line", () => {
+    expect(splitStatements("\\x on\nSELECT 1;\n\\dt public.*\nSELECT 2").map(s => s.text))
+      .toEqual(["\\x on", "SELECT 1", "\\dt public.*", "SELECT 2"]);
   });
 
   it("handles MySQL DELIMITER blocks as one statement", () => {

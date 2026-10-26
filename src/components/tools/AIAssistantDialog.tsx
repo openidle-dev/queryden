@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Sparkles, Send } from "lucide-react";
 import { useAI } from "../../store/aiStore";
+import { providerNeedsApiKey } from "../../lib/ai";
 import { callAI } from "../../lib/ai";
 import { Dialog } from "../ui/Dialog";
 import { Button } from "../ui/Button";
@@ -16,6 +17,8 @@ const SUGGESTIONS = ["Optimize current query", "Generate JOINs for active tables
 
 export function AIAssistantDialog({ isOpen, onClose, currentQuery, onUpdateQuery }: AIAssistantDialogProps) {
   const ai = useAI();
+  // Local servers (Ollama, LM Studio) need no API key.
+  const aiReady = ai.enabled && (!providerNeedsApiKey(ai.provider) || !!ai.apiKey.trim());
   const [prompt, setPrompt] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -66,7 +69,7 @@ export function AIAssistantDialog({ isOpen, onClose, currentQuery, onUpdateQuery
           </span>
           <span className="flex flex-col leading-tight">
             <span>AI SQL Assistant</span>
-            {ai.enabled && ai.apiKey && (
+            {aiReady && (
               <span className="text-[10px] font-normal text-[var(--neutral-11)] uppercase tracking-widest">
                 Powered by {ai.provider} • {ai.model}
               </span>
@@ -76,7 +79,7 @@ export function AIAssistantDialog({ isOpen, onClose, currentQuery, onUpdateQuery
       </Dialog.Title>
 
       <Dialog.Body>
-        {!ai.enabled || !ai.apiKey ? (
+        {!aiReady ? (
           <div className="bg-[var(--warning-3)] border border-[var(--warning-6)] rounded-md p-4 text-center">
             <p className="text-[var(--warning-11)] font-bold mb-2">AI is not configured</p>
             <p className="text-xs text-[var(--neutral-11)]">Enable AI and add your API key in Settings to use the assistant.</p>
