@@ -506,16 +506,13 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
       };
     }
 
-    // Handle common boolean representations (bool, string, number)
-    const isBool = typeof val === "boolean" || 
-                   (typeof val === "string" && (val.toLowerCase() === "true" || val.toLowerCase() === "false" || val === "t" || val === "f")) ||
-                   (typeof val === "number" && (val === 1 || val === 0));
-
-    if (isBool) {
-      const boolVal = typeof val === "boolean" ? val : (typeof val === "string" ? (val.toLowerCase() === "true" || val === "t") : val === 1);
+    // Only real booleans get a checkbox: every engine now delivers boolean
+    // columns as JSON true/false. Text that happens to read 't', 'f', 'true'
+    // or 'false' (a status code, pg_class.relkind…) stays text.
+    if (typeof val === "boolean") {
       return {
         kind: GridCellKind.Boolean,
-        data: boolVal,
+        data: val,
         allowOverlay: canEdit,
         readonly: !canEdit,
         maxSize: 14,

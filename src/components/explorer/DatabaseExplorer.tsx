@@ -19,6 +19,10 @@ import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
 import { Menu, MenuItem, MenuLabel, MenuSeparator } from "../ui/Menu";
 import { Dialog } from "../ui/Dialog";
+import { splitDottedIdentifier } from "../../utils/sqlDialect";
+import { quoteIdentifierIfNeeded } from "../editor/completionContext";
+import { dialectForDbType } from "../editor/sqlBuiltins";
+import { classifyRowClick, type LastRowClick } from "./rowClicks";
 
 interface TreeNode {
   id: string;
@@ -27,6 +31,8 @@ interface TreeNode {
   children?: TreeNode[];
   expanded?: boolean;
   action?: () => void;
+  /** Connection this node belongs to (every connected server draws its own tree). */
+  connId?: string;
   contextMenuId?: string;
   providerType?: string;
   color?: string;
@@ -241,6 +247,12 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
   }, [activeConnection?.id, selectedDatabase]);
 
   useEffect(() => {
+    const stampConnection = (nodes: TreeNode[], connId: string) => {
+      for (const n of nodes) {
+        n.connId = connId;
+        if (n.children) stampConnection(n.children, connId);
+      }
+    };
     const buildConnNode = (conn: DatabaseConnection): TreeNode => {
       // Read from *this* connection's session rather than from the
       // active-connection projection, so every connected connection draws its
@@ -263,6 +275,30 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
         
                 const dbNodes: TreeNode[] = databases.map(db => {
           const isDbActive = selectedDatabase === db;
+          const dbKey = `db-${conn.id}-${db}`;
+          // Connect to this database (when it isn't the active one) or load
+          // its catalogue. Shared by the database row and its placeholder
+          // folders, so opening "Schemas" under a database that isn't
+          // connected yet connects it instead of expanding an empty folder.
+          const activateDb = async () => {
+            if (loadingDatabasesRef.current.has(dbKey)) return;
+            loadingDatabasesRef.current.add(dbKey);
+            setLoadingDatabases(prev => new Set(prev).add(dbKey));
+            try {
+              if (!isDbActive) {
+                await connectToDatabase(conn.id, db);
+              } else if (!schemaItems) {
+                await loadSchema(db);
+              }
+            } finally {
+              loadingDatabasesRef.current.delete(dbKey);
+              setLoadingDatabases(prev => {
+                const next = new Set(prev);
+                next.delete(dbKey);
+                return next;
+              });
+            }
+          };
           let dbChildren: TreeNode[] = [];
           
           // Always build children when database is active - either full content or loading placeholder
@@ -440,18 +476,24 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                 dbChildren.push({ id: `store-${conn.id}-${db}`, name: "Storage", icon: "folder" });
               }
             }
-          } else {
-            // Not the active database - show placeholder structure
+          }
+          if (!isDbActive && loadingDatabases.has(dbKey)) {
+            dbChildren = [
+              { id: `loading-schemas-${conn.id}-${db}`, name: "Connecting...", icon: "loading", children: [] }
+            ];
+          } else if (dbChildren.length === 0) {
+            // Not connected (or its catalogue isn't loaded): placeholder
+            // folders that connect/load this database when opened.
             const isPg = ["postgres", "supabase"].includes(conn.type);
             dbChildren = [
-              { id: `schemas-root-${conn.id}-${db}`, name: "Schemas", icon: "folder", children: [] },
+              { id: `schemas-root-${conn.id}-${db}`, name: "Schemas", icon: "folder", children: [], action: activateDb },
             ];
             if (isPg) {
-              dbChildren.push({ id: `events-${conn.id}-${db}`, name: "Event Triggers", icon: "folder" });
-              dbChildren.push({ id: `exts-${conn.id}-${db}`, name: "Extensions", icon: "folder" });
-              dbChildren.push({ id: `langs-${conn.id}-${db}`, name: "Languages", icon: "folder" });
+              dbChildren.push({ id: `events-${conn.id}-${db}`, name: "Event Triggers", icon: "folder", action: activateDb });
+              dbChildren.push({ id: `exts-${conn.id}-${db}`, name: "Extensions", icon: "folder", action: activateDb });
+              dbChildren.push({ id: `langs-${conn.id}-${db}`, name: "Languages", icon: "folder", action: activateDb });
             }
-            dbChildren.push({ id: `store-${conn.id}-${db}`, name: "Storage", icon: "folder" });
+            dbChildren.push({ id: `store-${conn.id}-${db}`, name: "Storage", icon: "folder", action: activateDb });
           }
 
           return {
@@ -459,27 +501,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
             name: db,
             icon: "database",
             children: dbChildren,
-            action: async () => {
-              const dbKey = `db-${conn.id}-${db}`;
-              if (loadingDatabasesRef.current.has(dbKey)) return;
-              loadingDatabasesRef.current.add(dbKey);
-              // If not active, connect and load schema
-              setLoadingDatabases(prev => new Set(prev).add(dbKey));
-              try {
-                if (!isDbActive) {
-                  await connectToDatabase(conn.id, db);
-                } else if (!schemaItems) {
-                  await loadSchema(db);
-                }
-              } finally {
-                loadingDatabasesRef.current.delete(dbKey);
-                setLoadingDatabases(prev => {
-                  const next = new Set(prev);
-                  next.delete(dbKey);
-                  return next;
-                });
-              }
-            }
+            action: activateDb,
           };
         });
 
@@ -513,8 +535,10 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
         }
       }
 
+      stampConnection(connChildren, conn.id);
       return {
         id: `conn-${conn.id}`,
+        connId: conn.id,
         name: `${conn.name.toUpperCase()} \u00a0\u00a0 ${conn.host}:${conn.port}`,
         icon: "server",
         contextMenuId: conn.id,
@@ -1573,6 +1597,112 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
     setDragState(null);
   };
 
+  // `schema.table` from a tree id, quoted only where the engine needs it
+  // (a bare `SELECT * FROM reporting.Releases` folds to `releases` and fails).
+  const qualifiedTableSql = (fullName: string): string => {
+    const dialect = dialectForDbType(activeConnection?.type);
+    return splitDottedIdentifier(fullName)
+      .map((part: string) => (/^["`]/.test(part) ? part : quoteIdentifierIfNeeded(part, dialect)))
+      .join(".");
+  };
+
+  const openTableData = async (node: TreeNode) => {
+    const fullTableName = node.id.startsWith("table-") ? node.id.replace("table-", "") : node.name;
+    const query = `SELECT * FROM ${qualifiedTableSql(fullTableName)} LIMIT 50`;
+    // Issue #51: ensure the table's column types are loaded so the data grid
+    // can pick the date/time overlay editor by real SQL type.
+    const details = await loadTableDetails(fullTableName);
+    const columnTypes: Record<string, string> | undefined = details
+      ? Object.fromEntries(details.columns.map(c => [c.name, c.type]))
+      : undefined;
+    window.dispatchEvent(new CustomEvent("run-specific-query", {
+      detail: { query, name: fullTableName, lineNumber: 1, columnTypes, tableSchema: details }
+    }));
+  };
+
+  const openDdl = async (node: TreeNode) => {
+    try {
+      let iconType = node.icon;
+      let targetName = node.name;
+      let triggerSchema: string | undefined;
+      let triggerTable: string | undefined;
+
+      // Tree node IDs encode the schema context needed for unambiguous DDL
+      // lookup. Triggers: `trig-<schema>.<table>-<name>` (table-nested) or
+      // `trig-<schema>.<name>` (schema-level); anything else falls back to a
+      // name-only lookup.
+      if (node.icon === "trigger") {
+        const idParts = node.id.split("-");
+        if (idParts.length === 3 && idParts[1].includes(".")) {
+          const dotParts = idParts[1].split(".");
+          triggerSchema = dotParts[0];
+          triggerTable = dotParts.slice(1).join(".");
+        } else if (idParts.length === 2 && idParts[1].includes(".")) {
+          triggerSchema = idParts[1].split(".")[0];
+        }
+      } else {
+        const idParts = node.id.split("-");
+        if (idParts.length >= 2) {
+          const fullPath = idParts.slice(1).join("-");
+          if (fullPath.includes(".")) {
+            targetName = fullPath;
+            if (node.icon === "column") {
+              targetName = fullPath.split("-")[0];
+              iconType = "table";
+            }
+          }
+        }
+      }
+      const ddl = await getDDL(iconType, targetName, triggerSchema, triggerTable);
+      if (ddl) {
+        window.dispatchEvent(new CustomEvent("open-query-with-text", {
+          detail: { query: ddl, name: `DDL ${targetName}` }
+        }));
+      }
+    } catch (e) {
+      const errMsg = typeof e === 'string' ? e : (e as any)?.message || "Failed to get DDL";
+      confirmDialog.dialog({ title: "Failed to Load DDL", message: errMsg, confirmLabel: "OK", type: "danger" });
+    }
+  };
+
+  // DataGrip / DBeaver semantics. A single click only selects; the arrow
+  // toggles; a double click (or Enter) opens: connections and databases
+  // connect if needed and expand (or collapse when already open), folders
+  // toggle, tables open their data, other objects open their DDL. (A single
+  // click used to connect AND toggle, so a double click expanded and then
+  // immediately collapsed the node again.)
+  const openNode = async (node: TreeNode) => {
+    setFocusedNodeId(node.id);
+    if (node.icon === "server" || node.icon === "database") {
+      const wasExpanded = expandedNodes.has(node.id);
+      node.action?.();
+      if (wasExpanded) toggleExpand(node.id);
+      else setExpandedNodes(prev => (prev.has(node.id) ? prev : new Set(prev).add(node.id)));
+      return;
+    }
+    if ((node.children && node.children.length > 0) || isFolderNode(node.icon)) {
+      // Placeholder folders connect/load their database on the way open.
+      if (!expandedNodes.has(node.id)) node.action?.();
+      toggleExpand(node.id);
+      return;
+    }
+    if (node.icon === "table") {
+      await openTableData(node);
+      return;
+    }
+    if (isLeafSchemaItem(node.icon)) await openDdl(node);
+  };
+
+  // Double-click from the clicks themselves — see rowClicks.ts for why the
+  // native `dblclick` event isn't used.
+  const lastRowClickRef = useRef<LastRowClick | null>(null);
+  const handleRowClick = (e: React.MouseEvent, node: TreeNode) => {
+    setFocusedNodeId(node.id);
+    const { isDouble, next } = classifyRowClick(node.id, e.detail, performance.now(), lastRowClickRef.current);
+    lastRowClickRef.current = next;
+    if (isDouble) void openNode(node);
+  };
+
   const renderTree = (nodes: TreeNode[], depth: number = 0) => {
     return nodes.map((node) => {
       const isExpanded = expandedNodes.has(node.id);
@@ -1582,7 +1712,6 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
       const isDbLoading = node.icon === "database" && loadingDatabases.has(node.id);
       const isServerConnecting = node.icon === "server" && !!node.contextMenuId && connectingConnectionIds.has(node.contextMenuId);
       const isSchemaLoading = node.icon === "database" && selectedDatabase === node.name && isLoadingSchema;
-      const isSchemasLoading = node.id.startsWith("schemas-root-") && isLoadingSchema;
       const tableDetailId = node.id.replace(/^(cols|idxs|trigs|fks|cons|deps|refs|parts|ruls|polic)-/, "");
       const tableDetailCacheKey = tableDetailId !== node.id ? tableDetailsCacheKey(tableDetailId) : null;
       const isTableDetailsLoading = node.icon === "folder" && !!tableDetailCacheKey && loadingTableDetails.has(tableDetailCacheKey);
@@ -1618,33 +1747,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
             draggable={isDragSource}
             onDragStart={isDragSource ? (e) => { handleDragStart(e, node); } : undefined}
             onDragEnd={isDragSource ? handleDragEnd : undefined}
-            onClick={async () => {
-              // Left click: expand/collapse folders, trigger action for database and server
-              if ((node.icon === "database" || node.icon === "server") && node.action) {
-                node.action();
-              }
-              // Always toggle expand for server nodes so the user sees
-              // immediate visual feedback even before children are loaded.
-              if (hasChildren || isFolder || node.icon === "server") {
-                toggleExpand(node.id);
-              }
-              if (node.icon === "table") {
-                const fullTableName = node.id.startsWith("table-") ? node.id.replace("table-", "") : node.name;
-                const query = `SELECT * FROM ${fullTableName} LIMIT 50`;
-                // Issue #51: ensure the table's column types are loaded so the
-                // data grid can pick the date/time overlay editor by real SQL
-                // type instead of by column-name substring. `loadTableDetails`
-                // returns the cached/freshly-loaded details so we don't have to
-                // wait for a re-render to read them from state.
-                const details = await loadTableDetails(fullTableName);
-                const columnTypes: Record<string, string> | undefined = details
-                  ? Object.fromEntries(details.columns.map(c => [c.name, c.type]))
-                  : undefined;
-                window.dispatchEvent(new CustomEvent("run-specific-query", {
-                  detail: { query, name: fullTableName, lineNumber: 1, columnTypes, tableSchema: details }
-                }));
-              }
-            }}
+            onClick={(e) => handleRowClick(e, node)}
             onContextMenu={(e) => {
               e.preventDefault();
               e.stopPropagation();
@@ -1673,78 +1776,18 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                   ? `color-mix(in srgb, ${node.color}, transparent 85%)` 
                   : undefined
             }}
-            disabled={isDbLoading || isSchemasLoading || isTableDetailsLoading}
+            disabled={isDbLoading || isTableDetailsLoading}
             onMouseDown={() => setFocusedNodeId(node.id)}
-            onDoubleClick={async () => {
-              if (isLeaf) {
-                try {
-                  let iconType = node.icon;
-                  let targetName = node.name;
-                  let triggerSchema: string | undefined;
-                  let triggerTable: string | undefined;
-
-                  // Tree node IDs encode the schema context needed for unambiguous
-                  // DDL lookup. Two formats:
-                  //   Table-nested: `trig-<schema>.<table>-<triggerName>`
-                  //     (built at line 308 via `trig-${tableId}-${t}`,
-                  //      where tableId = "<schema>.<table>" contains no `-`)
-                  //   Schema-level: `trig-<schema>.<triggerName>`
-                  //     (built at line 355 via `trig-${schemaName}.${t}`)
-                  // Splitting by `-` gives exactly 3 parts for table-nested
-                  // and 2 for schema-level, unless a quoted identifier contains
-                  // `-` (extremely rare in PostgreSQL). Unmatched formats fall
-                  // back to a name-only lookup which is correct for schema-level
-                  // triggers and avoids wrong results for table-nested ones.
-                  if (node.icon === "trigger") {
-                    const idParts = node.id.split("-");
-                    if (idParts.length === 3) {
-                      // Table-nested: ["trig", "schema.table", "triggerName"]
-                      const pathPart = idParts[1];
-                      if (pathPart.includes(".")) {
-                        const dotParts = pathPart.split(".");
-                        triggerSchema = dotParts[0];
-                        triggerTable = dotParts.slice(1).join(".");
-                      }
-                    } else if (idParts.length === 2) {
-                      // Schema-level: ["trig", "schema.triggerName"]
-                      const pathPart = idParts[1];
-                      if (pathPart.includes(".")) {
-                        const dotParts = pathPart.split(".");
-                        triggerSchema = dotParts[0];
-                      }
-                    }
-                    // Fallthrough: unexpected part count → use node.name only
-                    // (triggerSchema/triggerTable stay undefined → name-only lookup)
-                  } else {
-                    const idParts = node.id.split("-");
-                    if (idParts.length >= 2) {
-                      const fullPath = idParts.slice(1).join("-");
-                      if (fullPath.includes(".")) {
-                        targetName = fullPath;
-                        if (node.icon === "column") {
-                          const pathParts = fullPath.split("-");
-                          targetName = pathParts[0];
-                          iconType = "table";
-                        }
-                      }
-                    }
-                  }
-                  const ddl = await getDDL(iconType, targetName, triggerSchema, triggerTable);
-                  if (ddl) {
-                    window.dispatchEvent(new CustomEvent("open-query-with-text", {
-                      detail: { query: ddl, name: `DDL ${targetName}` }
-                    }));
-                  }
-                } catch (e) {
-                  const errMsg = typeof e === 'string' ? e : (e as any)?.message || "Failed to get DDL";
-                  confirmDialog.dialog({ title: "Failed to Load DDL", message: errMsg, confirmLabel: "OK", type: "danger" });
-                }
-              }
-              if (hasChildren || isFolder || node.icon === "server") toggleExpand(node.id);
-            }}
           >
-            {hasChildren || isFolder ? (
-              <span onClick={(e) => { e.stopPropagation(); toggleExpand(node.id); }} className="hover:bg-[var(--neutral-5)] rounded text-[var(--neutral-11)]">
+            {hasChildren || isFolder || node.icon === "server" ? (
+              <span
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!isExpanded) node.action?.();
+                  toggleExpand(node.id);
+                }}
+                className="hover:bg-[var(--neutral-5)] rounded text-[var(--neutral-11)]"
+              >
                 {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
               </span>
             ) : (
@@ -1761,10 +1804,10 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
               {node.name}
               {node.icon === 'server' && activeConnection?.id === node.contextMenuId && <span className="ml-2 inline-block w-1.5 h-1.5 bg-[var(--success-9)] rounded-full" title="Connected" />}
             </span>
-            {(isSchemaLoading || isSchemasLoading || isTableDetailsLoading) && (
+            {(isSchemaLoading || isTableDetailsLoading) && (
               <Loader2 className="w-3 h-3 animate-spin ml-auto text-[var(--neutral-11)] shrink-0" />
             )}
-            {hasChildren && !(isSchemaLoading || isSchemasLoading || isTableDetailsLoading) && (
+            {hasChildren && !(isSchemaLoading || isTableDetailsLoading) && (
               <span className="text-[10px] text-[var(--neutral-11)] ml-auto">{node.children?.length}</span>
             )}
           </button>
@@ -1841,6 +1884,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
           const isFolder = isFolderNode(node.icon);
           if (hasChildren || isFolder) {
             if (!expandedNodes.has(node.id)) {
+              node.action?.();
               toggleExpand(node.id);
             } else if (node.children && node.children.length > 0) {
               const firstChildId = node.children[0].id;
@@ -1869,26 +1913,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
         e.preventDefault();
         if (focusedNodeId && currentIndex !== -1) {
           const node = visibleNodes[currentIndex];
-          if (node.action) {
-            node.action();
-          } else if (node.children || isFolderNode(node.icon)) {
-            toggleExpand(node.id);
-          } else if (isLeafSchemaItem(node.icon)) {
-             (async () => {
-                try {
-                  const targetName = node.id.startsWith("table-") ? node.id.replace("table-", "") : node.name;
-                  const ddl = await getDDL(node.icon, targetName);
-                  if (ddl) {
-                    window.dispatchEvent(new CustomEvent("open-query-with-text", {
-                      detail: { query: ddl, name: `DDL ${node.name}` }
-                    }));
-                  }
-                } catch (e) {
-                  const errMsg = typeof e === 'string' ? e : (e as any)?.message || "Failed to get DDL";
-                  confirmDialog.dialog({ title: "Failed to Load DDL", message: errMsg, confirmLabel: "OK", type: "danger" });
-                }
-             })();
-          }
+          void openNode(node);
         }
         break;
       case "Home":
@@ -2378,27 +2403,34 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
         <Menu x={schemaContextMenu.x} y={schemaContextMenu.y} className="w-auto min-w-[160px]">
           {/* Database folder specific items if any (removed duplicate Create Database) */}
 
-          {schemaContextMenu.node.icon === "database" && (
+          {schemaContextMenu.node.icon === "database" && (() => {
+            // The database's own server — not whichever one the sidebar has
+            // active, now that every connected server draws its own tree.
+            const nodeConn = connections.find((c) => c.id === schemaContextMenu.node.connId) ?? activeConnection;
+            const nodeDb = schemaContextMenu.node.name;
+            const isActiveDb = nodeConn?.id === activeConnection?.id && nodeDb === selectedDatabase;
+            return (
             <>
               <MenuItem
                 icon={<Terminal className="w-3 h-3" />}
                 onClick={() => {
                   window.dispatchEvent(new CustomEvent("open-query-window", {
-                    detail: { connectionId: activeConnection?.id, connectionName: activeConnection?.name, database: schemaContextMenu.node.name }
+                    detail: { connectionId: nodeConn?.id, connectionName: nodeConn?.name, database: nodeDb }
                   }));
                   closeContextMenu();
                 }}
               >
                 Open SQL Editor
               </MenuItem>
+              {["postgres", "supabase", "cockroach", "psql"].includes(nodeConn?.type ?? "") && (
               <MenuItem
                 icon={<Terminal className="w-3 h-3" />}
                 onClick={() => {
                   window.dispatchEvent(new CustomEvent("open-query-window-psql", {
                     detail: {
-                      connectionId: activeConnection?.id,
-                      connectionName: activeConnection?.name,
-                      database: schemaContextMenu.node.name,
+                      connectionId: nodeConn?.id,
+                      connectionName: nodeConn?.name,
+                      database: nodeDb,
                     }
                   }));
                   closeContextMenu();
@@ -2406,10 +2438,14 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
               >
                 Open PSQL (Console)
               </MenuItem>
+              )}
               <MenuItem
                 icon={<Zap className="w-3 h-3" />}
                 onClick={() => {
-                  loadSchema(selectedDatabase || "");
+                  // Cached per database since the catalogue scan was folded
+                  // into one query, so a refresh has to force it.
+                  if (isActiveDb) loadSchema(nodeDb, undefined, true);
+                  else schemaContextMenu.node.action?.();
                   closeContextMenu();
                 }}
               >
@@ -2418,12 +2454,12 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
               <MenuItem
                 icon={<Database className="w-3 h-3" />}
                 onClick={() => {
-                  if (activeConnection && selectedDatabase) {
-                    const currentSchemas = getSelectedSchemas(activeConnection.id, selectedDatabase);
+                  if (nodeConn) {
+                    const currentSchemas = getSelectedSchemas(nodeConn.id, nodeDb);
                     setSchemaDialogInfo({
-                      connectionId: activeConnection.id,
-                      connectionName: activeConnection.name,
-                      databaseName: selectedDatabase,
+                      connectionId: nodeConn.id,
+                      connectionName: nodeConn.name,
+                      databaseName: nodeDb,
                       selectedSchemas: currentSchemas
                     });
                     setShowSchemaDialog(true);
@@ -2589,7 +2625,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                       onClick={() => {
                         const nodeId = schemaContextMenu.node.id;
                         const dbName = schemaContextMenu.node.name;
-                        const conn = activeConnection;
+                        const conn = nodeConn;
                         const connId = conn?.id || nodeId.split("-")[1] || "";
                         setBackupTarget({ connId, dbName, connName: conn?.name || dbName });
                         setBackupDialogOpen(true);
@@ -2603,7 +2639,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                       onClick={() => {
                         const nodeId = schemaContextMenu.node.id;
                         const dbName = schemaContextMenu.node.name;
-                        const conn = activeConnection;
+                        const conn = nodeConn;
                         const connId = conn?.id || nodeId.split("-")[1] || "";
                         setBackupTarget({ connId, dbName, connName: conn?.name || dbName });
                         setRestoreDialogOpen(true);
@@ -2633,9 +2669,21 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                 icon={<Trash2 className="w-3 h-3" />}
                 onClick={async () => {
                   const dbName = schemaContextMenu.node.name;
+                  // dropDatabase runs on the active server's handle; on another
+                  // server's tree it would hit a same-named database here.
+                  if (nodeConn?.id !== activeConnection?.id) {
+                    closeContextMenu();
+                    await confirmDialog.dialog({
+                      title: "Select the server first",
+                      message: `"${dbName}" is on ${nodeConn?.name ?? "another server"}. Open a database on that server, then drop it from there.`,
+                      confirmLabel: "OK",
+                      type: "info",
+                    });
+                    return;
+                  }
                   const confirmed = await confirmDialog.confirm({
                     title: "Drop Database?",
-                    message: `Are you sure you want to drop the database "${dbName}"? This action is irreversible and all data will be permanently deleted.`,
+                    message: `Are you sure you want to drop the database "${dbName}" on ${nodeConn?.name ?? "this server"}? This action is irreversible and all data will be permanently deleted.`,
                     confirmLabel: "Drop Database",
                     cancelLabel: "Cancel",
                     type: "danger",
@@ -2665,7 +2713,8 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                 Drop Database
               </MenuItem>
             </>
-          )}
+            );
+          })()}
 
           {schemaContextMenu.node.id.startsWith("schemas-root-") && (
             <MenuLabel bordered>

@@ -5,7 +5,7 @@
  * per-engine introspection inline, bound to the *globally active* connection
  * (`activeConnection`/`currentDb`). Tabs can target connections that were
  * never sidebar-connected (lazy `ensureConnectionDb`), so completion keyed
- * only off the global schema stayed dead on those tabs (`SELECT devops.`
+ * only off the global schema stayed dead on those tabs (`SELECT reporting.`
  * showed nothing even though the tables exist). This module holds the exact
  * same introspection keyed off explicit parameters (`db`, `connType`,
  * `selectedSchemas`) so both the global tree path and the per-tab background
@@ -404,7 +404,8 @@ export async function fetchSchemaItems(req: SchemaFetchRequest): Promise<SchemaI
           SELECT 
             n.nspname as table_schema,
             c.relname as table_name,
-            a.attname as column_name
+            a.attname as column_name,
+            format_type(a.atttypid, a.atttypmod) as data_type
           FROM pg_attribute a
           JOIN pg_class c ON a.attrelid = c.oid
           JOIN pg_namespace n ON c.relnamespace = n.oid
@@ -419,7 +420,8 @@ export async function fetchSchemaItems(req: SchemaFetchRequest): Promise<SchemaI
 
       schema.columns = cols.map((c: any) => ({
         table_name: c.table_schema === 'public' ? c.table_name : `${c.table_schema}.${c.table_name}`,
-        column_name: c.column_name
+        column_name: c.column_name,
+        data_type: c.data_type ?? undefined,
       }));
     } catch (err) {
       console.error("Failed to fetch columns:", err);
@@ -463,7 +465,7 @@ export async function fetchSchemaItems(req: SchemaFetchRequest): Promise<SchemaI
     setSchemaProgress({ phase: "columns", current: 1, total: 4 });
     try {
       const cols = await currentDb.select(`
-        SELECT TABLE_NAME, COLUMN_NAME
+        SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE
         FROM information_schema.COLUMNS
         WHERE TABLE_SCHEMA = DATABASE()
         ORDER BY TABLE_NAME, ORDINAL_POSITION
@@ -552,7 +554,7 @@ export async function fetchSchemaItems(req: SchemaFetchRequest): Promise<SchemaI
     setSchemaProgress({ phase: "columns", current: 2, total: 4 });
     try {
       const allObjects = [...schema.tables, ...schema.views];
-      const colPairs: { table_name: string; column_name: string }[] = [];
+      const colPairs: { table_name: string; column_name: string; data_type?: string }[] = [];
       for (const obj of allObjects) {
         try {
           const pragmaRows = await currentDb.select(`PRAGMA table_info(${quoteSqliteIdentifier(obj)})`);

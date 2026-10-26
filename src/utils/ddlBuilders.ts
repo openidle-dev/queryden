@@ -49,7 +49,7 @@ function stripIdentifierQuotes(part: string): string {
 }
 
 /**
- * Split a possibly schema-qualified display name (`devops.deployments`,
+ * Split a possibly schema-qualified display name (`reporting.deployments`,
  * `"my.schema"."my.table"`) into raw (unquoted) parts for catalog params
  * and re-quoting. Quote-aware: naive `split('.')` breaks quoted dots.
  */

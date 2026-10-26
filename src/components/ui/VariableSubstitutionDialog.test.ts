@@ -156,3 +156,24 @@ describe("substituteVariables", () => {
     ).toBe("SELECT '1' AS a, '1' AS b, '1' AS c");
   });
 });
+
+describe("variables — slices, types and IN lists", () => {
+  it("doesn't treat array slices or := as variables", () => {
+    expect(extractVariables("SELECT arr[lo:hi], arr[1:2] FROM t WHERE x = :x").map(v => v.name)).toEqual(["x"]);
+    expect(extractVariables("SET @a := 5")).toEqual([]);
+  });
+
+  it("honours NUMBER annotations and numeric defaults (unquoted)", () => {
+    expect(extractVariables("SELECT * FROM t LIMIT :n:NUMBER")[0]).toMatchObject({ name: "n", type: "number", defaultValue: undefined });
+    expect(substituteVariables("SELECT * FROM t LIMIT :n:NUMBER", { n: "10" })).toBe("SELECT * FROM t LIMIT 10");
+    expect(substituteVariables("SELECT * FROM t LIMIT :n:25", {})).toBe("SELECT * FROM t LIMIT 25");
+    // Text stays quoted even when it looks numeric (codes like 00123).
+    expect(substituteVariables("WHERE code = :code", { code: "00123" })).toBe("WHERE code = '00123'");
+  });
+
+  it("expands comma-separated values inside IN (…)", () => {
+    expect(substituteVariables("WHERE id IN (:ids)", { ids: "1, 2,3" })).toBe("WHERE id IN (1, 2, 3)");
+    expect(substituteVariables("WHERE s IN ( :s )", { s: "a,b'c" })).toBe("WHERE s IN ( 'a', 'b''c' )");
+    expect(substituteVariables("WHERE name = :n", { n: "Smith, J" })).toBe("WHERE name = 'Smith, J'");
+  });
+});

@@ -3,7 +3,7 @@ title: Statement-aware run
 description: Ctrl+Enter runs the one statement under your cursor — not the whole buffer.
 section: editor
 order: 20
-updated: 2026-05-13
+updated: 2026-10-26
 ---
 
 The single most-loved shortcut in QueryDen: `Ctrl+Enter` parses the current buffer, finds the statement boundary at your cursor, and runs **only** that one.
@@ -19,13 +19,32 @@ Statement-aware run inverts the default. You write a 30-statement scratch tab. T
 
 ## How boundaries are detected
 
-The parser walks tokens forward and backward from the cursor, treating `;` outside of strings and comments as the statement boundary. CTEs, DO blocks, and multi-line statements are handled — the parser does **not** split on `;` inside a `$$ body $$` or inside a `CASE WHEN ... END` clause.
+The parser walks tokens forward and backward from the cursor, treating `;` outside of strings and comments as the statement boundary. CTEs, DO blocks, and multi-line statements are handled — the parser does **not** split on `;` inside a `$$ body $$`, a `BEGIN ATOMIC … END` function body, a nested `/* … */` comment, or the data rows after `COPY … FROM STDIN`. On PostgreSQL a backslash is an escape only inside `E'…'` strings, so `'C:\'` ends where PostgreSQL says it does.
 
 If the cursor sits on whitespace between two statements, QueryDen runs the **next** one — the one your eye is reading toward.
 
 ## Running multiple statements
 
-If you want to run several statements at once, select the range first. Selection wins over cursor.
+If you want to run several statements at once, select the range first. Selection wins over cursor. `Ctrl+Shift+Enter` runs every statement in the tab, stopping at the first error (the statements before it keep their results).
+
+## Each tab is its own session
+
+Every editor tab runs on its own server connection, like a psql session or a DataGrip console. Anything session-scoped carries over from one run to the next in that tab — and only that tab:
+
+- `BEGIN` … `COMMIT` / `ROLLBACK` across separate runs (the toolbar's transaction buttons use the same session);
+- `SET search_path`, `SET ROLE`, `SET work_mem`, `SET statement_timeout`, `SET session_replication_role = replica`, `SET TimeZone`, custom settings like `SET app.tenant_id = '42'`;
+- temporary tables, `PREPARE`d statements, `DECLARE … WITH HOLD` cursors, advisory locks;
+- SQLite `PRAGMA foreign_keys` and `ATTACH`.
+
+Closing the tab closes its connection (the server rolls back anything left open). If a tab sat idle and the network or a connection pooler dropped its connection, the next run reconnects automatically and tells you that earlier session settings were lost.
+
+**Stop** cancels the running statement on the server (`pg_cancel_backend` / `KILL QUERY`), not just in the UI.
+
+## Results and server output
+
+Values are shown exactly as the server prints them: `numeric` keeps its scale and every digit, `timestamptz` is shown in your local time zone, arrays, intervals, `regclass`, `money` and `infinity` read as they do in psql, and two columns with the same name both appear. A statement that returns no rows still shows its column headers.
+
+`RAISE NOTICE` / `RAISE WARNING` output — from `DO` blocks, functions, or the server itself — appears under **Messages → Server output**, with a count on the tab. Errors show the server's message with its `DETAIL`, `HINT` and position, and the editor underlines the exact spot.
 
 ## Per-statement gutter status
 

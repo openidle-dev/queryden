@@ -216,3 +216,19 @@ describe("matchGlobalShortcut", () => {
     ).toBeNull();
   });
 });
+
+describe("matchGlobalShortcut — physical keys", () => {
+  const base = { ctrlKey: false, metaKey: false, shiftKey: false, altKey: false };
+
+  it("matches Cmd+Option+S on macOS, where key is 'ß'", () => {
+    expect(matchGlobalShortcut({ ...base, metaKey: true, altKey: true, key: "ß", code: "KeyS" })).toEqual({ type: "open-settings" });
+  });
+
+  it("matches on the physical key under AltGr-style layouts", () => {
+    expect(matchGlobalShortcut({ ...base, ctrlKey: true, shiftKey: true, key: "Ł", code: "KeyL" })).toEqual({ type: "dispatch-event", name: "format-sql" });
+  });
+
+  it("opens help with F1", () => {
+    expect(matchGlobalShortcut({ ...base, key: "F1", code: "F1" })).toEqual({ type: "open-help" });
+  });
+});

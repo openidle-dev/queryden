@@ -23,7 +23,7 @@ const toolToggleActiveClass = "bg-[var(--accent-3)] text-[var(--accent-11)] hove
 
 export function AppLayout() {
   const { theme } = useTheme();
-  const { activeConnection, selectedDatabase, schemaItems } = useConnections();
+  const { activeConnection, selectedDatabase, schemaItems, connectionsLoadError } = useConnections();
   const settings = useSettings();
   const [showExplorer, setShowExplorer] = useState(true);
   const { name: appName } = useAppInfo();
@@ -126,6 +126,12 @@ export function AppLayout() {
 
   return (
     <div className={`theme-${theme} ${settings.compactMode ? 'compact-mode' : ''} h-screen flex flex-col bg-[var(--surface-base)] text-[var(--neutral-12)]`}>
+      {connectionsLoadError && (
+        <div role="alert" className="px-3 py-2 text-xs bg-[var(--danger-3)] text-[var(--danger-11)] border-b border-[var(--danger-6)]">
+          Stored connections or credentials could not be read, so changes to them are not being saved (the files on disk are untouched).
+          {" "}<span className="font-mono opacity-80">{connectionsLoadError}</span>
+        </div>
+      )}
       {/* Top Tool Window Bar - DataGrip Style */}
       <header className="h-11 flex items-center justify-between px-2 bg-[var(--surface-panel)] border-b border-[var(--neutral-6)]">
         {/* Left: Tool Window Buttons */}

@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { X, Play, Loader2, AlertCircle, Check, Layers, ChevronDown, ChevronRight, Folder, Search, CheckCircle, Database, Clock, Table2, AlertTriangle, Info, Save, Star, Download, FileCode, Globe, RefreshCw, Copy, Trash2, FileJson } from "lucide-react";
-import { useSavedQueries } from "../../store/savedQueryStore";
+import { X, Play, Loader2, AlertCircle, Check, Layers, ChevronDown, ChevronRight, Folder, Search, CheckCircle, Database, Clock, Table2, AlertTriangle, Info, Star, Download, FileCode, Globe, RefreshCw, Copy, Trash2, FileJson, Sheet } from "lucide-react";
+import { SavedQueryList } from "../explorer/SavedQueryList";
+import { toCsv, toHtml, toInsertStatements, toXml } from "../../utils/exportFormats";
+import { invokeCmd } from "../../lib/ipc";
+import { dialectForDbType } from "../editor/sqlBuiltins";
 import { useSettings } from "../../store/settingsStore";
 import { save } from "@tauri-apps/plugin-dialog";
 import { QueryEditor } from "../editor/QueryEditor";
@@ -10,7 +13,7 @@ import { GridView, GridViewRef } from "../ui/GridView";
 import { CompactSelection } from "@glideapps/glide-data-grid";
 import { Dialog } from "../ui/Dialog";
 import { splitStatements } from "../../utils/splitStatements";
-import { getDefaultPort, isMySqlLike, isSelectLike } from "../../utils/sqlDialect";
+import { isMySqlLike, isSelectLike } from "../../utils/sqlDialect";
 import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
 import { Select } from "../ui/Select";
@@ -39,11 +42,9 @@ interface SelectedTarget {
 }
 
 export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
-  const { connections, vaultCredentials } = useConnections();
+  const { connections, ensureConnectionDb } = useConnections();
   const settings = useSettings();
-  const { queries: savedQueries } = useSavedQueries();
   const [sidebarTab, setSidebarTab] = useState<"targets" | "saved">("targets");
-  const [savedSearch, setSavedSearch] = useState("");
   const [selectedTargets, setSelectedTargets] = useState<SelectedTarget[]>([]);
   const [expandedConnections, setExpandedConnections] = useState<Set<string>>(new Set());
   const [availableDatabases, setAvailableDatabases] = useState<Record<string, string[]>>({});
@@ -65,6 +66,18 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
   const [selectedJumpCol, setSelectedJumpCol] = useState("");
   const [toastMessage, setToastMessage] = useState("");
   const [showToast, setShowToast] = useState(false);
+  // One timer for every toast, so a newer message isn't cut short by an
+  // older one's timeout and none is left on screen.
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flashToast = (message: string) => {
+    setToastMessage(message);
+    setShowToast(true);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setShowToast(false), 2500);
+  };
+  useEffect(() => () => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+  }, []);
   const [statusDetailModal, setStatusDetailModal] = useState<QueryResult | null>(null);
   const [hoveredStatus, setHoveredStatus] = useState<{ connId: string; db: string; result: QueryResult } | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, row: any, col?: string } | null>(null);
@@ -122,7 +135,8 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
   useEffect(() => {
     if (isOpen) {
       setSelectedTargets([]); setExpandedConnections(new Set()); setAvailableDatabases({}); setLoadingDatabases(new Set()); setResults([]); setQuery(""); setError(null); setShowMerged(false);
-      setSidebarTab("targets"); setSavedSearch("");
+      dbListRequestsRef.current.clear();
+      setSidebarTab("targets");
     }
   }, [isOpen]);
 
@@ -136,33 +150,50 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
     }
   }, [columnSearch, columns]);
 
-  const loadDatabasesForConnection = useCallback(async (connId: string, onComplete?: () => void) => {
+  // In-flight/finished database-list requests per connection, so Select All,
+  // expanding a node and the per-connection checkbox share one request.
+  const dbListRequestsRef = useRef(new Map<string, Promise<string[]>>());
+
+  /**
+   * Every database on a connection, fetched through `ensureConnectionDb` —
+   * the same path the editor uses, so SSH tunnels, vault credentials and
+   * IPv6 hosts work. A failed request is not cached, so it can be retried.
+   */
+  const fetchDatabases = useCallback((connId: string): Promise<string[]> => {
+    const pending = dbListRequestsRef.current.get(connId);
+    if (pending) return pending;
     const conn = connections.find(c => c.id === connId);
-    if (!conn || availableDatabases[connId] || loadingDatabases.has(connId)) {
-      // If already loaded or loading, still call the callback
-      if (onComplete) onComplete();
-      return;
-    }
-    setLoadingDatabases(prev => new Set(prev).add(connId));
-    try {
-      let username = conn.username || "", password = conn.password || "";
-      if (conn.vaultCredentialId) { const vaultCred = vaultCredentials.find(vc => vc.id === conn.vaultCredentialId); if (vaultCred) { username = vaultCred.username || ""; password = vaultCred.password || ""; } }
-      const Database = (await import("@tauri-apps/plugin-sql")).default;
-      const port = conn.port || getDefaultPort(conn.type);
-      const connectionString = conn.type === "sqlite" ? `sqlite:${conn.filepath || "dbman.sqlite"}` :
-        ["postgres", "supabase", "cockroach"].includes(conn.type) ? `postgres://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${conn.host}:${port}/postgres` :
-        `mysql://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${conn.host}:${port}/mysql`;
-      const db = await Database.load(connectionString);
-      let dbs: string[] = [];
-      if (["postgres", "supabase", "cockroach"].includes(conn.type)) dbs = (await db.select<any[]>("SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname")).map((r: any) => r.datname);
-      else if (["mysql", "mariadb"].includes(conn.type)) dbs = (await db.select<any[]>("SHOW DATABASES")).map((r: any) => r.Database).filter((db: string) => !['information_schema', 'performance_schema', 'mysql', 'sys'].includes(db));
-      else if (conn.type === "sqlite") dbs = [conn.filepath || "main"];
-      setAvailableDatabases(prev => ({ ...prev, [connId]: dbs }));
-      // Call the completion callback after databases are set
-      if (onComplete) onComplete();
-    } catch { setAvailableDatabases(prev => ({ ...prev, [connId]: [conn!.database] })); if (onComplete) onComplete(); }
-    finally { setLoadingDatabases(prev => { const next = new Set(prev); next.delete(connId); return next; }); }
-  }, [availableDatabases, loadingDatabases, connections, vaultCredentials]);
+    if (!conn) return Promise.resolve([]);
+
+    const request = (async () => {
+      setLoadingDatabases(prev => new Set(prev).add(connId));
+      try {
+        if (conn.type === "sqlite") return [conn.filepath || conn.database || "main"];
+        const { db } = await ensureConnectionDb(conn.id, conn.database || undefined);
+        let dbs: string[] = [];
+        if (["postgres", "supabase", "cockroach"].includes(conn.type)) {
+          const rows = await db.select("SELECT datname FROM pg_database WHERE NOT datistemplate AND datallowconn ORDER BY datname") as Array<{ datname: string }>;
+          dbs = rows.map(r => r.datname);
+        } else if (["mysql", "mariadb"].includes(conn.type)) {
+          const rows = await db.select("SHOW DATABASES") as Array<Record<string, string>>;
+          dbs = rows
+            .map(r => r.Database ?? Object.values(r)[0])
+            .filter(name => !["information_schema", "performance_schema", "mysql", "sys"].includes(name));
+        }
+        const list = dbs.length > 0 ? dbs : [conn.database].filter(Boolean);
+        setAvailableDatabases(prev => ({ ...prev, [connId]: list }));
+        return list;
+      } catch (e) {
+        dbListRequestsRef.current.delete(connId);
+        setError(`Could not list databases for ${conn.name}: ${e instanceof Error ? e.message : String(e)}`);
+        return [conn.database].filter(Boolean);
+      } finally {
+        setLoadingDatabases(prev => { const next = new Set(prev); next.delete(connId); return next; });
+      }
+    })();
+    dbListRequestsRef.current.set(connId, request);
+    return request;
+  }, [connections, ensureConnectionDb]);
 
   const [isExecuting, setIsExecuting] = useState(false);
 
@@ -195,9 +226,7 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
       const next = new Set(prev);
       targetConnectionIds.forEach(connId => {
         next.add(connId);
-        if (!availableDatabases[connId] && !loadingDatabases.has(connId)) {
-          loadDatabasesForConnection(connId);
-        }
+        void fetchDatabases(connId);
       });
       return next;
     });
@@ -215,9 +244,9 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
     const isSelectQueryFor = (stmt: string, connType: string | undefined) =>
       isSelectLike(stmt, { hashComments: isMySqlLike(connType) });
 
-    for (const target of selectedTargets) {
+    const runTarget = async (target: SelectedTarget) => {
       const conn = connections.find(c => c.id === target.connectionId);
-      if (!conn) continue;
+      if (!conn) return;
       const startTime = Date.now();
 
       // Split under this target's own dialect (see above). Statement
@@ -225,28 +254,20 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
       // stay aligned on mixed runs.
       const hashOpts = { hashComments: isMySqlLike(conn.type) };
       const targetStatements = preSplit ?? splitStatements(queryToRun, hashOpts).map(s => s.text);
-      if (targetStatements.length === 0) continue;
+      if (targetStatements.length === 0) return;
 
       try {
-        let username = conn.username || "", password = conn.password || "";
-        if (conn.vaultCredentialId) { const vaultCred = vaultCredentials.find(vc => vc.id === conn.vaultCredentialId); if (vaultCred) { username = vaultCred.username || ""; password = vaultCred.password || ""; } }
-
-        const Database = (await import("@tauri-apps/plugin-sql")).default;
-        const port = conn.port || getDefaultPort(conn.type);
-        const connectionString = conn.type === "sqlite" ? `sqlite:${conn.filepath || "dbman.sqlite"}` :
-          ["postgres", "supabase", "cockroach"].includes(conn.type) ? `postgres://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${conn.host}:${port}/${target.database}` :
-          `mysql://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${conn.host}:${port}/${target.database}`;
-
-        const db = await Database.load(connectionString);
+        // Same connection path as the editor: SSH tunnel, vault credentials,
+        // IPv6 hosts and the per-database handle cache.
+        const { db } = await ensureConnectionDb(conn.id, target.database);
 
         let lastRows: any[] = [];
         let lastCols: string[] = [];
         let totalAffected = 0;
 
-        // Execute each statement sequentially
         for (const stmt of targetStatements) {
           if (isSelectQueryFor(stmt, conn.type)) {
-            const rows = await db.select<any[]>(stmt);
+            const rows = await db.select(stmt) as any[];
             lastRows = rows;
             lastCols = rows.length > 0 ? Object.keys(rows[0]) : [];
             totalAffected += rows.length;
@@ -265,12 +286,19 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
               rowsAffected: totalAffected,
               duration: Date.now() - startTime
             } : r));
-
       } catch (err: any) {
         setResults(prev => prev.map(r => (r.connectionId === target.connectionId && r.databaseName === target.database)
           ? { ...r, status: 'error', error: err?.message || String(err), duration: Date.now() - startTime } : r));
       }
-    }
+    };
+
+    // Run targets concurrently, a few at a time, instead of strictly one after
+    // another: 8 databases no longer take 8x the slowest round trip.
+    const queue = [...selectedTargets];
+    const workers = Array.from({ length: Math.min(4, queue.length) }, async () => {
+      for (let next = queue.shift(); next; next = queue.shift()) await runTarget(next);
+    });
+    await Promise.all(workers);
     setIsExecuting(false);
   };
 
@@ -279,12 +307,23 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
   const getSelectedCount = (connId: string) => selectedTargets.filter(t => t.connectionId === connId).length;
   const isTargetSelected = (connId: string, db: string) => selectedTargets.some(t => t.connectionId === connId && t.database === db);
 
-  const toggleSelectAll = () => {
-    if (selectedTargets.length === 0) {
-      const all: SelectedTarget[] = [];
-      connections.forEach(conn => (availableDatabases[conn.id] || [conn.database]).forEach(db => all.push({ connectionId: conn.id, database: db })));
-      setSelectedTargets(all);
-    } else setSelectedTargets([]);
+  // Select All means every database on every connection, so the lists are
+  // fetched first (they were only known for expanded connections, which made
+  // Select All pick just each connection's default database).
+  const [selectingAll, setSelectingAll] = useState(false);
+  const toggleSelectAll = async () => {
+    if (selectedTargets.length > 0) {
+      setSelectedTargets([]);
+      return;
+    }
+    setSelectingAll(true);
+    try {
+      const lists = await Promise.all(connections.map(async conn => ({ conn, dbs: await fetchDatabases(conn.id) })));
+      setSelectedTargets(lists.flatMap(({ conn, dbs }) => dbs.map(db => ({ connectionId: conn.id, database: db }))));
+      setExpandedConnections(new Set(connections.map(c => c.id)));
+    } finally {
+      setSelectingAll(false);
+    }
   };
 
   const toggleTarget = (connId: string, db: string) => {
@@ -295,37 +334,22 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
     });
   };
 
-  const toggleConnAll = (conn: DatabaseConnection) => {
-    // If databases aren't loaded yet, start loading them and select all AFTER loading completes
-    if (!availableDatabases[conn.id] && !loadingDatabases.has(conn.id)) {
-      // Start loading, then call toggleConnAll again after databases are loaded
-      loadDatabasesForConnection(conn.id, () => {
-        // This callback runs AFTER databases are set in state
-        toggleConnAll(conn);
-      });
-      return; // Don't do anything yet, wait for callback
-    }
-
-    // Get ALL databases for this connection
-    const dbs = availableDatabases[conn.id]?.length > 0 ? availableDatabases[conn.id] : [conn.database];
-    const current = selectedTargets.filter(t => t.connectionId === conn.id);
-
-    // If all databases are already selected, deselect all
-    // Otherwise, select ALL databases from this connection
-    if (current.length === dbs.length && current.length > 0) {
-      setSelectedTargets(prev => prev.filter(t => t.connectionId !== conn.id));
-    } else {
-      // Select ALL databases from this connection
-      const targetsToSelect = dbs.map(db => ({ connectionId: conn.id, database: db }));
-      setSelectedTargets(prev => [...prev.filter(t => t.connectionId !== conn.id), ...targetsToSelect]);
-    }
+  const toggleConnAll = async (conn: DatabaseConnection) => {
+    const dbs = await fetchDatabases(conn.id);
+    setExpandedConnections(prev => new Set(prev).add(conn.id));
+    setSelectedTargets(prev => {
+      const current = prev.filter(t => t.connectionId === conn.id);
+      const allSelected = current.length > 0 && dbs.every(db => current.some(t => t.database === db));
+      const others = prev.filter(t => t.connectionId !== conn.id);
+      return allSelected ? others : [...others, ...dbs.map(db => ({ connectionId: conn.id, database: db }))];
+    });
   };
 
   const exportData = async (f: "csv" | "excel" | "json" | "xml" | "html" | "sql") => {
     if (!currentResult?.rows?.length) return;
     try {
         const mapping: Record<string, string> = {
-          csv: "csv", json: "json", excel: "xls", xml: "xml", html: "html", sql: "sql"
+          csv: "csv", json: "json", excel: "xlsx", xml: "xml", html: "html", sql: "sql"
         };
         const ext = mapping[f] || "txt";
         const path = await save({
@@ -338,44 +362,37 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
         const rows = currentResult.rows;
         const cols = columns;
 
-        if (f === "json") {
-          content = JSON.stringify(rows, null, 2);
-        } else if (f === "csv") {
-          content = [cols.join(","), ...rows.map(r => cols.map(c => JSON.stringify(r[c])).join(","))].join("\n");
-        } else if (f === "excel") {
-          content = [cols.join("\t"), ...rows.map(r => cols.map(c => JSON.stringify(r[c])).join("\t"))].join("\n");
-        } else if (f === "xml") {
-          content = `<?xml version="1.0" encoding="UTF-8"?>\n<results>\n` +
-                    rows.map(r => `  <row>\n${cols.map(c => `    <${c}>${String(r[c])}</${c}>`).join("\n")}\n  </row>`).join("\n") +
-                    `\n</results>`;
-        } else if (f === "html") {
-          content = `<table border="1">\n  <thead>\n    <tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr>\n  </thead>\n  <tbody>\n` +
-                    rows.map(r => `    <tr>${cols.map(c => `<td>${String(r[c])}</td>`).join("")}</tr>`).join("\n") +
-                    `\n  </tbody>\n</table>`;
-        } else if (f === "sql") {
-          const table = "exported_data";
-          content = rows.map(r => `INSERT INTO ${table} (${cols.join(", ")}) VALUES (${cols.map(c => {
-            const v = r[c];
-            if (v === null || v === undefined) return "NULL";
-            if (typeof v === "number") return v;
-            if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
-            return `'${String(v).replace(/'/g, "''")}'`;
-          }).join(", ")});`).join("\n");
+        // Shared, tested serialisers (RFC 4180 CSV, escaped XML/HTML,
+        // quoted SQL); Excel goes to the native .xlsx writer above.
+        if (f === "excel") {
+          // Real .xlsx, written natively by the backend (export.rs).
+          await invokeCmd("export_xlsx", {
+            path,
+            sheetName: currentResult.databaseName || null,
+            columns: cols,
+            rows: rows.map(r => cols.map(c => r[c] ?? null)),
+          });
+          flashToast(`Exported ${rows.length} rows to Excel`);
+          return;
+        }
+        if (f === "json") content = JSON.stringify(rows, null, 2);
+        else if (f === "csv") content = toCsv(cols, rows);
+        else if (f === "xml") content = toXml(cols, rows);
+        else if (f === "html") content = toHtml(cols, rows);
+        else if (f === "sql") {
+          const dialect = dialectForDbType(connections.find(c => c.id === currentResult.connectionId)?.type);
+          content = toInsertStatements("exported_data", cols, rows, dialect);
         }
 
         const { writeTextFile } = await import("@tauri-apps/plugin-fs");
         await writeTextFile(path, content);
-        setToastMessage(`Exported ${f.toUpperCase()} successfully`);
-        setShowToast(true);
-        setTimeout(() => setShowToast(false), 2000);
+        flashToast(`Exported ${f.toUpperCase()} successfully`);
     } catch (e: any) { setError(e.message); }
   };
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
-    setToastMessage("Copied to clipboard");
-    setShowToast(true);
-    setTimeout(() => setShowToast(false), 2000);
+    flashToast("Copied to clipboard");
   };
 
   const generateSqlForSelected = (type: "INSERT" | "UPDATE" | "DELETE") => {
@@ -488,22 +505,14 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
                   <Database className="w-4 h-4 text-[var(--accent-11)]" />
                   <span className="text-[11px] font-bold text-[var(--neutral-11)] uppercase tracking-wider">Sync Group</span>
                 </div>
-                <Button size="xs" variant="secondary" onClick={toggleSelectAll}>
+                <Button size="xs" variant="secondary" onClick={toggleSelectAll} loading={selectingAll} disabled={selectingAll}>
                   {selectedTargets.length ? "Clear All" : "Select All"}
                 </Button>
               </div>
             ) : (
-              <div className="p-3 border-b border-[var(--neutral-6)] bg-[var(--surface-panel)]">
-                <div className="relative">
-                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--neutral-11)]" />
-                  <input
-                    type="text"
-                    placeholder="Search library..."
-                    value={savedSearch}
-                    onChange={(e) => setSavedSearch(e.target.value)}
-                    className="w-full pl-8 pr-3 py-2 text-[11px] rounded-lg bg-[var(--surface-base)] border border-[var(--neutral-7)] outline-none focus:border-[var(--accent-8)] transition-all"
-                  />
-                </div>
+              <div className="p-4 border-b border-[var(--neutral-6)] flex items-center gap-2 bg-[var(--surface-panel)]">
+                <Folder className="w-4 h-4 text-[var(--accent-11)]" />
+                <span className="text-[11px] font-bold text-[var(--neutral-11)] uppercase tracking-wider">Saved Queries</span>
               </div>
             )}
 
@@ -516,7 +525,7 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
                     return (<div key={conn.id} className="mb-2">
                       <div className="flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-[var(--neutral-4)] group bg-[var(--surface-panel)] border border-[var(--neutral-6)]">
                         <button
-                          onClick={() => { setExpandedConnections(prev => { const n = new Set(prev); if (n.has(conn.id)) n.delete(conn.id); else { n.add(conn.id); loadDatabasesForConnection(conn.id); } return n; }); }}
+                          onClick={() => { setExpandedConnections(prev => { const n = new Set(prev); if (n.has(conn.id)) n.delete(conn.id); else { n.add(conn.id); void fetchDatabases(conn.id); } return n; }); }}
                           className="p-1 rounded hover:bg-[var(--neutral-5)] transition-colors"
                         >
                           {isExp ? <ChevronDown className="w-4 h-4 text-[var(--accent-11)]" /> : <ChevronRight className="w-4 h-4 text-[var(--accent-11)]" />}
@@ -535,8 +544,14 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
                             <span className="text-xs font-semibold truncate block">{conn.name}</span>
                             <span className="text-[9px] text-[var(--neutral-11)] truncate block">{conn.type} • {conn.host}</span>
                           </div>
+                          {loadingDatabases.has(conn.id) && (
+                            <Loader2 className="w-3 h-3 animate-spin text-[var(--neutral-11)]" aria-label="Loading databases" />
+                          )}
                           {count > 0 && (
-                            <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--accent-9)]/20 text-[var(--accent-11)] font-bold">
+                            <span
+                              className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--accent-9)]/20 text-[var(--accent-11)] font-bold"
+                              title={`${count} of ${(availableDatabases[conn.id] || [conn.database]).length} databases selected`}
+                            >
                               {count}
                             </span>
                           )}
@@ -604,42 +619,18 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
                   })}
                 </div>
               ) : (
-                <div className="space-y-2">
-                  {savedQueries
-                    .filter(q => q.name.toLowerCase().includes(savedSearch.toLowerCase()) || q.query.toLowerCase().includes(savedSearch.toLowerCase()))
-                    .map(q => (
-                      <div
-                        key={q.id}
-                        onClick={() => {
-                          setQuery(q.query);
-                          setToastMessage(`Loaded query: ${q.name}`);
-                          setShowToast(true);
-                          setTimeout(() => setShowToast(false), 2000);
-                        }}
-                        className="p-3 rounded-xl bg-[var(--surface-panel)] border border-[var(--neutral-6)] hover:border-[var(--accent-8)] hover:bg-[var(--accent-9)]/5 cursor-pointer group transition-all"
-                        title="Click to load this query"
-                      >
-                         <div className="flex items-center justify-between mb-1">
-                           <span className="text-[11px] font-bold text-[var(--neutral-12)] group-hover:text-[var(--accent-11)] transition-colors uppercase tracking-tight truncate mr-2">{q.name}</span>
-                           <span className="text-[9px] opacity-40 italic shrink-0">{new Date(q.createdAt).toLocaleDateString()}</span>
-                         </div>
-                         <div className="text-[10px] text-[var(--neutral-11)] font-mono line-clamp-2 opacity-60 bg-[var(--surface-base)] p-1.5 rounded-md border border-[var(--neutral-6)]">
-                           {q.query}
-                         </div>
-                      </div>
-                    ))}
-                  {savedQueries.length === 0 && (
-                    <div className="flex flex-col items-center justify-center py-20 opacity-20 select-none">
-                       <Save className="w-12 h-12 mb-2" />
-                       <p className="text-xs font-bold uppercase tracking-widest">No Saved Queries</p>
-                    </div>
-                  )}
-                  {savedQueries.length > 0 && savedQueries.filter(q => q.name.toLowerCase().includes(savedSearch.toLowerCase()) || q.query.toLowerCase().includes(savedSearch.toLowerCase())).length === 0 && (
-                    <div className="text-center py-10 opacity-40">
-                      <p className="text-[11px]">No results for "{savedSearch}"</p>
-                    </div>
-                  )}
-                </div>
+                <SavedQueryList
+                  runLabel="Run on selected databases"
+                  emptyHint="Save queries from the main editor (Ctrl+S) to reuse them here."
+                  onOpen={(q) => {
+                    setQuery(q.query);
+                    flashToast(`Loaded query: ${q.name}`);
+                  }}
+                  onRun={(q) => {
+                    setQuery(q.query);
+                    void executeQuery(q.query);
+                  }}
+                />
               )}
             </div>
           </div>
@@ -757,6 +748,9 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
                     <div className="flex items-center gap-1">
                         {settings.enabledExportFormats.includes("csv") && (
                           <button onClick={() => exportData("csv")} className="p-1.5 hover:text-[var(--accent-11)] opacity-70 hover:opacity-100 transition-opacity" title="Export CSV"><Download className="w-3.5 h-3.5" /></button>
+                        )}
+                        {settings.enabledExportFormats.includes("excel") && (
+                          <button onClick={() => exportData("excel")} className="p-1.5 hover:text-[var(--accent-11)] opacity-70 hover:opacity-100 transition-opacity" title="Export Excel (.xlsx)"><Sheet className="w-3.5 h-3.5" /></button>
                         )}
                         {settings.enabledExportFormats.includes("json") && (
                           <button onClick={() => exportData("json")} className="p-1.5 hover:text-[var(--accent-11)] opacity-70 hover:opacity-100 transition-opacity" title="Export JSON"><FileJson className="w-3.5 h-3.5" /></button>

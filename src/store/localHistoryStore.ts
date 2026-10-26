@@ -22,6 +22,9 @@ function isTauri(): boolean {
   return !!w.__TAURI_INTERNALS__ || !!w.__TAURI__;
 }
 
+// Resolves to whether the initial read succeeded; writes wait for it.
+let localHistoryLoaded: Promise<boolean> = Promise.resolve(true);
+
 export const useLocalHistory = create<LocalHistoryState>()((set, get) => ({
   entries: [],
   isLoading: false,
@@ -34,10 +37,13 @@ export const useLocalHistory = create<LocalHistoryState>()((set, get) => ({
       label: label ?? null,
     };
 
+    const readOk = await localHistoryLoaded;
     const newEntries = [entry, ...get().entries].slice(0, 100);
     set({ entries: newEntries });
 
-    if (isTauri()) {
+    // Never write after a failed read: it would replace the file with only
+    // the entries added this session.
+    if (isTauri() && readOk) {
       try {
         await invokeCmd("save_local_history", { entries: newEntries });
       } catch (e) {
@@ -101,15 +107,17 @@ export const useLocalHistory = create<LocalHistoryState>()((set, get) => ({
       const entries = await invokeCmd("load_local_history");
       set({ entries, isLoading: false });
     } catch (e) {
-      logger.error("Failed to load local history:", e);
+      logger.error("Failed to load local history — it will not be saved this session:", e);
       set({ isLoading: false });
+      throw e;
     }
   }
 }));
 
 // Initialize from file on startup
 if (typeof window !== "undefined") {
-  (async () => {
-    await useLocalHistory.getState().loadHistory();
-  })();
+  localHistoryLoaded = useLocalHistory
+    .getState()
+    .loadHistory()
+    .then(() => true, () => false);
 }

@@ -21,6 +21,8 @@ export function quoteSqliteIdentifier(name: string): string {
 export interface ColumnPair {
   table_name: string;
   column_name: string;
+  /** Declared type as the engine prints it (`character varying(80)`, `int unsigned`). */
+  data_type?: string;
 }
 
 export interface ForeignKeyQuad {
@@ -32,12 +34,16 @@ export interface ForeignKeyQuad {
 
 /** information_schema.COLUMNS rows → shared column pairs (MySQL). */
 export function mapMysqlColumns(
-  rows: Array<{ TABLE_NAME?: unknown; COLUMN_NAME?: unknown }>,
+  rows: Array<{ TABLE_NAME?: unknown; COLUMN_NAME?: unknown; COLUMN_TYPE?: unknown }>,
 ): ColumnPair[] {
   const out: ColumnPair[] = [];
   for (const r of rows) {
     if (typeof r?.TABLE_NAME === "string" && typeof r?.COLUMN_NAME === "string") {
-      out.push({ table_name: r.TABLE_NAME, column_name: r.COLUMN_NAME });
+      out.push({
+        table_name: r.TABLE_NAME,
+        column_name: r.COLUMN_NAME,
+        ...(typeof r.COLUMN_TYPE === "string" && r.COLUMN_TYPE ? { data_type: r.COLUMN_TYPE } : {}),
+      });
     }
   }
   return out;
@@ -69,11 +75,15 @@ export function mapSqliteMasterNames(rows: Array<{ name?: unknown }>): string[] 
 }
 
 /** `PRAGMA table_info(t)` rows (`{ name }`) → shared column pairs. */
-export function mapSqlitePragmaColumns(table: string, rows: Array<{ name?: unknown }>): ColumnPair[] {
+export function mapSqlitePragmaColumns(table: string, rows: Array<{ name?: unknown; type?: unknown }>): ColumnPair[] {
   const out: ColumnPair[] = [];
   for (const r of rows) {
     if (typeof r?.name === "string" && r.name.length > 0) {
-      out.push({ table_name: table, column_name: r.name });
+      out.push({
+        table_name: table,
+        column_name: r.name,
+        ...(typeof r.type === "string" && r.type ? { data_type: r.type } : {}),
+      });
     }
   }
   return out;

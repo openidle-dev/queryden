@@ -11,8 +11,8 @@ function mockDb(handler: (sql: string) => any[]): SchemaFetchDb {
 const PG_TABLES = [
   { table_schema: "public", table_name: "users" },
   { table_schema: "public", table_name: "projects" },
-  { table_schema: "devops", table_name: "deployments" },
-  { table_schema: "devops", table_name: "servers" },
+  { table_schema: "reporting", table_name: "deployments" },
+  { table_schema: "reporting", table_name: "servers" },
 ];
 
 /**
@@ -24,8 +24,8 @@ const PG_OBJECT_ROWS = [
   ...PG_TABLES.map((t) => ({ kind: "tables", sch: t.table_schema, nm: t.table_name })),
   { kind: "views", sch: "public", nm: "active_users" },
   { kind: "functions", sch: "public", nm: "current_user_id" },
-  { kind: "functions", sch: "devops", nm: "deploy_status" },
-  { kind: "procedures", sch: "devops", nm: "rotate_keys" },
+  { kind: "functions", sch: "reporting", nm: "deploy_status" },
+  { kind: "procedures", sch: "reporting", nm: "rotate_keys" },
 ];
 
 function pgDb(issued: string[], opts: { failUnion?: boolean } = {}): SchemaFetchDb {
@@ -41,10 +41,10 @@ function pgDb(issued: string[], opts: { failUnion?: boolean } = {}): SchemaFetch
     if (sql.includes("information_schema.views"))
       return [{ table_schema: "public", table_name: "active_users" }];
     if (sql.includes("information_schema.routines")) {
-      if (sql.includes("'PROCEDURE'")) return [{ routine_schema: "devops", routine_name: "rotate_keys" }];
+      if (sql.includes("'PROCEDURE'")) return [{ routine_schema: "reporting", routine_name: "rotate_keys" }];
       return [
         { routine_schema: "public", routine_name: "current_user_id" },
-        { routine_schema: "devops", routine_name: "deploy_status" },
+        { routine_schema: "reporting", routine_name: "deploy_status" },
       ];
     }
     if (sql.includes("information_schema.triggers")) return [];
@@ -55,15 +55,15 @@ function pgDb(issued: string[], opts: { failUnion?: boolean } = {}): SchemaFetch
     if (sql.includes("information_schema.foreign_tables")) return [];
     if (sql.includes("FROM pg_attribute")) {
       return [
-        { table_schema: "devops", table_name: "deployments", column_name: "id" },
-        { table_schema: "devops", table_name: "deployments", column_name: "project_id" },
+        { table_schema: "reporting", table_name: "deployments", column_name: "id" },
+        { table_schema: "reporting", table_name: "deployments", column_name: "project_id" },
         { table_schema: "public", table_name: "projects", column_name: "id" },
       ];
     }
     if (sql.includes("FROM pg_constraint")) {
       return [
         {
-          source_table: "devops.deployments",
+          source_table: "reporting.deployments",
           source_column: "project_id",
           target_table: "public.projects",
           target_column: "id",
@@ -78,19 +78,19 @@ function pgDb(issued: string[], opts: { failUnion?: boolean } = {}): SchemaFetch
 }
 
 describe("fetchSchemaItems — postgres", () => {
-  it("qualifies non-public tables and keeps public ones bare (devops. completion)", async () => {
+  it("qualifies non-public tables and keeps public ones bare (reporting. completion)", async () => {
     const schema = await fetchSchemaItems({ db: pgDb([]), connType: "postgres", selectedSchemas: [] });
-    expect(schema.tables).toEqual(["users", "projects", "devops.deployments", "devops.servers"]);
+    expect(schema.tables).toEqual(["users", "projects", "reporting.deployments", "reporting.servers"]);
     expect(schema.views).toEqual(["active_users"]);
   });
 
   it("maps columns to qualified table names and foreign keys to quads", async () => {
     const schema = await fetchSchemaItems({ db: pgDb([]), connType: "postgres", selectedSchemas: [] });
-    expect(schema.columns).toContainEqual({ table_name: "devops.deployments", column_name: "project_id" });
+    expect(schema.columns).toContainEqual({ table_name: "reporting.deployments", column_name: "project_id" });
     expect(schema.columns).toContainEqual({ table_name: "projects", column_name: "id" });
     expect(schema.foreignKeys).toEqual([
       {
-        source_table: "devops.deployments",
+        source_table: "reporting.deployments",
         source_column: "project_id",
         target_table: "public.projects",
         target_column: "id",
@@ -100,8 +100,8 @@ describe("fetchSchemaItems — postgres", () => {
 
   it("qualifies functions and procedures outside public", async () => {
     const schema = await fetchSchemaItems({ db: pgDb([]), connType: "postgres", selectedSchemas: [] });
-    expect(schema.functions).toEqual(["current_user_id", "devops.deploy_status"]);
-    expect(schema.procedures).toEqual(["devops.rotate_keys"]);
+    expect(schema.functions).toEqual(["current_user_id", "reporting.deploy_status"]);
+    expect(schema.procedures).toEqual(["reporting.rotate_keys"]);
   });
 
   it("applies the selected-schema filter to the catalog queries", async () => {
@@ -268,7 +268,7 @@ describe("fetchSchemaItems — per-view schema columns when filtered", () => {
   // errors left functions, procedures, triggers and foreign tables empty.
   it("uses each catalog view's own schema column", async () => {
     const issued: string[] = [];
-    await fetchSchemaItems({ db: pgDb(issued), connType: "postgres", selectedSchemas: ["devops"] });
+    await fetchSchemaItems({ db: pgDb(issued), connType: "postgres", selectedSchemas: ["reporting"] });
 
     // The object lists share one statement now, but each branch of it still
     // has to name its own schema column: filtering routines, triggers or
@@ -276,15 +276,15 @@ describe("fetchSchemaItems — per-view schema columns when filtered", () => {
     // whole consolidated query down with it.
     const union = issued.find((s) => s.includes("AS kind"));
     expect(union).toBeDefined();
-    expect(union).toContain("AND table_schema IN ('devops')");
-    expect(union).toContain("AND routine_schema IN ('devops')");
-    expect(union).toContain("AND trigger_schema IN ('devops')");
-    expect(union).toContain("AND foreign_table_schema IN ('devops')");
-    expect(union).toContain("AND schemaname IN ('devops')");
-    expect(union).toContain("AND sequence_schema IN ('devops')");
+    expect(union).toContain("AND table_schema IN ('reporting')");
+    expect(union).toContain("AND routine_schema IN ('reporting')");
+    expect(union).toContain("AND trigger_schema IN ('reporting')");
+    expect(union).toContain("AND foreign_table_schema IN ('reporting')");
+    expect(union).toContain("AND schemaname IN ('reporting')");
+    expect(union).toContain("AND sequence_schema IN ('reporting')");
 
     expect(issued.find((s) => s.includes("FROM pg_attribute"))).toContain(
-      "AND n.nspname IN ('devops')",
+      "AND n.nspname IN ('reporting')",
     );
   });
 
@@ -308,7 +308,7 @@ describe("fetchSchemaItems — per-view schema columns when filtered", () => {
       connType: "postgres",
       selectedSchemas: [],
     });
-    expect(schema.tables).toEqual(["users", "projects", "devops.deployments", "devops.servers"]);
+    expect(schema.tables).toEqual(["users", "projects", "reporting.deployments", "reporting.servers"]);
     expect(schema.views).toEqual(["active_users"]);
     expect(issued.length).toBeGreaterThan(3);
   });

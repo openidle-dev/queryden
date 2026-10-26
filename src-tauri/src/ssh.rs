@@ -22,7 +22,7 @@ pub enum SshAuthMethod {
     Key { key_path: String, passphrase: Option<String> },
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct TunnelInfo {
     pub connection_id: String,
     pub local_port: u16,
@@ -39,6 +39,64 @@ pub struct SshTunnel {
 
 static TUNNELS: OnceLock<Mutex<HashMap<String, SshTunnel>>> = OnceLock::new();
 
+/// Resolve `host:port` (hostname, IPv4 or IPv6) and connect to the first
+/// address that answers within `timeout`. `TcpStream::connect_timeout` only
+/// takes a `SocketAddr`, so hostnames must be resolved first.
+fn connect_ssh_tcp(host: &str, port: u16, timeout: Duration) -> Result<TcpStream, String> {
+    use std::net::ToSocketAddrs;
+    let host = host.trim().trim_start_matches('[').trim_end_matches(']');
+    let addrs: Vec<_> = (host, port)
+        .to_socket_addrs()
+        .map_err(|e| format!("Cannot resolve SSH host \"{}\": {}", host, e))?
+        .collect();
+    let mut last_err = None;
+    for addr in &addrs {
+        match TcpStream::connect_timeout(addr, timeout) {
+            Ok(stream) => return Ok(stream),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(match last_err {
+        Some(e) => format!("Failed to connect to SSH server {}:{}: {}", host, port, e),
+        None => format!("SSH host \"{}\" resolved to no addresses", host),
+    })
+}
+
+/// Expand a leading `~` to the user's home directory (`HOME`, or
+/// `USERPROFILE` on Windows) — users paste `~/.ssh/id_ed25519`.
+fn expand_key_path(path: &str) -> std::path::PathBuf {
+    let path = path.trim();
+    if let Some(rest) = path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\")) {
+        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+            return std::path::PathBuf::from(home).join(rest);
+        }
+    }
+    std::path::PathBuf::from(path)
+}
+
+/// Public-key authentication from a private key file. The public half comes
+/// from `<key>.pub` when present, otherwise libssh2 derives it from the
+/// private key. (Passing the private key path as the public key — the old
+/// behaviour — makes libssh2 parse `-----BEGIN …` as a public key, which the
+/// server rejects.)
+fn auth_with_key_file(
+    sess: &ssh2::Session,
+    username: &str,
+    key_path: &str,
+    passphrase: Option<&str>,
+) -> Result<(), String> {
+    let private = expand_key_path(key_path);
+    if !private.is_file() {
+        return Err(format!("SSH key file not found: {}", private.display()));
+    }
+    let mut public = private.clone().into_os_string();
+    public.push(".pub");
+    let public = std::path::PathBuf::from(public);
+    let public = public.is_file().then_some(public);
+    sess.userauth_pubkey_file(username, public.as_deref(), &private, passphrase.filter(|p| !p.is_empty()))
+        .map_err(|e| format!("SSH key authentication failed: {}", e))
+}
+
 fn get_tunnels() -> &'static Mutex<HashMap<String, SshTunnel>> {
     TUNNELS.get_or_init(|| Mutex::new(HashMap::new()))
 }
@@ -49,7 +107,8 @@ fn find_free_port() -> Result<u16, String> {
     Ok(port)
 }
 
-#[tauri::command]
+// Async: it waits for the SSH handshake, which must not block the UI thread.
+#[tauri::command(async)]
 #[allow(clippy::too_many_arguments)] // Tauri command — args mirror the IPC contract
 pub fn create_ssh_tunnel(
     connection_id: String,
@@ -88,6 +147,7 @@ pub fn create_ssh_tunnel(
     let conn_id_for_thread = connection_id.clone();
     let remote_host_for_thread = remote_host.clone();
     let stop_signal_clone = stop_signal.clone();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
     thread::spawn(move || {
         let result = run_tunnel(
             &ssh_host,
@@ -100,25 +160,47 @@ pub fn create_ssh_tunnel(
             remote_port,
             local_port,
             &stop_signal_clone,
+            &ready_tx,
         );
         if let Err(e) = result {
+            // Reaches the caller if the tunnel never became ready; ignored
+            // (receiver gone) when it fails later.
+            let _ = ready_tx.send(Err(e.clone()));
             eprintln!("SSH tunnel error: {}", e);
         }
-        let mut map = get_tunnels().lock().unwrap();
-        map.remove(&conn_id_for_thread);
+        if let Ok(mut map) = get_tunnels().lock() {
+            map.remove(&conn_id_for_thread);
+        }
     });
 
     map.insert(
-        connection_id,
+        connection_id.clone(),
         SshTunnel {
             local_port,
             remote_host,
             remote_port,
-            stop_signal,
+            stop_signal: stop_signal.clone(),
         },
     );
+    // Release the registry before waiting: the tunnel thread takes it on exit.
+    drop(map);
 
-    Ok(tunnel_info)
+    // Report the real failure (unknown host, refused, bad key/password) now,
+    // instead of returning a port that nothing listens on — which surfaced
+    // 30 s later as an opaque database "pool timed out".
+    match ready_rx.recv_timeout(Duration::from_secs(45)) {
+        Ok(Ok(())) => Ok(tunnel_info),
+        Ok(Err(e)) => Err(e),
+        Err(_) => {
+            if let Ok(mut stop) = stop_signal.lock() {
+                *stop = true;
+            }
+            if let Ok(mut map) = get_tunnels().lock() {
+                map.remove(&connection_id);
+            }
+            Err(format!("SSH tunnel to {} did not come up within 45 seconds", tunnel_info.remote_host))
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)] // tightly coupled to create_ssh_tunnel's signature
@@ -133,9 +215,9 @@ fn run_tunnel(
     remote_port: u16,
     local_port: u16,
     stop_signal: &Arc<Mutex<bool>>,
+    ready: &std::sync::mpsc::Sender<Result<(), String>>,
 ) -> Result<(), String> {
-    let tcp = TcpStream::connect(format!("{}:{}", ssh_host, ssh_port))
-        .map_err(|e| format!("Failed to connect to SSH server: {}", e))?;
+    let tcp = connect_ssh_tcp(ssh_host, ssh_port, Duration::from_secs(15))?;
     tcp.set_read_timeout(Some(Duration::from_secs(30)))
         .map_err(|e| e.to_string())?;
     // A second handle on the same underlying socket, so it can be switched to
@@ -146,14 +228,8 @@ fn run_tunnel(
     sess.set_tcp_stream(tcp);
     sess.handshake().map_err(|e| e.to_string())?;
 
-    if let Some(key_path) = ssh_key_path {
-        sess.userauth_pubkey_file(
-            ssh_username,
-            Some(std::path::Path::new(&key_path)),
-            std::path::Path::new(&key_path),
-            ssh_key_passphrase.as_deref(),
-        )
-        .map_err(|e| format!("SSH key authentication failed: {}", e))?;
+    if let Some(key_path) = ssh_key_path.as_deref().filter(|p| !p.trim().is_empty()) {
+        auth_with_key_file(&sess, ssh_username, key_path, ssh_key_passphrase.as_deref())?;
     } else if let Some(password) = ssh_password {
         sess.userauth_password(ssh_username, &password)
             .map_err(|e| format!("SSH password authentication failed: {}", e))?;
@@ -181,6 +257,8 @@ fn run_tunnel(
     let listener = TcpListener::bind(format!("127.0.0.1:{}", local_port))
         .map_err(|e| format!("Failed to bind local port: {}", e))?;
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+    // Authenticated and listening: the database connection can use it now.
+    let _ = ready.send(Ok(()));
 
     loop {
         {
@@ -372,7 +450,7 @@ fn pump(mut local: TcpStream, mut channel: ssh2::Channel, stop: Arc<Mutex<bool>>
     let _ = channel.close();
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn close_ssh_tunnel(connection_id: String) -> Result<bool, String> {
     let tunnels = get_tunnels();
     let mut map = tunnels.lock().map_err(|e| e.to_string())?;
@@ -386,7 +464,7 @@ pub fn close_ssh_tunnel(connection_id: String) -> Result<bool, String> {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_tunnel_status(connection_id: String) -> Result<Option<TunnelInfo>, String> {
     let tunnels = get_tunnels();
     let map = tunnels.lock().map_err(|e| e.to_string())?;
@@ -407,7 +485,7 @@ pub fn get_tunnel_status(connection_id: String) -> Result<Option<TunnelInfo>, St
 /// and disconnect. No port forward, no DB connect. Used by the connection
 /// dialog's "Test SSH tunnel" button so users can distinguish SSH auth
 /// failures from DB connection failures.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn test_ssh_connection(
     ssh_host: String,
     ssh_port: u16,
@@ -416,16 +494,7 @@ pub fn test_ssh_connection(
     ssh_key_path: Option<String>,
     ssh_key_passphrase: Option<String>,
 ) -> Result<(), String> {
-    use std::net::TcpStream;
-    use std::time::Duration;
-
-    let tcp = TcpStream::connect_timeout(
-        &format!("{}:{}", ssh_host, ssh_port)
-            .parse()
-            .map_err(|e| format!("Invalid SSH host/port: {}", e))?,
-        Duration::from_secs(10),
-    )
-    .map_err(|e| format!("Failed to connect to SSH server: {}", e))?;
+    let tcp = connect_ssh_tcp(&ssh_host, ssh_port, Duration::from_secs(10))?;
     tcp.set_read_timeout(Some(Duration::from_secs(15)))
         .map_err(|e| e.to_string())?;
 
@@ -434,14 +503,8 @@ pub fn test_ssh_connection(
     sess.handshake()
         .map_err(|e| format!("SSH handshake failed: {}", e))?;
 
-    if let Some(key_path) = ssh_key_path.as_ref().filter(|p| !p.is_empty()) {
-        sess.userauth_pubkey_file(
-            &ssh_username,
-            Some(std::path::Path::new(key_path)),
-            std::path::Path::new(key_path),
-            ssh_key_passphrase.as_deref(),
-        )
-        .map_err(|e| format!("SSH key authentication failed: {}", e))?;
+    if let Some(key_path) = ssh_key_path.as_deref().filter(|p| !p.trim().is_empty()) {
+        auth_with_key_file(&sess, &ssh_username, key_path, ssh_key_passphrase.as_deref())?;
     } else if let Some(password) = ssh_password.as_ref().filter(|p| !p.is_empty()) {
         sess.userauth_password(&ssh_username, password)
             .map_err(|e| format!("SSH password authentication failed: {}", e))?;
@@ -456,7 +519,7 @@ pub fn test_ssh_connection(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn close_all_tunnels() -> Result<(), String> {
     let tunnels = get_tunnels();
     let mut map = tunnels.lock().map_err(|e| e.to_string())?;
@@ -467,4 +530,60 @@ pub fn close_all_tunnels() -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expands_home_in_key_paths() {
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).unwrap();
+        assert_eq!(expand_key_path("~/.ssh/id_ed25519"), std::path::PathBuf::from(home).join(".ssh/id_ed25519"));
+        assert_eq!(expand_key_path("/abs/key"), std::path::PathBuf::from("/abs/key"));
+    }
+
+    #[test]
+    fn connects_to_hostnames_not_just_ip_literals() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(connect_ssh_tcp("localhost", port, Duration::from_secs(2)).is_ok());
+        assert!(connect_ssh_tcp("127.0.0.1", port, Duration::from_secs(2)).is_ok());
+    }
+
+    #[test]
+    fn reports_unresolvable_hosts() {
+        let err = connect_ssh_tcp("no-such-host.invalid", 22, Duration::from_secs(2)).unwrap_err();
+        assert!(err.contains("Cannot resolve SSH host"), "{err}");
+    }
+
+    #[test]
+    fn tunnel_creation_reports_the_real_failure_immediately() {
+        let started = std::time::Instant::now();
+        let err = create_ssh_tunnel(
+            "qd-test-unresolvable".into(), "no-such-host.invalid".into(), 22, "u".into(),
+            Some("p".into()), None, None, "db".into(), 5432,
+        )
+        .unwrap_err();
+        assert!(err.contains("Cannot resolve SSH host"), "{err}");
+
+        // A port nothing listens on: refused, not a silently dead tunnel.
+        let closed = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let err = create_ssh_tunnel(
+            "qd-test-refused".into(), "127.0.0.1".into(), closed, "u".into(),
+            Some("p".into()), None, None, "db".into(), 5432,
+        )
+        .unwrap_err();
+        assert!(err.contains("Failed to connect to SSH server"), "{err}");
+        assert!(started.elapsed() < Duration::from_secs(10));
+        // Failed tunnels don't linger in the registry.
+        assert!(get_tunnel_status("qd-test-refused".into()).unwrap().is_none());
+    }
+
+    #[test]
+    fn missing_key_file_is_a_clear_error() {
+        let sess = ssh2::Session::new().unwrap();
+        let err = auth_with_key_file(&sess, "u", "/definitely/not/here", None).unwrap_err();
+        assert!(err.contains("SSH key file not found"), "{err}");
+    }
 }

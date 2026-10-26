@@ -15,7 +15,10 @@ import { getDefaultDatabaseName } from "../../config/app";
 import { splitStatements } from "../../utils/splitStatements";
 import { mapSelectionStatementsToDocumentLines, mergeGlyphResults } from "../../utils/statementGlyphs";
 import { applyQueryLimit } from "../../utils/applyQueryLimit";
-import { classifyDestructive, formatSqlLiteral, getDefaultPort, isDoBlock as isDoBlockHelper, isMySqlLike, isSelectLike, splitDottedIdentifier, stripSqlToCode } from "../../utils/sqlDialect";
+import { classifyDestructive, formatSqlLiteral, getDefaultPort, isDoBlock as isDoBlockHelper, isMySqlLike, isSelectLike, splitDottedIdentifier, stripSqlToCode, stripTrailingSemicolonAndComments } from "../../utils/sqlDialect";
+import { explainPlanFor } from "../../utils/explainPlan";
+import { cancelSession, endSession, errorPosition, primaryRowSet, runInSession, toRowObjects, transactionEffect, type SessionDb } from "../../lib/sqlSession";
+import { cleanSqlForKeywords } from "../../utils/sqlDialect";
 import { VariableSubstitutionDialog, extractVariables, substituteVariables, VariableValues } from "../ui/VariableSubstitutionDialog";
 import { useLocalHistory } from "../../store/localHistoryStore";
 import { Button } from "../ui/Button";
@@ -30,6 +33,7 @@ import { resolveNewTabTarget } from "../../utils/tabTarget";
 // bundle lets the rest of the shell paint immediately; the editor pane
 // shows a brief placeholder, then fills in once Monaco is parsed.
 const QueryEditor = lazy(() => import("../editor/QueryEditor").then(m => ({ default: m.QueryEditor })));
+import type { QueryEditorApi } from "../editor/QueryEditor";
 
 // Lazy-loaded modal/conditional dialogs — none of these need to be in the
 // cold-start bundle. CompareDialog, DefinitionModal, and MultiQueryDialog
@@ -65,6 +69,12 @@ export interface QueryTab {
   target?: { connectionId: string, connectionName: string, database: string };
   /** When true, force query execution through the psql CLI binary instead of libpq */
   usePsql?: boolean;
+  /** Run every statement once the editor mounts (saved query ▶). Cleared after. */
+  autoRun?: boolean;
+  /** NOTICE/WARNING lines from the last run (Messages tab → Server output). */
+  serverOutput?: string[];
+  /** Transaction open on this tab's session (BEGIN typed or toolbar). */
+  transaction?: { active: boolean; isolationLevel: string; statementCount: number };
   // Tab-specific execution results
   results?: any[];
   columns?: string[];
@@ -168,6 +178,11 @@ export function MainContent() {
   // Ref to always have the latest query text from the active editor
   // This avoids stale closures where React state hasn't flushed yet
   const currentQueryRef = useRef("");
+  // What Ctrl+Enter would run in the mounted editor (selection, else the
+  // statement under the caret). Toolbar Run / Explain / Optimizer read this
+  // instead of `currentQueryRef`, which only updates on typing and so held
+  // the PREVIOUS tab's text for tabs opened from saved queries or restores.
+  const editorApiRef = useRef<QueryEditorApi | null>(null);
   const lastSelectQueryRef = useRef("");
   const lastPsqlQueryRef = useRef("");
   const cancelFlagRef = useRef<boolean>(false);
@@ -224,8 +239,6 @@ export function MainContent() {
     statementCount: 0,
   });
   // Dedicated db connection for the active transaction
-  const txDbRef = useRef<any>(null);
-  const txContextRef = useRef<{ connectionId: string; database: string } | null>(null);
   // `executeQuery` and the tx-action handler both read transaction state, and
   // neither can list it as a dependency without being rebuilt -- invalidating
   // everything downstream -- on every statement. Read it through a ref that is
@@ -235,20 +248,53 @@ export function MainContent() {
   const txStateRef = useRef(txState);
   useEffect(() => { txStateRef.current = txState; });
 
-  // Auto-rollback when connection changes during an active transaction
-  useEffect(() => {
-    if (txState.active && txDbRef.current && txContextRef.current) {
-      if (txContextRef.current.connectionId !== activeConnection?.id) {
-        // Connection changed — rollback the old transaction
-        txDbRef.current.execute("ROLLBACK").catch(() => {});
-        txDbRef.current = null;
-        txContextRef.current = null;
-        setTxState({ active: false, isolationLevel: "READ COMMITTED", statementCount: 0 });
-        setError("Transaction rolled back automatically — connection changed.");
-      }
+  // ── Editor sessions ───────────────────────────────────────────────────
+  // Each tab runs on its own server connection (lib/sqlSession.ts). Track
+  // the one a statement is running on (for Stop) and every session a tab
+  // opened (ended when the tab closes).
+  const runningSessionRef = useRef<{ db: SessionDb; sessionId: string } | null>(null);
+  const tabSessionsRef = useRef(new Map<string, Map<string, SessionDb>>());
+  const [serverOutput, setServerOutput] = useState<string[]>([]);
+  const [errorMarker, setErrorMarker] = useState<{ statementText: string; statementLine: number; offset: number; message: string } | null>(null);
+  const rememberSession = (sessionId: string, sessionDb: SessionDb) => {
+    let byPath = tabSessionsRef.current.get(sessionId);
+    if (!byPath) {
+      byPath = new Map();
+      tabSessionsRef.current.set(sessionId, byPath);
     }
-  }, [activeConnection]);
-  
+    byPath.set(sessionDb.path, sessionDb);
+  };
+
+  // Keep the transaction indicator honest when BEGIN/COMMIT/ROLLBACK are
+  // typed in the editor rather than clicked on the toolbar.
+  const setTabTransaction = (next: { active: boolean; isolationLevel: string; statementCount: number }) => {
+    setTxState(next);
+    txStateRef.current = next;
+    const tabId = activeTabIdRef.current;
+    if (tabId) setQueryTabs(prev => prev.map(t => (t.id === tabId ? { ...t, transaction: next } : t)));
+    window.dispatchEvent(new CustomEvent("tx-state-changed", { detail: next }));
+  };
+  const trackTransaction = (cleanUpperSql: string) => {
+    const effect = transactionEffect(cleanUpperSql);
+    if (effect === "begin" && !txStateRef.current.active) {
+      const isolation = /ISOLATION\s+LEVEL\s+(READ\s+COMMITTED|READ\s+UNCOMMITTED|REPEATABLE\s+READ|SERIALIZABLE)/.exec(cleanUpperSql)?.[1];
+      setTabTransaction({ active: true, isolationLevel: isolation?.replace(/\s+/g, " ") || "READ COMMITTED", statementCount: 0 });
+    } else if (effect === "end" && txStateRef.current.active) {
+      setTabTransaction({ active: false, isolationLevel: "READ COMMITTED", statementCount: 0 });
+    }
+  };
+
+  // End the sessions of tabs that no longer exist (×, Close Others, Close
+  // All). The server rolls back anything they left open.
+  useEffect(() => {
+    const open = new Set(queryTabs.map(t => t.id));
+    for (const [tabId, byPath] of tabSessionsRef.current) {
+      if (open.has(tabId)) continue;
+      for (const sessionDb of byPath.values()) endSession(sessionDb, tabId).catch(() => {});
+      tabSessionsRef.current.delete(tabId);
+    }
+  }, [queryTabs]);
+
   const [showCompareDialog, setShowCompareDialog] = useState(false);
   const [showCloneDialog, setShowCloneDialog] = useState(false);
   const [showActivityMonitor, setShowActivityMonitor] = useState(false);
@@ -257,7 +303,7 @@ export function MainContent() {
   const [showAIDialog, setShowAIDialog] = useState(false);
   const [_showLocalHistory, setShowLocalHistory] = useState(false);
   const [optimizerData, setOptimizerData] = useState<any>(null);
-  const [defModalState, setDefModalState] = useState<{ isOpen: boolean; table: string }>({ isOpen: false, table: "" });
+  const [defModalState, setDefModalState] = useState<{ isOpen: boolean; table: string; kind?: "auto" | "function" }>({ isOpen: false, table: "" });
   // Variable substitution state
   const [varDialogState, setVarDialogState] = useState<{
     isOpen: boolean;
@@ -739,12 +785,66 @@ export function MainContent() {
       setOptimizerData(activeTab.optimizerData || null);
       setActiveTableName(activeTab.tableName || null);
       setMultiResults(activeTab.multiResults || []);
+      setServerOutput(activeTab.serverOutput || []);
+      const tabTx = activeTab.transaction || { active: false, isolationLevel: "READ COMMITTED", statementCount: 0 };
+      setTxState(tabTx);
+      window.dispatchEvent(new CustomEvent("tx-state-changed", { detail: tabTx }));
       // Note: psqlOutput and psqlEntries are passed directly to PsqlWindow, not restored to global state
       // Note: statementResults stay in tab state and flow into QueryEditor via props (#223)
     }
     
     prevActiveTabId.current = activeTabId;
   }, [activeTabId]); // Only trigger on tab switch to avoid looping
+
+  // The one save path (Ctrl+S and the toolbar button). Saves against the
+  // TAB's own connection/database — not whatever the sidebar has selected —
+  // and overwrites an existing entry only when both the name and the
+  // connection match, so same-named queries on other servers survive.
+  const saveActiveQuery = async () => {
+    const tab = activeTabRef.current;
+    const conn = connections.find((c) => c.id === tab?.target?.connectionId) ?? activeConnection;
+    if (!conn) {
+      setError("No connection — connect to a database before saving queries.");
+      return;
+    }
+    const queryToSave = tab?.query ?? "";
+    if (!queryToSave.trim()) {
+      setError("Query is empty — type a SQL statement before saving.");
+      return;
+    }
+    const database = tab?.target?.connectionId === conn.id ? tab.target.database : selectedDatabase || conn.database || "";
+    const entered = await confirmDialog.dialog({
+      title: "Save Query",
+      message: `Save to your library for ${conn.name}${database ? ` / ${database}` : ""}. An existing query with the same name on this connection is overwritten.`,
+      inputLabel: "Query Name",
+      inputDefaultValue: tab?.savedQueryName || tab?.name || "My Query",
+      confirmLabel: "Save",
+      cancelLabel: "Cancel",
+      type: "info",
+      requireInput: true,
+    });
+    const name = typeof entered === "string" ? entered.trim() : "";
+    if (!name) return;
+
+    const existing = findByName(name, conn.id);
+    if (existing) await updateQueryText(existing.id, queryToSave, database);
+    else await addSavedQuery({ name, query: queryToSave, database, connectionId: conn.id });
+
+    useLocalHistory.getState().addEntry(`saved-queries/${name}`, queryToSave, `Saved: ${name} — ${conn.name}`);
+    // Mark the tab clean (#121) and refresh other tabs opened from the same
+    // saved query (#138).
+    const tabId = activeTabIdRef.current;
+    setQueryTabs((prev) =>
+      prev.map((t) => {
+        if (t.id === tabId) return { ...t, name, savedQueryName: name, originalQuery: queryToSave };
+        if (t.savedQueryName === name) return { ...t, originalQuery: queryToSave };
+        return t;
+      }),
+    );
+    setSuccess(`Query "${name}" saved.`);
+  };
+  const saveActiveQueryRef = useRef(saveActiveQuery);
+  saveActiveQueryRef.current = saveActiveQuery;
 
   // Global Ctrl+S handler for saving queries
   useEffect(() => {
@@ -759,66 +859,13 @@ export function MainContent() {
           return;
         }
         
-        if (!activeConnection) {
-          setError("No connection — connect to a database before saving queries.");
-          return;
-        }
-        const queryToSave = activeTab?.query || currentQueryRef.current;
-        if (!queryToSave || queryToSave.trim() === "") {
-          setError("Query is empty — type a SQL statement before saving.");
-          return;
-        }
-        const name = await confirmDialog.dialog({
-          title: "Save Query",
-          message: "Enter a name to identify this query in your saved queries library.",
-          inputLabel: "Query Name",
-          inputDefaultValue: activeTab?.name || "My Query",
-          confirmLabel: "Save",
-          cancelLabel: "Cancel",
-          type: "info",
-          requireInput: true
-        });
-        
-        if (name) {
-          const existing = findByName(name);
-          if (existing) {
-            updateQueryText(existing.id, queryToSave);
-          } else {
-            addSavedQuery({
-              name,
-              query: queryToSave,
-              database: selectedDatabase || "",
-              connectionId: activeConnection.id
-            });
-          }
-          useLocalHistory.getState().addEntry(
-            `saved-queries/${name}`,
-            queryToSave,
-            `Saved: ${name} — ${activeConnection.name}`
-          );
-          // Mark the active tab as in-sync with persisted state so the
-          // unsaved-changes prompt on app exit (#121) won't fire for it.
-          // Also refresh originalQuery on any other tabs opened from the
-          // same saved query so they reflect the latest persisted text (#138).
-          if (activeTabIdRef.current) {
-            setQueryTabs(prev => prev.map(t => {
-              if (t.id === activeTabIdRef.current) {
-                return { ...t, name, savedQueryName: name, originalQuery: queryToSave };
-              }
-              if (t.savedQueryName && t.savedQueryName === name) {
-                return { ...t, originalQuery: queryToSave };
-              }
-              return t;
-            }));
-          }
-          setSuccess(`Query "${name}" saved successfully!`);
-        }
+        await saveActiveQueryRef.current();
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeConnection, selectedDatabase, activeTab, addSavedQuery, confirmDialog]);
+  }, [results]);
 
   const updateTabState = useCallback((tabId: string, updates: Partial<QueryTab>) => {
     setQueryTabs(prev => prev.map(t => t.id === tabId ? { ...t, ...updates } : t));
@@ -851,6 +898,7 @@ export function MainContent() {
     explicitConnectionName?: string,
     explicitDatabase?: string,
     savedQueryName?: string,
+    autoRun = false,
   ) => {
     tabCounterRef.current += 1;
 
@@ -883,9 +931,11 @@ export function MainContent() {
       savedQueryName,
       usePsql,
       target,
+      autoRun,
     };
     setQueryTabs((prev) => [...prev, newTab]);
     setActiveTabId(newTab.id);
+    currentQueryRef.current = query;
 
     // Focus the editor after React renders
     setTimeout(() => {
@@ -927,11 +977,12 @@ export function MainContent() {
 
   // Extract the single statement at cursor position, or selected text
 // Mirrors QueryEditor's "smart run" logic
-const extractSelectedOrCursorStatement = (fullText: string): string => {
-  // If there's a selection in progress, we can't know here - just get first statement
-  // The executeQuery function handles selection from editor
-  const statements = fullText.split(';').map(s => s.trim()).filter(s => s.length > 0);
-  return statements.length > 0 ? statements[0] : fullText;
+/** Statement the toolbar tools act on: the editor's cursor statement, else the tab's first statement. */
+const statementForTools = (connType: string | undefined): string => {
+  const atCursor = editorApiRef.current?.getStatementAtCursor();
+  if (atCursor) return atCursor.text;
+  const text = activeTabRef.current?.query ?? "";
+  return splitStatements(text, { hashComments: isMySqlLike(connType) })[0]?.text ?? text.trim();
 };
 
 const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { lineNumber: number; statementText: string }) => {
@@ -1006,8 +1057,13 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       // If specific query provided (from editor selection or cursor extraction), use it directly
       finalQueryText = specificQuery;
     } else {
-      // Only extract single statement from full content when using toolbar Run button
-      finalQueryText = extractSingleStatement(currentQueryRef.current || currentTab?.query || "");
+      // Toolbar Run: the statement Ctrl+Enter would run (cursor/selection),
+      // falling back to the active tab's first statement.
+      const atCursor = editorApiRef.current?.getStatementAtCursor();
+      finalQueryText = atCursor?.text ?? extractSingleStatement(currentTab?.query || "");
+      if (atCursor && statementInfos.length === 0) {
+        statementInfos = [{ lineNumber: atCursor.lineNumber, statementText: atCursor.text }];
+      }
     }
 
     const queryToRun = finalQueryText.trim();
@@ -1151,6 +1207,11 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       setExecutingTabId(currentTabId ?? null);
 
       // Declare execution state at the top so both libpq and CLI paths can reference them
+      let resultColumns: string[] = [];
+      let returnedRowSet = false;
+      const serverOutput: string[] = [];
+      setServerOutput([]);
+      setErrorMarker(null);
       let rows: any[] = [];
       let rowsAffected = 0;
       let multiResults: { query: string; rows?: any[]; columns?: string[]; rowsAffected?: number; error?: string; lineNumber?: number }[] = [];
@@ -1169,7 +1230,13 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       // invisible, and DO LANGUAGE variants count as DO blocks.
       const isDoBlock = isDoBlockHelper(queryToRun);
       const isSelect = isSelectLike(queryToRun, hashOpts);
-      const { isTruncate, isDelete, hasWhere, isDestructive } = classifyDestructive(queryToRun, hashOpts);
+      // Classify EACH statement: in a script, a later statement's WHERE must
+      // not hide an earlier DELETE/UPDATE that has none.
+      const safety = (isRunAll ? statementsToRun : splitStatements(queryToRun, hashOpts).map(st => st.text))
+        .map(st => classifyDestructive(st, hashOpts));
+      const isTruncate = safety.some(f => f.isTruncate);
+      const unboundedWrite = safety.find(f => (f.isDelete || f.isUpdate) && !f.hasWhere);
+      const isDestructive = safety.some(f => f.isDestructive);
 
       // Resolve credentials + effective endpoint (shared between libpq and
       // CLI paths). A tab targeting a never-connected connection lazily
@@ -1426,79 +1493,44 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
             rows: result.rows?.length || 0 
           });
 
-          if (result.error && result.error !== null) {
-            console.error("[cliExecStmt] Error string:", result.error);
+          if (result.error) {
             throw new Error(result.error);
           }
 
-          if (wantRows) {
-            const colNames: string[] = result.columns || [];
-            const rawRows: string[][] = result.rows || [];
+          if (result.notices?.length) appendPsqlOutput(result.notices);
 
-            // Always build formatted terminal output — reconstruct from stdout when
-            // colNames/rows are empty (e.g. SELECT 1 where "?column?" has no pipe).
-            if (colNames.length > 0) {
-              const colWidths = colNames.map((c, i) => {
-                const maxData = rawRows.length > 0
-                  ? Math.max(...rawRows.map(r => (r[i] || "").length))
-                  : 0;
-                return Math.max(c.length, maxData);
-              });
-              const headerLine = colNames.map((c, i) => c.padEnd(colWidths[i])).join(" │ ");
-              const sepLine = colWidths.map(w => "─".repeat(w)).join("─┼─");
-              const dataLines = rawRows.map(row =>
-                row.map((val, i) => (val || "").padEnd(colWidths[i])).join(" │ ")
-              );
-              const rowCount = rawRows.length;
-              const footerLine = `(${rowCount} row${rowCount !== 1 ? "s" : ""})`;
-              appendPsqlOutput([headerLine, sepLine, ...dataLines, footerLine]);
-            } else if (result.stdout && result.stdout.length > 0) {
-              // No parsed columns but raw output exists — extract header from first line.
-              // Handle pipe-separated (header+data) and single-column unaligned (no pipes).
-              const stdout = result.stdout;
-              const headerLine = stdout[0] || "";
-              const footerIdx = stdout.findIndex(l => /^\(\d+ rows?\)/.test(l.trim()));
-              const footerLine = footerIdx >= 0 ? stdout[footerIdx] : "";
-              const dataLines = stdout.slice(1, footerIdx >= 0 ? footerIdx : undefined);
-              const nonEmptyData = dataLines.filter(l => l.trim().length > 0);
-              const hasPipes = headerLine.includes("|");
-              if (hasPipes && nonEmptyData.length > 0) {
-                // Pipe-separated multi-line output — align columns
-                const headerParts = headerLine.split("|").map(s => s.trimEnd());
-                const dataParts = nonEmptyData.map(l => l.split("|").map(s => s.trimEnd()));
-                const colWidths = headerParts.map((p, i) =>
-                  Math.max(p.length, ...dataParts.map(r => (r[i] || "").length))
-                );
-                appendPsqlOutput([
-                  headerParts.map((p, i) => p.padEnd(colWidths[i])).join(" │ "),
-                  colWidths.map(w => "─".repeat(w)).join("─┼─"),
-                  ...dataParts.map(row => row.map((v, i) => (v || "").padEnd(colWidths[i])).join(" │ ")),
-                  footerLine,
-                ]);
-              } else if (nonEmptyData.length > 0) {
-                // Single-column output (no pipes) — show header + data + footer
-                const maxLen = Math.max(headerLine.length, ...nonEmptyData.map(l => l.length));
-                const sepLine = "─".repeat(maxLen);
-                appendPsqlOutput([headerLine.padEnd(maxLen), sepLine, ...nonEmptyData.map(l => l.padEnd(maxLen)), footerLine]);
-              } else {
-                // Just header + footer (0 rows), or bare output
-                appendPsqlOutput([...stdout]);
-              }
-            } else {
-              // Nothing to show
-              appendPsqlOutput(["(empty)"]);
-            }
+          const colNames: string[] = result.columns || [];
+          const rawRows: (string | null)[][] = result.rows || [];
 
-            const normalizedRows = rawRows.map(rowValues => {
-              const obj: Record<string, any> = {};
-              colNames.forEach((col, i) => { obj[col] = rowValues[i]; });
-              return obj;
-            });
-            return { rows: normalizedRows, columns: colNames };
-          } else {
-            appendPsqlOutput([...(result.stdout || [])]);
-            return { rowsAffected: result.rowsAffected || 0 };
+          if (colNames.length > 0) {
+            // psql-style aligned table. NULL prints empty (psql's default) and
+            // embedded line breaks print as ↵ so rows stay one line each.
+            const cell = (v: string | null | undefined) => (v ?? "").replace(/\r?\n/g, "↵");
+            const colWidths = colNames.map((c, i) =>
+              Math.max(c.length, ...rawRows.map(r => cell(r[i]).length))
+            );
+            const headerLine = colNames.map((c, i) => c.padEnd(colWidths[i])).join(" │ ");
+            const sepLine = colWidths.map(w => "─".repeat(w)).join("─┼─");
+            const dataLines = rawRows.map(row =>
+              row.map((val, i) => cell(val).padEnd(colWidths[i])).join(" │ ")
+            );
+            const rowCount = rawRows.length;
+            appendPsqlOutput([headerLine, sepLine, ...dataLines, `(${rowCount} row${rowCount !== 1 ? "s" : ""})`]);
+          } else if (result.stdout?.length) {
+            // Command tags (`UPDATE 5`), meta-command output, expanded (\x) display.
+            appendPsqlOutput([...result.stdout]);
+          } else if (wantRows) {
+            appendPsqlOutput(["(empty)"]);
           }
+
+          if (!wantRows) return { rowsAffected: result.rowsAffected || 0 };
+
+          const normalizedRows = rawRows.map(rowValues => {
+            const obj: Record<string, any> = {};
+            colNames.forEach((col, i) => { obj[col] = rowValues[i]; });
+            return obj;
+          });
+          return { rows: normalizedRows, columns: colNames };
         };
 
         // ── Run all statements via CLI ────────────────────────────────────────
@@ -1821,9 +1853,9 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       
       // ── Default: libpq path ──────────────────────────────────────────────────
       // Use the transaction-scoped connection if a transaction is active for this connection
-      if (txStateRef.current.active && txDbRef.current && txContextRef.current?.connectionId === actualConnection.id && txContextRef.current?.database === actualDatabase) {
-        db = txDbRef.current;
-      } else if (ensured) {
+      // Every statement runs on this tab's own session connection (see
+      // lib/sqlSession.ts), so transactions and SET survive between runs.
+      if (ensured) {
         // Tab-target (or unconnected-global) run: the lazily-established
         // handle — SSH tunnel, correct credentials and database included.
         // Established up front so this never throws here.
@@ -1850,11 +1882,12 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
             helpInstructions: "This warning can be disabled in Settings > Permissions & Rules > Safety Rules > Warn on TRUNCATE."
           });
           if (!confirmed) return;
-        } else if (isDelete && !hasWhere && settings.safetyWarnOnDeleteNoWhere) {
+        } else if (unboundedWrite && settings.safetyWarnOnDeleteNoWhere) {
+          const verb = unboundedWrite.isDelete ? "DELETE" : "UPDATE";
           const confirmed = await confirmDialog.confirm({
-            title: "Dangerous Delete Detected",
-            message: "This DELETE statement has no WHERE clause and will affect ALL records in the table. Are you sure?",
-            confirmLabel: "Delete All Records",
+            title: `Dangerous ${verb} Detected`,
+            message: `This ${verb} statement has no WHERE clause of its own and will affect ALL records in the table. Are you sure?`,
+            confirmLabel: unboundedWrite.isDelete ? "Delete All Records" : "Update All Records",
             type: "danger",
             helpInstructions: "This warning can be disabled in Settings > Permissions & Rules > Safety Rules > Warn on DELETE without WHERE."
           });
@@ -1881,113 +1914,127 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       }, 50);
 
       try {
+        const sessionId = currentTabId ?? "default";
+        const sessionDb = db as SessionDb;
+        // One statement on the tab's session. Plain SELECTs still get the
+        // display LIMIT (one extra row, so the engine can say "truncated");
+        // everything else runs exactly as written.
+        const runStatement = async (sql: string) => {
+          if (sql.trimStart().startsWith("\\")) {
+            throw new Error("psql meta-commands (\\dt, \\d table, \\x …) only work in a psql console tab. Open one from the connection's context menu, or query the catalog here (e.g. SELECT * FROM information_schema.tables).");
+          }
+          if (/^COPY\b[\s\S]*\b(FROM\s+STDIN|TO\s+STDOUT)\b/.test(cleanSqlForKeywords(sql, hashOpts))) {
+            throw new Error("COPY … FROM STDIN / TO STDOUT streams data through the client, which the query console doesn't do. Use Import / Export, a psql console tab, or COPY to/from a file on the server.");
+          }
+          const maxRows = settings.maxRowsToDisplay;
+          const toSend = isSelectLike(sql, hashOpts) && maxRows > 0 ? applyQueryLimit(sql, maxRows + 1, hashOpts) : sql;
+          runningSessionRef.current = { db: sessionDb, sessionId };
+          rememberSession(sessionId, sessionDb);
+          try {
+            const out = await runInSession(sessionDb, sessionId, toSend, maxRows);
+            serverOutput.push(...out.notices);
+            trackTransaction(cleanSqlForKeywords(sql, hashOpts));
+            return out;
+          } finally {
+            runningSessionRef.current = null;
+          }
+        };
+        const affectedOf = (out: Awaited<ReturnType<typeof runStatement>>) =>
+          out.results.reduce((sum, r) => sum + (r.columns.length > 0 ? 0 : r.rowsAffected), 0);
+
         // Handle multiple statements (Ctrl+Shift+Enter)
         if (isRunAll && statementsToRun.length > 0) {
+          let failure: { message: string; lineNumber: number } | null = null;
           for (let i = 0; i < statementsToRun.length; i++) {
             // Check the per-run cancel token, not the global one. This
             // prevents a cancelled run from continuing after a new run starts.
             if (runCancelled.current) break;
-            
-            const stmt = statementsToRun[i];
-            const stmtInfo = statementInfos[i];
-            const lineNumber = stmtInfo?.lineNumber || 1;
 
-            const isStmtSelect = isSelectLike(stmt, hashOpts);
-            
+            const stmt = statementsToRun[i];
+            const lineNumber = statementInfos[i]?.lineNumber || 1;
+            const stmtStartTime = Date.now();
             try {
-              const stmtStartTime = Date.now();
-              if (isStmtSelect) {
-                const limitedStmt = applyQueryLimit(stmt, settings.maxRowsToDisplay, hashOpts);
-                const stmtRows = await db.select(limitedStmt) as any[];
-                multiResults.push({ query: stmt, rows: stmtRows, rowsAffected: stmtRows.length, lineNumber });
-                statementResults.push({
-                  lineNumber,
-                  status: 'success',
-                  rowCount: stmtRows.length,
-                  executionTime: Date.now() - stmtStartTime
-                });
+              const out = await runStatement(stmt);
+              const rowSet = primaryRowSet(out);
+              if (rowSet) {
+                const mapped = toRowObjects(rowSet);
+                multiResults.push({ query: stmt, rows: mapped.rows, columns: mapped.columns, rowsAffected: mapped.rows.length, lineNumber });
+                statementResults.push({ lineNumber, status: 'success', rowCount: mapped.rows.length, executionTime: Date.now() - stmtStartTime });
               } else {
-                const result = await db.execute(stmt);
-                const affected = typeof result.rowsAffected === 'number' ? result.rowsAffected : 0;
+                const affected = affectedOf(out);
                 multiResults.push({ query: stmt, rowsAffected: affected, lineNumber });
-                statementResults.push({
-                  lineNumber,
-                  status: 'success',
-                  rowsAffected: affected,
-                  executionTime: Date.now() - stmtStartTime
-                });
+                statementResults.push({ lineNumber, status: 'success', rowsAffected: affected, executionTime: Date.now() - stmtStartTime });
               }
             } catch (stmtErr: any) {
-              const errMsg = stmtErr.message || String(stmtErr);
+              const errMsg = stmtErr?.message || String(stmtErr);
               multiResults.push({ query: stmt, error: errMsg, lineNumber });
-              statementResults.push({
-                lineNumber,
-                status: 'error',
-                error: errMsg,
-                executionTime: 0
-              });
+              statementResults.push({ lineNumber, status: 'error', error: errMsg, executionTime: Date.now() - stmtStartTime });
+              // Stop here, like DBeaver/DataGrip: later statements would run
+              // outside the transaction the script intended, or against an
+              // aborted one.
+              failure = { message: errMsg, lineNumber };
+              break;
             }
           }
-          
-          // Check if any had errors
-          const errors = multiResults.filter(r => r.error);
-          if (errors.length > 0) {
-            const errorMsgs = errors.map(e => `Statement: ${e.query.substring(0, 50)}... Error: ${e.error}`).join('\n');
-            throw new Error(`Some statements failed:\n${errorMsgs}`);
-          }
-          
-          // Store multiResults for display with tick/X indicators
+
+          // Keep what ran — results and gutter marks — even when one failed.
           setMultiResults(multiResults.map(mr => ({
             query: mr.query,
             rows: mr.rows,
-            columns: mr.rows && mr.rows.length > 0 ? Object.keys(mr.rows[0]) : undefined,
+            columns: mr.columns,
             rowsAffected: mr.rowsAffected,
             error: mr.error,
             executionTime: 0
           })));
-          
-          // Store statement results for gutter glyphs (accumulate #223)
           if (currentTabId) {
             appendGlyphResults(currentTabId, statementResults);
           }
-          
-          // Combine results - use first SELECT result, or show counts for all
-          const selectResults = multiResults.filter(r => r.rows && r.rows.length > 0);
-          if (selectResults.length > 0) {
-            rows = selectResults[0].rows || [];
+          if (failure) {
+            const ran = multiResults.length - 1;
+            const skipped = statementsToRun.length - multiResults.length;
+            throw Object.assign(
+              new Error(`${failure.message}\n\n(Statement at line ${failure.lineNumber} failed after ${ran} succeeded${skipped > 0 ? `; ${skipped} not run` : ""}.)`),
+              { lineNumber: failure.lineNumber, glyphsRecorded: true },
+            );
+          }
+
+          // Show the last statement that returned rows; otherwise the counts.
+          const lastWithRows = [...multiResults].reverse().find(r => r.columns);
+          if (lastWithRows) {
+            rows = lastWithRows.rows || [];
+            resultColumns = lastWithRows.columns || [];
+            returnedRowSet = true;
             rowsAffected = rows.length;
           } else {
             const totalAffected = multiResults.reduce((sum, r) => sum + (r.rowsAffected || 0), 0);
             setSuccess(`Executed ${multiResults.length} statements. ${totalAffected} rows affected total.`);
           }
         } else {
-          // Single statement execution (existing logic)
-          const stmtInfo = statementInfo || { lineNumber: 1, statementText: queryToRun };
+          // Single statement execution
+          const stmtInfo = statementInfo || statementInfos[0] || { lineNumber: 1, statementText: queryToRun };
           const stmtStartTime = Date.now();
-          
-          if (isSelect) {
-            const limitedQuery = applyQueryLimit(queryToRun, settings.maxRowsToDisplay, hashOpts);
-            rows = await db.select(limitedQuery) as any[];
+          const out = await runStatement(queryToRun);
+          const rowSet = primaryRowSet(out);
+
+          if (rowSet) {
+            const mapped = toRowObjects(rowSet);
+            rows = mapped.rows;
+            resultColumns = mapped.columns;
+            returnedRowSet = true;
             rowsAffected = rows.length;
-            statementResults.push({
-              lineNumber: stmtInfo.lineNumber,
-              status: 'success',
-              rowCount: rowsAffected,
-              executionTime: Date.now() - stmtStartTime
-            });
+            if (rowSet.truncated) {
+              setSuccess(`Showing the first ${rows.length} rows (Settings → Max rows to display).`);
+            }
+            statementResults.push({ lineNumber: stmtInfo.lineNumber, status: 'success', rowCount: rows.length, executionTime: Date.now() - stmtStartTime });
           } else {
-            const result = await db.execute(queryToRun);
-            rowsAffected = typeof result.rowsAffected === 'number' ? result.rowsAffected : 0;
-            setSuccess(isDoBlock ? "DO" : `Query executed successfully. ${rowsAffected} rows affected.`);
+            rowsAffected = affectedOf(out);
+            setSuccess(isDoBlock
+              ? "DO block completed."
+              : rowsAffected > 0 ? `Query executed successfully. ${rowsAffected} rows affected.` : "Statement executed successfully.");
             rows = [];
-            statementResults.push({
-              lineNumber: stmtInfo.lineNumber,
-              status: 'success',
-              rowsAffected,
-              executionTime: Date.now() - stmtStartTime
-            });
+            statementResults.push({ lineNumber: stmtInfo.lineNumber, status: 'success', rowsAffected, executionTime: Date.now() - stmtStartTime });
           }
-          
+
           // Store statement results for gutter glyphs (accumulate #223)
           if (currentTabId) {
             appendGlyphResults(currentTabId, statementResults);
@@ -2012,16 +2059,17 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
 
       const duration = Date.now() - startTime;
       
-      // CRITICAL: Only setResults if it was a SELECT query or we actually got rows back.
-      // This prevents "jumping" when performing row operations like DELETE or UPDATE
-      // where we want to manage the state updates ourselves optimistically.
-      if (isSelect || rows.length > 0) {
+      // Server output (RAISE NOTICE / WARNING) for the Messages tab.
+      setServerOutput(serverOutput);
+      if (currentTabId) updateTabState(currentTabId, { serverOutput });
+
+      // CRITICAL: Only setResults if the statement returned a row set (even an
+      // empty one — its column headers still show). This prevents "jumping"
+      // when performing row operations like DELETE or UPDATE where we want to
+      // manage the state updates ourselves optimistically.
+      if (returnedRowSet || rows.length > 0) {
         setResults(rows);
-        if (rows.length > 0) {
-          setLastColumns(Object.keys(rows[0]));
-        } else {
-          setLastColumns([]);
-        }
+        setLastColumns(resultColumns.length > 0 ? resultColumns : rows.length > 0 ? Object.keys(rows[0]) : []);
         // Keep lastSelectQueryRef in sync with the last data-returning query so
         // the toolbar refresh button and discard-revert always re-run the correct
         // SELECT (not a stale query from a previous table click).
@@ -2035,7 +2083,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       // Use extractTableName (local var) instead of activeTableName (stale closure).
       // Use db (the same connection used for the main query) instead of currentDb
       // because db may be a transaction-specific connection.
-      if (isSelect && rows.length > 0 && extractTableName && db) {
+      if (returnedRowSet && rows.length > 0 && extractTableName && db) {
         const dbType = actualConnection?.type;
         let schemaName: string | null = null;
         let tableName = extractTableName;
@@ -2190,55 +2238,27 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       const duration = Date.now() - startTime;
       let errorMsg = typeof err === 'string' ? err : err?.message || JSON.stringify(err) || "Failed to execute query";
       
-      // Translate cryptic driver errors into actionable user advice
+      // The server's own message comes first, verbatim (with DETAIL / HINT /
+      // POSITION). QueryDen only ever APPENDS advice — it used to replace real
+      // errors with guesses, e.g. "missing FROM-clause entry" became
+      // "Column … does not exist".
       let isConnectionLost = false;
-      if (errorMsg.includes("closed pool") || errorMsg.includes("connection closed") || errorMsg.includes("Broken pipe")) {
-        errorMsg = "Connection Lost: The database cluster has closed the connection pool (session timeout). Please click 'Connect' again in the Database Explorer to refresh the link.";
+      const appendHint = (hint: string) => { errorMsg = `${errorMsg}\n\n💡 ${hint}`; };
+      if (/closed pool|connection closed|Broken pipe|connection was lost/i.test(errorMsg)) {
         isConnectionLost = true;
+        appendHint("The connection to the server was lost. Run again to reconnect; session settings and any open transaction were lost.");
       } else if (errorMsg.includes("password authentication failed")) {
-        errorMsg = `Authentication Failure: Access denied for user "${actualConnection.username}". Please verify your credentials in the connection settings or vault.`;
-      } else if (errorMsg.includes("could not connect to server")) {
-        errorMsg = "Network Error: Could not reach the database server. Check your VPN, firewall, or if the server is actually running.";
+        appendHint(`Check the credentials for "${actualConnection.username || "this user"}" in the connection settings or vault.`);
+      } else if (/could not connect to server|Connection refused|timed out/i.test(errorMsg)) {
+        appendHint("The server could not be reached. Check VPN, firewall, SSH tunnel settings, and that the server is running.");
       } else {
-        // Enhanced column error detection with hints
-        const missingTableMatch = errorMsg.match(/missing FROM-clause entry for table "([^"]+)"/i);
-        const undefinedColumnMatch = errorMsg.match(/column "([^"]+)" does not exist/i);
-        
-        if (missingTableMatch) {
-          const problematic = missingTableMatch[1];
-          
-          // Check if it looks like table_column or tableId pattern
-          if (problematic.includes('_') || problematic.endsWith('Id')) {
-            const parts = problematic.split('_');
-            const potentialTable = parts[0];
-            const potentialColumn = parts.slice(1).join('_');
-            
-            // Build helpful suggestion
-            let suggestion = "";
-            if (parts.length > 1) {
-              suggestion = `\n\n💡 Hint: Did you mean "${potentialTable}.${potentialColumn}"? (table_column format)`;
-            }
-            
-            errorMsg = `Column "${problematic}" does not exist in any table in scope.${suggestion}\n\nPossible causes:\n• Typo in column name\n• Using table_reference instead of column (e.g., "${potentialTable}" instead of "${potentialTable}.id")\n• Column was renamed or deleted`;
-          } else {
-            errorMsg = `Table "${problematic}" not found in query. Check your JOINs or table name.`;
-          }
-        } else if (undefinedColumnMatch) {
-          const col = undefinedColumnMatch[1];
-          
-          // Check if column name matches table_column pattern
-          if (col.includes('.')) {
-            const [tablePart, columnPart] = col.split('.');
-            errorMsg = `Column "${columnPart}" not found in table "${tablePart}".\n\n💡 Please verify the column name exists in that table.`;
-          } else if (col.includes('_')) {
-            const parts = col.split('_');
-            errorMsg = `Column "${col}" not found.\n\n💡 Did you mean:\n• "${parts[0]}.${parts.slice(1).join('_')}" (table_column format)\n• Check if table prefix is correct`;
-          } else {
-            errorMsg = `Column "${col}" not found in any table in query.\n\n💡 Try qualifying with table name: table.column`;
-          }
+        const missingFrom = errorMsg.match(/missing FROM-clause entry for table "([^"]+)"/i);
+        if (missingFrom) {
+          appendHint(`"${missingFrom[1]}" is used as a table/alias qualifier but isn't in FROM or JOIN. Check the alias spelling, or add the table to FROM.`);
+        } else if (/column "([^"]+)" does not exist/i.test(errorMsg)) {
+          appendHint("Qualify the column with its table or alias (alias.column) and check its spelling — Ctrl+Space lists the columns in scope.");
         }
       }
-      
       if (gen !== executionGenRef.current) return; // cancelled/superseded: leave UI to the newer run
       if (isConnectionLost) {
         // Drop the cached lazy handle so the next run reconnects instead of
@@ -2248,17 +2268,25 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       }
       setError(errorMsg);
       if (currentTabId) {
-        // Add error to statement results if we have line info. Merge into any
-        // partial marks from a multi-statement run (#223) instead of wiping.
-        const errorLineNumber = statementInfos?.[0]?.lineNumber || 1;
-        const errorStatementResult: StatementResult = {
-          lineNumber: errorLineNumber,
-          status: 'error',
-          error: errorMsg,
-          executionTime: duration
-        };
-
-        appendGlyphResults(currentTabId, [errorStatementResult]);
+        // Mark the statement that actually failed (Run All reports its line);
+        // Run All already recorded its own glyphs, including the failure.
+        const errorLineNumber = typeof err?.lineNumber === "number" ? err.lineNumber : statementInfos?.[0]?.lineNumber || 1;
+        if (!err?.glyphsRecorded) {
+          appendGlyphResults(currentTabId, [{
+            lineNumber: errorLineNumber,
+            status: 'error',
+            error: errorMsg,
+            executionTime: duration
+          }]);
+        }
+        // Squiggle the exact spot when the server reported a position.
+        const failedStatement = isRunAll
+          ? statementsToRun[statementInfos.findIndex(si => si.lineNumber === errorLineNumber)]
+          : queryToRun;
+        const position = errorPosition(errorMsg);
+        setErrorMarker(position !== null && failedStatement
+          ? { statementText: failedStatement, statementLine: errorLineNumber, offset: position, message: errorMsg.split("\n")[0] }
+          : null);
         updateTabState(currentTabId, {
           error: errorMsg,
           success: null,
@@ -2291,7 +2319,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         setExecutingTabId(null);
       }
     }
-  }, [activeConnection, selectedDatabase, addQuery, currentDb, vaultCredentials, settings, confirmDialog, appendGlyphResults, ensureConnectionDb, dropCachedConnection]);
+  }, [activeConnection, connections, selectedDatabase, addQuery, currentDb, vaultCredentials, settings, confirmDialog, appendGlyphResults, ensureConnectionDb, dropCachedConnection]);
 
   const cancelQuery = useCallback(() => {
     // Signal per-run cancel token so the libpq run-all loop stops early.
@@ -2303,6 +2331,10 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     // Also set the global flag, which the CLI psql path (run-all, \watch,
     // post-exec bail, catch block) still checks as its cancel signal.
     cancelFlagRef.current = true;
+    // Stop the statement on the server too (pg_cancel_backend / KILL QUERY);
+    // before sessions, Stop only hid the result while the query kept running.
+    const running = runningSessionRef.current;
+    if (running) cancelSession(running.db, running.sessionId).catch(() => {});
     // Release the re-entrancy gate immediately (#212) — the old code held it
     // until the abandoned run's async work settled, so every subsequent Run
     // was silently swallowed (toolbar showed "Run" but nothing executed).
@@ -2333,13 +2365,22 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
 
     const handleNewTabWithText = (e: Event) => {
       const detail = (e as CustomEvent).detail || {};
-      addNewTab(detail.query || "", detail.name || "", false, undefined, undefined, undefined, detail.savedQueryName);
+      addNewTab(
+        detail.query || "",
+        detail.name || "",
+        false,
+        detail.connectionId,
+        detail.connectionName,
+        detail.database,
+        detail.savedQueryName,
+        !!detail.run,
+      );
     };
 
     const handleOpenDefinition = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail && detail.name) {
-        setDefModalState({ isOpen: true, table: detail.name });
+        setDefModalState({ isOpen: true, table: detail.name, kind: detail.kind === "function" ? "function" : "auto" });
       }
     };
 
@@ -2376,72 +2417,42 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     };
 
     // Transaction control handler
+    // Toolbar Begin / Commit / Rollback. They run on the active tab's own
+    // session — the same connection its statements use — so the transaction
+    // actually covers them (it used to open a pooled handle of its own).
     const handleTxControl = async (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      const { action, isolation } = detail;
-
-      if (!activeConnection) return;
-
+      const { action, isolation } = (e as CustomEvent).detail || {};
+      const tab = activeTabRef.current;
+      const tabId = activeTabIdRef.current;
+      const conn = connections.find(c => c.id === tab?.target?.connectionId) ?? activeConnection;
+      if (!conn || !tabId) {
+        setError("Connect to a database first");
+        return;
+      }
       try {
-        const Database = (await import("@tauri-apps/plugin-sql")).default;
-        let username = activeConnection.username || "", password = activeConnection.password || "";
-        if (activeConnection.vaultCredentialId) {
-          const vaultCred = vaultCredentials.find(vc => vc.id === activeConnection.vaultCredentialId);
-          if (vaultCred) { username = vaultCred.username || ""; password = vaultCred.password || ""; }
-        }
-        const encodedUser = encodeURIComponent(username);
-        const encodedPass = encodeURIComponent(password);
-        const port = activeConnection.port || getDefaultPort(activeConnection.type);
-
-          let db: any;
+        const { db } = await ensureConnectionDb(conn.id, tab?.target?.database || selectedDatabase || conn.database);
+        const sessionDb = db as SessionDb;
+        rememberSession(tabId, sessionDb);
+        const run = (sql: string) => runInSession(sessionDb, tabId, sql);
 
         if (action === "begin") {
-          // Create a new transaction-scoped db connection
-          if (activeConnection.type === "sqlite") {
-            db = await Database.load(`sqlite:${activeConnection.filepath || getDefaultDatabaseName()}`);
-          } else if (["postgres", "supabase", "cockroach"].includes(activeConnection.type)) {
-            db = await Database.load(`postgres://${encodedUser}:${encodedPass}@${activeConnection.host}:${port}/${selectedDatabase || activeConnection.database}`);
+          if (["mysql", "mariadb"].includes(conn.type)) {
+            if (isolation) await run(`SET TRANSACTION ISOLATION LEVEL ${isolation}`);
+            await run("START TRANSACTION");
+          } else if (conn.type === "sqlite") {
+            await run("BEGIN");
           } else {
-            db = await Database.load(`mysql://${encodedUser}:${encodedPass}@${activeConnection.host}:${port}/${selectedDatabase || activeConnection.database}`);
+            await run(isolation ? `BEGIN ISOLATION LEVEL ${isolation}` : "BEGIN");
           }
-
-          const isolationClause = isolation ? `ISOLATION LEVEL ${isolation}` : "";
-          await db.execute(`BEGIN ${isolationClause}`.trim());
-          txDbRef.current = db;
-          txContextRef.current = { connectionId: activeConnection.id, database: selectedDatabase || "" };
-          setTxState({ active: true, isolationLevel: isolation || "READ COMMITTED", statementCount: 0 });
-          setSuccess("Transaction started.");
-        } else if (action === "commit") {
-          if (txDbRef.current) {
-            await txDbRef.current.execute("COMMIT");
-            txDbRef.current = null;
-            txContextRef.current = null;
-            setTxState({ active: false, isolationLevel: "READ COMMITTED", statementCount: 0 });
-            setSuccess("Transaction committed.");
-          }
-        } else if (action === "rollback") {
-          if (txDbRef.current) {
-            await txDbRef.current.execute("ROLLBACK");
-            txDbRef.current = null;
-            txContextRef.current = null;
-            setTxState({ active: false, isolationLevel: "READ COMMITTED", statementCount: 0 });
-            setSuccess("Transaction rolled back.");
-          }
+          setTabTransaction({ active: true, isolationLevel: isolation || "READ COMMITTED", statementCount: 0 });
+          setSuccess("Transaction started — statements in this tab now run inside it.");
+        } else if (action === "commit" || action === "rollback") {
+          await run(action === "commit" ? "COMMIT" : "ROLLBACK");
+          setTabTransaction({ active: false, isolationLevel: "READ COMMITTED", statementCount: 0 });
+          setSuccess(action === "commit" ? "Transaction committed." : "Transaction rolled back.");
         }
-
-        // Notify toolbar of state change
-        const newTxStatements = action === "rollback" || action === "commit" ? 0
-          : action === "begin" ? 0
-          : txStateRef.current.statementCount;
-        window.dispatchEvent(new CustomEvent("tx-state-changed", {
-          detail: {
-            active: action === "commit" || action === "rollback" ? false : txStateRef.current.active || action === "begin",
-            isolationLevel: action === "begin" ? (isolation || "READ COMMITTED") : txStateRef.current.isolationLevel,
-            statementCount: newTxStatements,
-          }
-        }));
       } catch (err: any) {
-        setError(`Transaction error: ${err.message || err}`);
+        setError(`Transaction error: ${err?.message || err}`);
       }
     };
 
@@ -2499,7 +2510,9 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       window.removeEventListener("switch-to-next-tab", handleSwitchToNextTab);
       window.removeEventListener("tx-control", handleTxControl);
     };
-  }, [addNewTab, executeQuery]);
+    // handleTxControl resolves the tab's connection from these.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addNewTab, executeQuery, connections, activeConnection, selectedDatabase, ensureConnectionDb]);
 
   // ── Unsaved queries: intercept window close (issue #121) ─────────────
   // When the user triggers an OS-level close (X button, Alt+F4, Cmd+Q,
@@ -2645,9 +2658,53 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     }
     if (!activeTableName) return undefined;
     const baseTableName = activeTableName.includes('.') ? activeTableName.split('.').pop()! : activeTableName;
-    const candidates = new Set(["id", "uuid", "uid", "pk", "row_id", "object_id", "key", "code", "_id", `${baseTableName.toLowerCase()}_id`]);
+    // Only names that conventionally mean "primary key". `key` / `code` were
+    // dropped: they are often non-unique, and every write checks it touched
+    // exactly one row anyway (applyGridWrites).
+    const candidates = new Set(["id", "uuid", "uid", "pk", "row_id", "object_id", "_id", `${baseTableName.toLowerCase()}_id`]);
     return columns.find(c => candidates.has(c.toLowerCase()));
   }, [tableSchema, activeTableName]);
+
+  // Grid writes (cell edit, row delete, Save) run in the tab's own session
+  // inside a transaction — or a savepoint when the tab already has one open —
+  // and each statement must touch exactly one row. Anything else rolls the
+  // whole batch back instead of reporting "saved" for 0 or many rows.
+  const applyGridWrites = useCallback(async (
+    statements: Array<{ sql: string; describe: string }>,
+  ): Promise<void> => {
+    const tab = activeTabRef.current;
+    const conn = connections.find(c => c.id === tab?.target?.connectionId) ?? activeConnection;
+    if (!conn) throw new Error("No connection for this tab.");
+    const database = tab?.target?.database || selectedDatabase || conn.database || "";
+    const { db } = await ensureConnectionDb(conn.id, database);
+    const sessionDb = db as SessionDb;
+    const sessionId = activeTabIdRef.current ?? "default";
+    rememberSession(sessionId, sessionDb);
+    const run = async (sql: string) =>
+      (await runInSession(sessionDb, sessionId, sql)).results.reduce((n, r) => n + r.rowsAffected, 0);
+
+    const inTransaction = txStateRef.current.active;
+    await run(inTransaction ? "SAVEPOINT queryden_grid" : isMySqlLike(conn.type) ? "START TRANSACTION" : "BEGIN");
+    try {
+      for (const st of statements) {
+        const affected = await run(st.sql);
+        if (affected !== 1) {
+          throw new Error(affected === 0
+            ? `${st.describe}: no row matched its original values — it was changed or deleted since it was loaded. Nothing was saved; refresh and try again.`
+            : `${st.describe}: ${affected} rows matched instead of 1 — the row can't be identified uniquely (no primary key). Nothing was saved.`);
+        }
+      }
+      await run(inTransaction ? "RELEASE SAVEPOINT queryden_grid" : "COMMIT");
+    } catch (e) {
+      await run(inTransaction ? "ROLLBACK TO SAVEPOINT queryden_grid" : "ROLLBACK").catch(() => {});
+      throw e;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connections, activeConnection, selectedDatabase, ensureConnectionDb]);
+
+  /** Value equality for change detection (JSON values compare by content). */
+  const sameValue = (a: unknown, b: unknown) =>
+    a === b || (a !== null && b !== null && typeof a === "object" && typeof b === "object" && JSON.stringify(a) === JSON.stringify(b));
 
   const handleUpdateRow = useCallback(async (oldRow: any, newRow: any) => {
     // Quote with the query's actual target connection dialect, not the
@@ -2676,7 +2733,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     const whereClauses: string[] = [];
     
     for (const col of columns) {
-      if (String(oldRow[col]) !== String(newRow[col])) {
+      if (!sameValue(oldRow[col], newRow[col])) {
         setClauses.push(`${uqid(col)} = ${formatSqlLiteral(newRow[col])}`);
       }
     }
@@ -2708,8 +2765,9 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     if (!confirmed) return;
     
     try {
-      await executeQuery(updateQuery);
-      
+      await applyGridWrites([{ sql: updateQuery, describe: "Update" }]);
+      setSuccess("Row updated.");
+
       // Update local state optimistically
       setResults(prev => prev.map(row => {
         const columns = Object.keys(oldRow);
@@ -2728,7 +2786,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     } catch (err) {
       throw err;
     }
-  }, [activeTableName, activeConnection, executeQuery, confirmDialog, connections, queryTabs, activeTabId]);
+  }, [activeTableName, activeConnection, applyGridWrites, confirmDialog, connections, queryTabs, activeTabId]);
 
   const handleDeleteRow = useCallback(async (row: any) => {
     // Same target-connection quoting as handleUpdateRow (see above).
@@ -2764,7 +2822,8 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     
     try {
       setSuppressTabSwitch(true);
-      await executeQuery(deleteQuery);
+      await applyGridWrites([{ sql: deleteQuery, describe: "Delete" }]);
+      setSuccess("Row deleted.");
       setResults(prev => prev.filter(r => {
         const pkItem = getPrimaryKey(columns);
         if (pkItem && cleanRow[pkItem] !== undefined && cleanRow[pkItem] !== null) {
@@ -2775,7 +2834,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
     } finally {
       setSuppressTabSwitch(false);
     }
-  }, [activeTableName, activeConnection, executeQuery, connections, queryTabs, activeTabId]);
+  }, [activeTableName, activeConnection, applyGridWrites, connections, queryTabs, activeTabId]);
 
   const handleSave = useCallback(async (currentResults: any[]) => {
     if (!activeTableName) return;
@@ -2908,7 +2967,8 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         return;
       }
 
-      // ─── Step 4: Execute INSERTs directly (bypass executeQuery so errors propagate) ───
+      // ─── Step 4: Build INSERTs (run together with the UPDATEs below) ───
+      const writes: Array<{ sql: string; describe: string }> = [];
       for (const row of newRows) {
         const { _isNew, _isModified, ...data } = row;
         const columns = Object.keys(data).filter(c => data[c] !== null && data[c] !== undefined);
@@ -2924,7 +2984,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           const vals = columns.map(c => formatSqlLiteral(data[c])).join(", ");
           query = `INSERT INTO ${sqid(activeTableName)} (${cols}) VALUES (${vals})`;
         }
-        await db.execute(query);
+        writes.push({ sql: query, describe: `New row ${writes.length + 1}` });
       }
 
       // ─── Step 5: Execute UPDATEs directly (bypass executeQuery so errors propagate) ───
@@ -2945,9 +3005,14 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         const setClauses: string[] = [];
         const whereClauses: string[] = [];
         
+        // Only the cells that actually changed: rewriting every column
+        // clobbers concurrent edits, fails on generated columns and fires
+        // column-specific triggers.
         for (const col of columns) {
-           setClauses.push(`${sqid(col)} = ${formatSqlLiteral(data[col])}`);
+          if ((data as any)._original && sameValue((data as any)._original[col], data[col])) continue;
+          setClauses.push(`${sqid(col)} = ${formatSqlLiteral(data[col])}`);
         }
+        if (setClauses.length === 0) continue;
         
         if (pk && data[pk] !== undefined && data[pk] !== null) {
           whereClauses.push(`${sqid(pk)} = ${formatSqlLiteral(data[pk])}`);
@@ -2962,9 +3027,12 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         const sqlSet = setClauses.join(", ");
         const sqlWhere = whereClauses.length > 0 ? whereClauses.join(" AND ") : "TRUE";
         const updateQuery = `UPDATE ${sqid(activeTableName)} SET ${sqlSet} WHERE ${sqlWhere}`;
-        
-        await db.execute(updateQuery);
+        writes.push({ sql: updateQuery, describe: `Edited row ${writes.length - newRows.length + 1}` });
       }
+
+      // One transaction for the batch; any row that doesn't match exactly
+      // once rolls everything back.
+      await applyGridWrites(writes);
 
       // ─── Step 6: Refresh to get server-side IDs etc. ───
       setSuccess(`Successfully saved ${newRows.length} new and ${modifiedRows.length} modified records.`);
@@ -3017,7 +3085,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       isExecutingRef.current = false;
       setSuppressTabSwitch(false);
     }
-  }, [activeTableName, activeConnection, selectedDatabase, vaultCredentials, executeQuery, confirmDialog, connections, queryTabs, activeTabId, ensureConnectionDb]);
+  }, [activeTableName, activeConnection, selectedDatabase, vaultCredentials, executeQuery, confirmDialog, connections, queryTabs, activeTabId, ensureConnectionDb, applyGridWrites]);
 
   const handleAddRow = useCallback(async (newRow: any, localOnly = true): Promise<void> => {
     if (localOnly) {
@@ -3152,27 +3220,13 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       return;
     }
 
-    // Extract the statement at cursor position (same as editor's smart run)
-    const queryToExplain = extractSelectedOrCursorStatement(currentQueryRef.current || "");
-    if (!queryToExplain.trim()) {
-      setError("Write a SELECT query first");
+    const queryToExplain = stripTrailingSemicolonAndComments(statementForTools(explainConn.type));
+    const plan = explainPlanFor(queryToExplain, explainConn.type);
+    if ("error" in plan) {
+      setError(plan.error);
       return;
     }
-
-    const upperQuery = queryToExplain.trim().toUpperCase();
-    if (!upperQuery.startsWith("SELECT")) {
-      setError("Explain Plan is only available for SELECT statements.");
-      return;
-    }
-
-    let explainQuery = "";
-    if (["postgres", "supabase"].includes(explainConn.type)) {
-      explainQuery = `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${queryToExplain}`;
-    } else if (explainConn.type === "mysql") {
-      explainQuery = `EXPLAIN FORMAT=JSON ${queryToExplain}`;
-    } else {
-      explainQuery = `EXPLAIN ${queryToExplain}`;
-    }
+    const explainQuery = plan.sql;
 
     await executeQuery(explainQuery);
   }, [activeConnection, executeQuery, connections, queryTabs, activeTabId]);
@@ -3189,34 +3243,14 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
       return;
     }
 
-    // Extract the statement at cursor position (same as editor's smart run)
-    const queryToExplain = extractSelectedOrCursorStatement(currentQueryRef.current || "");
-    if (!queryToExplain.trim()) {
-      setError("Write a SELECT query first");
-      return;
-    }
-
-    const upperQuery = queryToExplain.trim().toUpperCase();
-    if (!upperQuery.startsWith("SELECT")) {
-      setError("Optimizer is only available for SELECT statements.");
-      return;
-    }
-
-    // Build EXPLAIN query based on database type
-    let explainQuery = "";
+    const queryToExplain = stripTrailingSemicolonAndComments(statementForTools(optimizeConn.type));
     const dbType = optimizeConn.type;
-
-    if (["postgres", "supabase", "cockroach"].includes(dbType)) {
-      explainQuery = `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${queryToExplain}`;
-    } else if (["mysql", "mariadb"].includes(dbType)) {
-      explainQuery = `EXPLAIN FORMAT=JSON ${queryToExplain}`;
-    } else if (dbType === "sqlite") {
-      // SQLite uses EXPLAIN QUERY PLAN
-      explainQuery = `EXPLAIN QUERY PLAN ${queryToExplain}`;
-    } else {
-      // Fallback for other databases
-      explainQuery = `EXPLAIN ${queryToExplain}`;
+    const plan = explainPlanFor(queryToExplain, dbType);
+    if ("error" in plan) {
+      setError(plan.error);
+      return;
     }
+    const explainQuery = plan.sql;
 
     setIsExecuting(true);
     setError(null);
@@ -3506,52 +3540,7 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
         />
         <IconButton
           label="Save Query (Ctrl+S)"
-          onClick={async () => {
-            if (!activeConnection) return;
-            const queryToSave = activeTab?.query || currentQueryRef.current;
-            if (!queryToSave || queryToSave.trim() === "") return;
-            const name = await confirmDialog.dialog({
-              title: "Save Query",
-              message: "Enter a name to identify this query in your saved queries library.",
-              inputLabel: "Query Name",
-              inputDefaultValue: activeTab?.name || "My Query",
-              confirmLabel: "Save",
-              cancelLabel: "Cancel",
-              type: "info",
-              requireInput: true
-            });
-
-            if (name) {
-              const existing = findByName(name);
-              if (existing) {
-                updateQueryText(existing.id, queryToSave);
-              } else {
-                addSavedQuery({
-                  name,
-                  query: queryToSave,
-                  database: selectedDatabase || "",
-                  connectionId: activeConnection.id
-                });
-              }
-              useLocalHistory.getState().addEntry(
-                `saved-queries/${name}`,
-                queryToSave,
-                `Saved: ${name} — ${activeConnection.name}`
-              );
-              if (activeTabIdRef.current) {
-                setQueryTabs(prev => prev.map(t => {
-                  if (t.id === activeTabIdRef.current) {
-                    return { ...t, name, savedQueryName: name, originalQuery: queryToSave };
-                  }
-                  if (t.savedQueryName && t.savedQueryName === name) {
-                    return { ...t, originalQuery: queryToSave };
-                  }
-                  return t;
-                }));
-              }
-              setSuccess(`Query "${name}" saved successfully!`);
-            }
-          }}
+          onClick={() => saveActiveQuery()}
           icon={<Save />}
         />
         <div className="flex-1" />
@@ -3824,6 +3813,15 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
                   onStatementResultsChange={(rs) => {
                     if (activeTabId) setGlyphResults(activeTabId, rs);
                   }}
+                  errorMarker={errorMarker}
+                  runOnMount={!!activeTab?.autoRun}
+                  onRunOnMountDone={() => {
+                    if (activeTabId) updateTabState(activeTabId, { autoRun: false });
+                  }}
+                  onEditorApi={(api, mounted) => {
+                    if (mounted) editorApiRef.current = api;
+                    else if (editorApiRef.current === api) editorApiRef.current = null;
+                  }}
                 />
               </Suspense>
             )
@@ -3845,10 +3843,12 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
             results={results}
             error={error}
             successMessage={success}
+            serverOutput={serverOutput}
             multiResults={multiResults}
             isLoading={activeTabIsExecuting}
             executionTime={executionTime}
             tableName={activeTableName || undefined}
+            dbType={connections.find(c => c.id === activeTab?.target?.connectionId)?.type ?? activeConnection?.type}
             columnTypes={tableColumnTypes?.types}
             tableSchema={tableSchema}
             loadFKOptions={loadFKOptions}
@@ -3919,6 +3919,9 @@ const executeQuery = useCallback(async (specificQuery?: any, statementInfo?: { l
           <DefinitionModal
             isOpen={defModalState.isOpen}
             tableName={defModalState.table}
+            kind={defModalState.kind}
+            connectionId={activeTab?.target?.connectionId}
+            database={activeTab?.target?.database}
             onClose={() => setDefModalState({ isOpen: false, table: "" })}
           />
         )}

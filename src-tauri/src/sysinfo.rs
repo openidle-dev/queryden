@@ -16,7 +16,7 @@ pub struct SystemInfo {
     app_version: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_system_info() -> Result<SystemInfo, String> {
     let mut sys = System::new_all();
     

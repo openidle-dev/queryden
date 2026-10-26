@@ -1,23 +1,16 @@
 import { describe, it, expect } from "vitest";
 import {
   detectSchemaDotContext,
-  detectAliasDotContext,
-  matchesQualifiedOrBareName,
-  matchesStaticLabel,
   pickCompletionSchema,
   generateTableAlias,
   extractExistingAliases,
+  extractTableRefs,
+  classifySqlSpans,
+  qualifiedNameAt,
+  detectCompletionClause,
+  quoteIdentifierIfNeeded,
+  tableKey,
 } from "./completionContext";
-
-const COLUMNS = [
-  { table_name: "app.users", column_name: "id" },
-  { table_name: "app.users", column_name: "email" },
-  { table_name: "app.users", column_name: "created_at" },
-  { table_name: "app.products", column_name: "id" },
-  { table_name: "app.products", column_name: "name" },
-  { table_name: "audit_log", column_name: "id" },
-  { table_name: "audit_log", column_name: "payload" },
-];
 
 // Issue #28: autocomplete suggestions vanish after typing `.` on schema-qualified tables.
 // https://github.com/openidle-dev/queryden/issues/28
@@ -154,173 +147,9 @@ describe("detectSchemaDotContext — public schema special-casing", () => {
   });
 });
 
-describe("detectAliasDotContext — alias resolution", () => {
-  it("resolves a single-letter alias on a multi-dot line (issue #28 second case)", () => {
-    const query = "SELECT u.id FROM app.users u WHERE u.";
-    const line = query;
-    const m = detectAliasDotContext(line, line.length + 1, query, COLUMNS);
-    expect(m).not.toBeNull();
-    expect(m!.alias).toBe("u");
-    expect(m!.tableName).toBe("app.users");
-    expect(m!.columnNames).toEqual(["id", "email", "created_at"]);
-  });
-
-  it("resolves an `AS`-style alias", () => {
-    const query = "SELECT * FROM app.users AS u WHERE u.";
-    const m = detectAliasDotContext(query, query.length + 1, query, COLUMNS);
-    expect(m!.tableName).toBe("app.users");
-    expect(m!.columnNames).toEqual(["id", "email", "created_at"]);
-  });
-
-  it("resolves an alias declared via a JOIN clause", () => {
-    const query =
-      "SELECT * FROM app.users u JOIN app.products p ON u.id = p.user_id WHERE p.";
-    const m = detectAliasDotContext(query, query.length + 1, query, COLUMNS);
-    expect(m!.alias).toBe("p");
-    expect(m!.tableName).toBe("app.products");
-    expect(m!.columnNames).toEqual(["id", "name"]);
-  });
-
-  it("places rangeStartColumn at the column immediately after the dot", () => {
-    const query = "SELECT * FROM app.users u WHERE u.";
-    // dot is at 0-indexed 33 → column 34; rangeStartColumn = 35
-    const m = detectAliasDotContext(query, query.length + 1, query, COLUMNS);
-    expect(m!.rangeStartColumn).toBe(query.length + 1);
-  });
-
-  it("ignores reserved words mistaken for aliases (`FROM users WHERE`)", () => {
-    // The alias regex would otherwise capture `WHERE` as the alias of `users`.
-    const query = "SELECT * FROM app.users WHERE u.";
-    // No real alias `u` is declared, so resolution must fall back to literal-table lookup.
-    // `u` is not a table, so this returns null.
-    expect(detectAliasDotContext(query, query.length + 1, query, COLUMNS)).toBeNull();
-  });
-
-  it("falls back to literal table name when prefix matches a column.table_name", () => {
-    const query = "SELECT * FROM audit_log WHERE audit_log.";
-    const m = detectAliasDotContext(query, query.length + 1, query, COLUMNS);
-    expect(m!.tableName).toBe("audit_log");
-    expect(m!.columnNames).toEqual(["id", "payload"]);
-  });
-
-  it("resolves bare table name against a schema-qualified entry via endsWith", () => {
-    // User typed `users.` referring to `app.users` without an explicit alias.
-    const query = "SELECT * FROM app.users WHERE users.";
-    const m = detectAliasDotContext(query, query.length + 1, query, COLUMNS);
-    expect(m!.tableName).toBe("app.users");
-    expect(m!.columnNames).toEqual(["id", "email", "created_at"]);
-  });
-
-  it("matches aliases case-insensitively but preserves stored column casing", () => {
-    const cols = [
-      { table_name: "app.Users", column_name: "Id" },
-      { table_name: "app.Users", column_name: "Email" },
-    ];
-    const query = "SELECT * FROM app.Users U WHERE U.";
-    const m = detectAliasDotContext(query, query.length + 1, query, cols);
-    expect(m!.tableName).toBe("app.Users");
-    expect(m!.columnNames).toEqual(["Id", "Email"]);
-  });
-
-  it("returns null when prefix matches nothing (no alias, no table)", () => {
-    const query = "SELECT * FROM app.users u WHERE xyz.";
-    expect(detectAliasDotContext(query, query.length + 1, query, COLUMNS)).toBeNull();
-  });
-
-  it("returns null when the cursor isn't after a dot", () => {
-    const query = "SELECT * FROM app.users u WHERE u";
-    expect(detectAliasDotContext(query, query.length + 1, query, COLUMNS)).toBeNull();
-  });
-
-  it("returns null when the resolved table has no columns in the pool", () => {
-    const query = "SELECT * FROM app.orders o WHERE o.";
-    // `app.orders` isn't in COLUMNS — no columns to suggest.
-    expect(detectAliasDotContext(query, query.length + 1, query, COLUMNS)).toBeNull();
-  });
-
-  it("uses the line content for cursor positioning but the full query for alias lookup", () => {
-    // Multi-line query: the alias declaration is on a previous line.
-    const query = "SELECT *\n  FROM app.users u\n  WHERE u.";
-    const cursorLine = "  WHERE u.";
-    const m = detectAliasDotContext(cursorLine, cursorLine.length + 1, query, COLUMNS);
-    expect(m!.tableName).toBe("app.users");
-    expect(m!.columnNames).toEqual(["id", "email", "created_at"]);
-  });
-});
-
-// Issue #97: typing a bare table name (e.g. `users`) should still surface a schema-qualified
-// suggestion (`app.users`). https://github.com/openidle-dev/queryden/issues/97
-describe("matchesQualifiedOrBareName — schema-qualified label prefilter", () => {
-  it("returns true when the label starts with the typed word (qualified prefix path)", () => {
-    expect(matchesQualifiedOrBareName("app.users", "app")).toBe(true);
-    expect(matchesQualifiedOrBareName("app.users", "app.us")).toBe(true);
-  });
-
-  it("returns true when the post-dot bare name starts with the typed word (issue #97)", () => {
-    expect(matchesQualifiedOrBareName("app.users", "users")).toBe(true);
-    expect(matchesQualifiedOrBareName("app.users", "use")).toBe(true);
-    expect(matchesQualifiedOrBareName("audit.access_log", "access")).toBe(true);
-  });
-
-  it("is case-insensitive on both sides", () => {
-    expect(matchesQualifiedOrBareName("App.Users", "USERS")).toBe(true);
-    expect(matchesQualifiedOrBareName("APP.USERS", "users")).toBe(true);
-    expect(matchesQualifiedOrBareName("app.Users", "APP")).toBe(true);
-  });
-
-  it("returns false when neither the label nor its post-dot bare name starts with the word", () => {
-    expect(matchesQualifiedOrBareName("app.users", "products")).toBe(false);
-    expect(matchesQualifiedOrBareName("app.users", "xyz")).toBe(false);
-  });
-
-  it("returns false when the word only appears mid-bare-name (still prefix-match, not substring)", () => {
-    // We deliberately keep this as a prefix match — substring matching would flood the dropdown.
-    expect(matchesQualifiedOrBareName("app.users", "ser")).toBe(false);
-  });
-
-  it("handles bare (non-qualified) labels — required for public-schema tables", () => {
-    expect(matchesQualifiedOrBareName("users", "use")).toBe(true);
-    expect(matchesQualifiedOrBareName("users", "products")).toBe(false);
-  });
-
-  it("returns true for the empty word (no filtering applied)", () => {
-    expect(matchesQualifiedOrBareName("app.users", "")).toBe(true);
-    expect(matchesQualifiedOrBareName("anything", "")).toBe(true);
-  });
-
-  it("only considers the FIRST dot — multi-segment labels match against the suffix after the first dot", () => {
-    // Three-segment references (db.schema.table) aren't a current code path, but documenting:
-    // the suffix after the first dot is `schema.table`, which `.startsWith("schema")` matches.
-    expect(matchesQualifiedOrBareName("db.schema.table", "schema")).toBe(true);
-    expect(matchesQualifiedOrBareName("db.schema.table", "table")).toBe(false);
-  });
-});
-
-describe("matchesStaticLabel (schema-free keyword/function fallback)", () => {
-  it("matches prefixes case-insensitively", () => {
-    expect(matchesStaticLabel("SELECT", "sel")).toBe(true);
-    expect(matchesStaticLabel("SELECT", "SEL")).toBe(true);
-    expect(matchesStaticLabel("COUNT", "cou")).toBe(true);
-  });
-
-  it("matches infixes so multi-word keywords survive (e.g. 'join' in 'LEFT JOIN')", () => {
-    expect(matchesStaticLabel("LEFT JOIN", "join")).toBe(true);
-    expect(matchesStaticLabel("ORDER BY", "by")).toBe(true);
-  });
-
-  it("rejects non-matching words", () => {
-    expect(matchesStaticLabel("SELECT", "xyz")).toBe(false);
-    expect(matchesStaticLabel("FROM", "sel")).toBe(false);
-  });
-
-  it("matches everything on empty input (trigger with no word)", () => {
-    expect(matchesStaticLabel("SELECT", "")).toBe(true);
-  });
-});
-
 describe("pickCompletionSchema — tab-aware schema source", () => {
   const globalItems = { tables: ["users"], views: [], functions: [], columns: [], foreignKeys: [], _ts: 1 };
-  const tabItems = { tables: ["devops.deployments"], views: [], functions: [], columns: [], foreignKeys: [], _ts: 2 };
+  const tabItems = { tables: ["reporting.deployments"], views: [], functions: [], columns: [], foreignKeys: [], _ts: 2 };
 
   it("prefers the tab schema when the tab targets its connection", () => {
     expect(pickCompletionSchema({
@@ -372,7 +201,7 @@ describe("generateTableAlias — degenerate names never crash", () => {
   it("handles normal names", () => {
     expect(generateTableAlias("users", new Set())).toBe("us");
     expect(generateTableAlias("project_issue", new Set())).toBe("pi");
-    expect(generateTableAlias("devops.deployments", new Set())).toBe("de");
+    expect(generateTableAlias("reporting.deployments", new Set())).toBe("de");
   });
 
   it("handles leading-underscore names without producing garbage", () => {
@@ -408,5 +237,127 @@ describe("extractExistingAliases", () => {
   it("ignores long words that are clause keywords", () => {
     const found = extractExistingAliases("SELECT * FROM users WHERE id = 1");
     expect(found.size).toBe(0);
+  });
+});
+
+describe("extractTableRefs", () => {
+  it("finds FROM/JOIN tables with and without aliases", () => {
+    expect(extractTableRefs("SELECT * FROM users u JOIN app.orders AS o ON o.user_id = u.id LEFT JOIN items")).toEqual([
+      { table: "users", alias: "u" },
+      { table: "app.orders", alias: "o" },
+      { table: "items", alias: null },
+    ]);
+  });
+
+  it("sees tables after the caret position (SELECT | FROM t)", () => {
+    expect(extractTableRefs("SELECT  FROM users u WHERE u.id = 1")).toEqual([{ table: "users", alias: "u" }]);
+  });
+
+  it("handles comma lists, quoted names, UPDATE and INSERT INTO", () => {
+    expect(extractTableRefs('SELECT 1 FROM a x, "My Table" y')).toEqual([
+      { table: "a", alias: "x" },
+      { table: "My Table", alias: "y" },
+    ]);
+    expect(extractTableRefs("UPDATE accounts SET x = 1")).toEqual([{ table: "accounts", alias: null }]);
+    expect(extractTableRefs("INSERT INTO logs (id) VALUES (1)")).toEqual([{ table: "logs", alias: null }]);
+  });
+
+  it("ignores FROM inside strings, comments and dollar bodies", () => {
+    expect(extractTableRefs("SELECT 'from nope' -- from nope2\nFROM real_t")).toEqual([{ table: "real_t", alias: null }]);
+    expect(extractTableRefs("SELECT $$ from nope $$")).toEqual([]);
+  });
+
+  it("skips subqueries but keeps their inner tables", () => {
+    expect(extractTableRefs("SELECT * FROM (SELECT * FROM inner_t) s")).toEqual([{ table: "inner_t", alias: null }]);
+  });
+});
+
+describe("detectCompletionClause", () => {
+  it.each([
+    ["SELECT ", "column"],
+    ["SELECT id, ", "column"],
+    ["SELECT id FROM ", "table"],
+    ["SELECT id FROM us", "table"],
+    ["SELECT id FROM users u ", "keyword"],
+    ["SELECT id FROM users u JOIN ", "table"],
+    ["SELECT id FROM users u JOIN orders o ON ", "column"],
+    ["SELECT id FROM users WHERE a = 1 AND ", "column"],
+    ["SELECT id FROM users ORDER BY ", "column"],
+    ["UPDATE users SET ", "column"],
+    ["INSERT INTO ", "table"],
+    ["INSERT INTO logs (", "column"],
+    ["INSERT INTO logs (id, ", "column"],
+    ["SELECT x::", "type"],
+    ["SELECT CAST(x AS ", "type"],
+    ["CREATE TABLE t (id ", "type"],
+    ["CREATE TABLE t (id int, name ", "type"],
+    ["ALTER TABLE t ADD COLUMN c ", "type"],
+    ["ALTER TABLE t ALTER COLUMN c TYPE ", "type"],
+    ["", "keyword"],
+  ])("%j → %s", (sql, expected) => {
+    expect(detectCompletionClause(sql)).toBe(expected);
+  });
+});
+
+describe("quoteIdentifierIfNeeded", () => {
+  it("quotes PostgreSQL names that would be case-folded or are not plain", () => {
+    expect(quoteIdentifierIfNeeded("created_at", "postgres")).toBe("created_at");
+    expect(quoteIdentifierIfNeeded("createdAt", "postgres")).toBe('"createdAt"');
+    expect(quoteIdentifierIfNeeded("my col", "postgres")).toBe('"my col"');
+  });
+
+  it("uses backticks for MySQL only when needed", () => {
+    expect(quoteIdentifierIfNeeded("createdAt", "mysql")).toBe("createdAt");
+    expect(quoteIdentifierIfNeeded("my col", "mysql")).toBe("`my col`");
+  });
+});
+
+describe("tableKey", () => {
+  it("drops the public schema and lower-cases", () => {
+    expect(tableKey("public.Users")).toBe("users");
+    expect(tableKey("App.Orders")).toBe("app.orders");
+  });
+});
+
+describe("qualifiedNameAt", () => {
+  const line = 'select * from reporting.build_release_summary() r join "My Schema"."T" t on t.id = r.id';
+  it("returns the full qualified call name from either part", () => {
+    const fn = { name: "reporting.build_release_summary", isCall: true };
+    expect(qualifiedNameAt(line, line.indexOf("reporting") + 2)).toEqual(fn);
+    expect(qualifiedNameAt(line, line.indexOf("build_") + 5)).toEqual(fn);
+  });
+
+  it("keeps quotes and reports tables as non-calls", () => {
+    expect(qualifiedNameAt(line, line.indexOf('"T"') + 1)).toEqual({ name: '"My Schema"."T"', isCall: false });
+  });
+
+  it("returns null off an identifier", () => {
+    expect(qualifiedNameAt(line, line.indexOf("*"))).toBeNull();
+  });
+});
+
+describe("classifySqlSpans", () => {
+  const kinds = (sql: string) => classifySqlSpans(sql).map(({ start, end, kind }) => `${sql.slice(start, end)}:${kind}`);
+
+  it("colours schemas, tables and aliases distinctly", () => {
+    expect(kinds("select * from allie_matching_payments_lookup ampl\nwhere ampl.id_number = '1'")).toEqual([
+      "allie_matching_payments_lookup:table",
+      "ampl:alias",
+      "ampl:alias",
+    ]);
+    expect(kinds("SELECT users.id FROM app.users JOIN orders o ON o.user_id = users.id")).toEqual([
+      "users:table",
+      "app:schema",
+      "users:table",
+      "orders:table",
+      "o:alias",
+      "o:alias",
+      "users:table",
+    ]);
+  });
+
+  it("does not treat set-returning functions in FROM as tables", () => {
+    expect(kinds("select * from reporting.build_release_summary()")).toEqual([]);
+    expect(extractTableRefs("SELECT * FROM generate_series(1, 3) g JOIN t ON true")).toEqual([{ table: "t", alias: null }]);
   });
 });

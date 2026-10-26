@@ -23,18 +23,26 @@ pub(crate) fn to_json(v: MySqlValueRef) -> Result<JsonValue, Error> {
         }
         "FLOAT" => {
             if let Ok(v) = ValueRef::to_owned(&v).try_decode::<f32>() {
-                JsonValue::from(v)
+                // Through the shortest f32 text, so 0.1f32 is 0.1, not 0.10000000149011612.
+                super::exact_number_or_string(&v.to_string())
             } else {
                 JsonValue::Null
             }
         }
         "DOUBLE" => {
             if let Ok(v) = ValueRef::to_owned(&v).try_decode::<f64>() {
-                JsonValue::from(v)
+                super::float_to_json(v)
             } else {
                 JsonValue::Null
             }
         }
+        // DECIMAL travels as text in both protocols. It was missing here, so
+        // any result containing one — SUM(), AVG(), `SELECT 1.5`, every
+        // price column — failed the whole query as "unsupported datatype".
+        "DECIMAL" => match ValueRef::to_owned(&v).try_decode_unchecked::<String>() {
+            Ok(text) => super::exact_number_or_string(&text),
+            Err(_) => JsonValue::Null,
+        },
         "TINYINT" | "SMALLINT" | "INT" | "MEDIUMINT" | "BIGINT" => {
             if let Ok(v) = ValueRef::to_owned(&v).try_decode::<i64>() {
                 super::int64_to_json(v)
@@ -86,15 +94,28 @@ pub(crate) fn to_json(v: MySqlValueRef) -> Result<JsonValue, Error> {
             }
         }
         "JSON" => ValueRef::to_owned(&v).try_decode().unwrap_or_default(),
-        "TINIYBLOB" | "MEDIUMBLOB" | "BLOB" | "LONGBLOB" => {
-            if let Ok(v) = ValueRef::to_owned(&v).try_decode::<Vec<u8>>() {
-                JsonValue::Array(v.into_iter().map(|n| JsonValue::Number(n.into())).collect())
-            } else {
-                JsonValue::Null
+        "TINYBLOB" | "MEDIUMBLOB" | "BLOB" | "LONGBLOB" | "BINARY" | "VARBINARY" | "GEOMETRY" => {
+            match ValueRef::to_owned(&v).try_decode_unchecked::<Vec<u8>>() {
+                Ok(bytes) => super::bytes_to_json(&bytes),
+                Err(_) => JsonValue::Null,
             }
         }
+        // BIT(n): big-endian bytes; shown as the integer MySQL clients print.
+        "BIT" => match ValueRef::to_owned(&v).try_decode_unchecked::<Vec<u8>>() {
+            Ok(bytes) if bytes.len() <= 8 => super::uint64_to_json(bytes.iter().fold(0u64, |acc, b| (acc << 8) | *b as u64)),
+            Ok(bytes) => super::bytes_to_json(&bytes),
+            Err(_) => JsonValue::Null,
+        },
         "NULL" => JsonValue::Null,
-        _ => return Err(Error::UnsupportedDatatype(v.type_info().name().to_string())),
+        // SET and anything new: show the server's text rather than failing
+        // the entire result set over one column.
+        _ => match ValueRef::to_owned(&v).try_decode_unchecked::<String>() {
+            Ok(text) => JsonValue::String(text),
+            Err(_) => match ValueRef::to_owned(&v).try_decode_unchecked::<Vec<u8>>() {
+                Ok(bytes) => super::bytes_to_json(&bytes),
+                Err(_) => JsonValue::Null,
+            },
+        },
     };
 
     Ok(res)

@@ -6,15 +6,19 @@
  * as you type commas. Trigger chars are `(` and `,` (plus Ctrl+Shift+Space).
  *
  * Argument lists come from the live catalog, cached per connection+database:
- *   - PostgreSQL / CockroachDB / Supabase: `pg_get_function_arguments(oid)`
- *     (overloads surface as multiple signatures),
- *   - MySQL / MariaDB: `information_schema.PARAMETERS`,
- *   - SQLite / others: no stored routines — no hints.
+ *   - PostgreSQL / CockroachDB / Supabase: `pg_proc` — user functions AND
+ *     builtins visible on the search_path, with return type and the
+ *     function's comment (overloads surface as multiple signatures),
+ *   - MySQL / MariaDB: `information_schema.PARAMETERS` for stored routines,
+ *   - everything else, and any engine while disconnected: the static
+ *     builtin catalog in `sqlBuiltins.ts`.
  *
  * The backward paren scan is quote-aware for `'...'` / `"..."` but
  * deliberately not dollar-quote-aware: signature help triggers on the edited
  * line while typing a call, where dollar bodies essentially never appear.
  */
+
+import { builtinLabel, dialectForDbType, findBuiltin } from "./sqlBuiltins";
 
 export interface SignatureParameter {
   label: string;
@@ -22,9 +26,12 @@ export interface SignatureParameter {
 }
 
 export interface FunctionSignature {
-  /** e.g. `public.my_func(a integer, b text DEFAULT 'x')` */
+  /** e.g. `public.my_func(a integer, b text DEFAULT 'x') → integer` */
   label: string;
   parameters: SignatureParameter[];
+  documentation?: string;
+  /** From the static builtin catalog rather than the server. */
+  builtin?: boolean;
 }
 
 export interface CallTarget {
@@ -261,29 +268,44 @@ export async function fetchFunctionSignatures(
   let signatures: FunctionSignature[] = [];
   try {
     if (["postgres", "supabase", "cockroach"].includes(type)) {
+      // Unqualified names resolve like the server would: anything visible on
+      // the search_path (pg_catalog builtins included), plus user functions
+      // in other schemas so hints still work before a `SET search_path`.
       const params: unknown[] = [opts.name];
       let sql =
         "SELECT n.nspname AS schema, p.proname AS name, " +
-        "pg_get_function_arguments(p.oid) AS args " +
+        "pg_get_function_arguments(p.oid) AS args, " +
+        "pg_get_function_result(p.oid) AS result, " +
+        "obj_description(p.oid, 'pg_proc') AS doc " +
         "FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace " +
-        "WHERE p.proname = $1 " +
-        "AND n.nspname NOT IN ('pg_catalog', 'information_schema')";
+        "WHERE p.proname = $1 ";
       if (opts.schema) {
-        sql += " AND n.nspname = $2";
+        sql += "AND n.nspname = $2 ";
         params.push(opts.schema);
+      } else {
+        sql +=
+          "AND (pg_function_is_visible(p.oid) " +
+          "OR n.nspname NOT IN ('pg_catalog', 'information_schema')) ";
       }
-      sql += " ORDER BY (n.nspname = 'public') DESC, n.nspname, p.oid LIMIT 10";
-      const rows = (await db.select(sql, params)) as Array<{ schema: string; name: string; args: string }>;
+      sql += "ORDER BY pg_function_is_visible(p.oid) DESC, p.pronargs, p.oid LIMIT 20";
+      const rows = (await db.select(sql, params)) as Array<{
+        schema: string;
+        name: string;
+        args: string | null;
+        result: string | null;
+        doc: string | null;
+      }>;
       signatures = rows.map((r) => {
-        const qualified = r.schema === "public" && !opts.schema ? r.name : `${r.schema}.${r.name}`;
+        const showSchema = !!opts.schema || !["public", "pg_catalog"].includes(r.schema);
+        const qualified = showSchema ? `${r.schema}.${r.name}` : r.name;
         const paramsList = splitTopLevelArgs(r.args || "").map((p) => p.trim()).filter(Boolean);
         return {
-          label: `${qualified}(${r.args || ""})`,
+          label: `${qualified}(${r.args || ""})${r.result ? ` → ${r.result}` : ""}`,
           parameters: paramsList.map((p) => ({ label: p })),
+          documentation: r.doc || undefined,
         };
       });
-    } else if (["mysql", "mariadb"].includes(type)) {
-      if (!opts.schema && !opts.database) return [];
+    } else if (["mysql", "mariadb"].includes(type) && (opts.schema || opts.database)) {
       const schema = opts.schema || opts.database;
       const rows = (await db.select(
         "SELECT PARAMETER_MODE AS mode, PARAMETER_NAME AS name, DATA_TYPE AS dtype, ORDINAL_POSITION AS pos " +
@@ -291,24 +313,71 @@ export async function fetchFunctionSignatures(
           "ORDER BY ORDINAL_POSITION",
         [schema, opts.name],
       )) as Array<{ mode: string | null; name: string | null; dtype: string; pos: number }>;
+      // Position 0 is a stored function's RETURNS clause.
+      const returns = rows.find((r) => r.pos === 0)?.dtype;
       const paramsList = rows
         .filter((r) => r.pos !== 0 && r.name)
         .map((r) => `${r.mode && r.mode !== "IN" ? `${r.mode} ` : ""}${r.name} ${r.dtype}`);
-      if (paramsList.length > 0 || rows.length > 0) {
+      if (rows.length > 0) {
         signatures = [
           {
-            label: `${opts.name}(${paramsList.join(", ")})`,
+            label: `${opts.name}(${paramsList.join(", ")})${returns ? ` → ${returns}` : ""}`,
             parameters: paramsList.map((p) => ({ label: p })),
           },
         ];
       }
     }
   } catch {
-    return [];
+    // Catalog unavailable (permissions, CockroachDB gaps): builtins still help.
+    return builtinSignatures(type, opts.name);
   }
 
+  if (signatures.length === 0 && !opts.schema) signatures = builtinSignatures(type, opts.name);
   sigCache.set(key, { ts: Date.now(), signatures });
   return signatures;
+}
+
+/** Signatures from the static builtin catalog for an engine id. */
+export function builtinSignatures(dbType: string, name: string): FunctionSignature[] {
+  return findBuiltin(dialectForDbType(dbType), name).map((f) => ({
+    label: builtinLabel(f),
+    parameters: f.params.map((p) => ({ label: p })),
+    documentation: f.doc,
+    builtin: true,
+  }));
+}
+
+/**
+ * Overload to highlight: the first one that has a slot for the argument
+ * being typed (variadic ones always do). Falls back to the first overload.
+ */
+export function pickActiveSignature(signatures: FunctionSignature[], activeParameter: number): number {
+  const idx = signatures.findIndex((s) => {
+    const last = s.parameters[s.parameters.length - 1]?.label ?? "";
+    const variadic = last === "..." || /^VARIADIC\b/i.test(last);
+    return variadic || s.parameters.length > activeParameter;
+  });
+  return idx === -1 ? 0 : idx;
+}
+
+/**
+ * Monaco parameter labels as [start, end) offsets into the signature label.
+ * Plain string labels are located with `indexOf`, which highlights the
+ * wrong slot when types repeat (`substr(text, integer, integer)`).
+ */
+export function parameterOffsets(sig: FunctionSignature): Array<[number, number]> {
+  const offsets: Array<[number, number]> = [];
+  let from = sig.label.indexOf("(") + 1;
+  for (const p of sig.parameters) {
+    const start = sig.label.indexOf(p.label, from);
+    if (start === -1) {
+      offsets.push([0, 0]);
+      continue;
+    }
+    offsets.push([start, start + p.label.length]);
+    from = start + p.label.length;
+  }
+  return offsets;
 }
 
 export interface SignatureConnCtx {
@@ -416,16 +485,240 @@ export function getSignaturePrefix(model: any, position: any): string {
   }
 }
 
+/**
+ * Signatures for a parsed call target (`["schema", "fn"]` or `["fn"]`):
+ * the live catalog when connected, the builtin catalog otherwise.
+ */
+export async function lookupSignatures(ctx: SignatureConnCtx | null, parts: string[]): Promise<FunctionSignature[]> {
+  const name = parts[parts.length - 1];
+  const schema = parts.length > 1 ? parts[parts.length - 2] : undefined;
+  if (!ctx?.db || !ctx.connectionId) {
+    return schema ? [] : builtinSignatures(ctx?.dbType ?? "", name);
+  }
+  return fetchFunctionSignatures(ctx.db, ctx.dbType, {
+    connectionId: ctx.connectionId,
+    database: ctx.database,
+    schema,
+    name,
+  });
+}
+
+// ─── Inline parameter-name hints ─────────────────────────────────────────────
+
+export interface CallSite {
+  /** Name parts as written, unquoted and folded like `parseCallTarget`. */
+  parts: string[];
+  /** Each top-level argument's start offset and trimmed text. */
+  args: Array<{ offset: number; text: string }>;
+}
+
+// `(` after these words is not a call: column lists, value lists, subqueries.
+const NOT_A_CALL_AFTER = new Set(["INTO", "TABLE", "REFERENCES", "USING", "VALUES", "IN", "KEY", "INDEX", "EXISTS", "ON", "AS", "OVER", "FILTER", "WITHIN"]);
+const MULTIWORD_TYPES = /^(double precision|character varying|bit varying|timestamp with(out)? time zone|time with(out)? time zone)(\s|\(|$)/i;
+
+/** Every function call in `text` with its argument positions. */
+export function findCallSites(text: string): CallSite[] {
+  const sites: CallSite[] = [];
+  const re = /((?:"[^"]+"|[A-Za-z_][\w$]*)(?:\s*\.\s*(?:"[^"]+"|[A-Za-z_][\w$]*))*)\s*\(/g;
+  const code = maskLiteralsAndComments(text);
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(code)) !== null) {
+    const nameText = text.slice(m.index, m.index + m[1].length);
+    const parts = splitQualifiedRaw(nameText).map((raw) => {
+      const t = raw.trim();
+      return t.startsWith('"') && t.endsWith('"') ? t.slice(1, -1).replace(/""/g, '"') : t.toLowerCase();
+    });
+    const last = parts[parts.length - 1].toUpperCase();
+    if (parts.length === 1 && NON_CALL_KEYWORDS.has(last)) continue;
+    const prevWord = /([A-Za-z_]+)\s*$/.exec(code.slice(0, m.index))?.[1]?.toUpperCase();
+    if (prevWord && NOT_A_CALL_AFTER.has(prevWord)) continue;
+
+    // Walk the argument list on the masked text (strings/comments blanked).
+    const open = m.index + m[0].length - 1;
+    let depth = 0;
+    let argStart = open + 1;
+    const args: CallSite["args"] = [];
+    let close = -1;
+    for (let i = open; i < code.length; i++) {
+      const c = code[i];
+      if (c === "(") depth++;
+      else if (c === ")") {
+        depth--;
+        if (depth === 0) {
+          close = i;
+          break;
+        }
+      } else if (c === "," && depth === 1) {
+        args.push({ offset: argStart, text: text.slice(argStart, i) });
+        argStart = i + 1;
+      } else if (c === ";" && depth >= 1) break;
+    }
+    if (close === -1) continue;
+    if (text.slice(argStart, close).trim() || args.length > 0) args.push({ offset: argStart, text: text.slice(argStart, close) });
+    sites.push({
+      parts,
+      args: args.map((a) => {
+        const lead = a.text.length - a.text.trimStart().length;
+        return { offset: a.offset + lead, text: a.text.trim() };
+      }),
+    });
+  }
+  return sites;
+}
+
+/** Blank string literals, quoted-identifier-free comments and dollar bodies, same length. */
+function maskLiteralsAndComments(text: string): string {
+  const out = text.split("");
+  const blank = (from: number, to: number) => {
+    for (let k = from; k < to; k++) if (out[k] !== "\n") out[k] = " ";
+  };
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === "'") {
+      const start = i++;
+      while (i < text.length) {
+        if (text[i] === "'" && text[i + 1] === "'") { i += 2; continue; }
+        if (text[i] === "'") { i++; break; }
+        i++;
+      }
+      blank(start + 1, i - 1);
+      continue;
+    }
+    if (c === "-" && text[i + 1] === "-") {
+      const start = i;
+      while (i < text.length && text[i] !== "\n") i++;
+      blank(start, i);
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "*") {
+      const start = i;
+      const close = text.indexOf("*/", i + 2);
+      i = close === -1 ? text.length : close + 2;
+      blank(start, i);
+      continue;
+    }
+    if (c === "$") {
+      const m = SIG_DOLLAR_TAG_RE.exec(text.slice(i));
+      if (m) {
+        const start = i;
+        const close = text.indexOf(m[0], i + m[0].length);
+        i = close === -1 ? text.length : close + m[0].length;
+        blank(start, i);
+        continue;
+      }
+    }
+    i++;
+  }
+  return out.join("");
+}
+
+/**
+ * The parameter name in a catalog argument like `p_name text`,
+ * `INOUT total numeric DEFAULT 0` or `"Weird Name" int`; null when the
+ * argument is unnamed (`integer`, `double precision`).
+ */
+export function parameterName(label: string): string | null {
+  const rest = label.trim().replace(/^(IN|OUT|INOUT|VARIADIC)\s+/i, "").replace(/\s+DEFAULT\s[\s\S]*$/i, "");
+  if (MULTIWORD_TYPES.test(rest)) return null;
+  const m = /^("(?:[^"]|"")+"|[A-Za-z_][\w$]*)\s+\S/.exec(rest);
+  return m ? m[1] : null;
+}
+
+/** Plain column references (`name`, `u.name`) need no label — they say what they are. */
+function isPlainReference(arg: string): boolean {
+  return /^((?:"[^"]+"|[A-Za-z_][\w$]*)\.)*(?:"[^"]+"|[A-Za-z_][\w$]*)$/.test(arg) && !/^(null|true|false)$/i.test(arg);
+}
+
+export interface ParameterHint {
+  offset: number;
+  label: string;
+}
+
+/**
+ * Inline `name:` labels for calls to routines with named parameters (the
+ * server catalog only — builtins have positional parameters). Shown for
+ * literals and expressions, skipped for plain column references and for
+ * single-argument calls, like IntelliJ/DataGrip.
+ */
+export async function parameterHints(
+  text: string,
+  resolve: (parts: string[]) => Promise<FunctionSignature[]>,
+  maxCalls = 60,
+): Promise<ParameterHint[]> {
+  const hints: ParameterHint[] = [];
+  for (const site of findCallSites(text).slice(0, maxCalls)) {
+    if (site.args.length < 2) continue;
+    const sigs = (await resolve(site.parts)).filter((s) => !s.builtin);
+    const sig =
+      sigs.find((s) => s.parameters.length === site.args.length) ??
+      sigs.find((s) => s.parameters.length > site.args.length);
+    if (!sig) continue;
+    site.args.forEach((arg, i) => {
+      const name = parameterName(sig.parameters[i]?.label ?? "");
+      if (!name || !arg.text || isPlainReference(arg.text)) return;
+      hints.push({ offset: arg.offset, label: `${name.replace(/^"|"$/g, "")}:` });
+    });
+  }
+  return hints;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let inlayDisposable: any = null;
+
+/** Register the inline parameter-name hint provider once (see `parameterHints`). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function registerParameterInlayHints(monaco: any, getConn: (model: any) => SignatureConnCtx): void {
+  if (inlayDisposable) return;
+  inlayDisposable = monaco.languages.registerInlayHintsProvider("sql", {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    provideInlayHints: async (model: any, range: any) => {
+      try {
+        const ctx = getConn(model);
+        if (!ctx?.db || !ctx.connectionId) return { hints: [], dispose() {} };
+        const text: string = model.getValue();
+        if (text.length > 200_000) return { hints: [], dispose() {} };
+        const startOffset = model.getOffsetAt({ lineNumber: range.startLineNumber, column: 1 });
+        const endOffset = model.getOffsetAt({ lineNumber: range.endLineNumber, column: model.getLineMaxColumn(range.endLineNumber) });
+        const hints = await parameterHints(text, (parts) => lookupSignatures(ctx, parts));
+        return {
+          hints: hints
+            .filter((h) => h.offset >= startOffset && h.offset <= endOffset)
+            .map((h) => ({
+              position: model.getPositionAt(h.offset),
+              label: h.label,
+              kind: monaco.languages.InlayHintKind.Parameter,
+              paddingRight: true,
+            })),
+          dispose() {},
+        };
+      } catch {
+        return { hints: [], dispose() {} };
+      }
+    },
+  });
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let sigHelpDisposable: any = null;
 
+// Dev hot reload: drop this module's providers so the replacement registers
+// fresh ones instead of stacking a second set.
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    inlayDisposable?.dispose();
+    sigHelpDisposable?.dispose();
+  });
+}
+
 /**
  * Register the global `sql` signature-help provider once (same pattern as
- * the completion/hover providers). `getConn` is read lazily per keystroke so
- * connection switches need no re-registration.
+ * the completion/hover providers). `getConn(model)` is read per keystroke,
+ * so each editor resolves its own tab's connection and switches need no
+ * re-registration.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function registerSignatureHelp(monaco: any, getConn: () => SignatureConnCtx): void {
+export function registerSignatureHelp(monaco: any, getConn: (model: any) => SignatureConnCtx): void {
   if (sigHelpDisposable) return;
   sigHelpDisposable = monaco.languages.registerSignatureHelpProvider("sql", {
     signatureHelpTriggerCharacters: ["(", ","],
@@ -433,29 +726,24 @@ export function registerSignatureHelp(monaco: any, getConn: () => SignatureConnC
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     provideSignatureHelp: async (model: any, position: any) => {
       try {
-        const ctx = getConn();
-        if (!ctx?.db || !ctx.connectionId) return null;
+        const ctx = getConn(model);
         const text = getSignaturePrefix(model, position);
         const target = parseCallTarget(text);
         if (!target) return null;
-        const parts = target.parts;
-        const name = parts[parts.length - 1];
-        const schema = parts.length > 1 ? parts[parts.length - 2] : undefined;
-        const signatures = await fetchFunctionSignatures(ctx.db, ctx.dbType, {
-          connectionId: ctx.connectionId,
-          database: ctx.database,
-          schema,
-          name,
-        });
+        const signatures = await lookupSignatures(ctx, target.parts);
         if (signatures.length === 0) return null;
         const activeParameter = countActiveParameter(text.slice(target.parenIndex + 1));
         return {
           value: {
-            signatures: signatures.map((s) => ({
-              label: s.label,
-              parameters: s.parameters.map((p) => ({ label: p.label })),
-            })),
-            activeSignature: 0,
+            signatures: signatures.map((s) => {
+              const offsets = parameterOffsets(s);
+              return {
+                label: s.label,
+                documentation: s.documentation,
+                parameters: s.parameters.map((_, i) => ({ label: offsets[i] })),
+              };
+            }),
+            activeSignature: pickActiveSignature(signatures, activeParameter),
             activeParameter,
           },
           dispose() {},

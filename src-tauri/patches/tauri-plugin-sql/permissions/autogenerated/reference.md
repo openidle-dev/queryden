@@ -8,13 +8,17 @@ database operations are available from the sql plugin.
 ### Granted Permissions
 
 All reading related operations are enabled.
-Also allows to load or close a connection.
+Also allows to load or close a connection, and to run, cancel and end
+editor sessions (QueryDen's query console).
 
 #### This default permission set includes the following:
 
 - `allow-close`
 - `allow-load`
 - `allow-select`
+- `allow-run`
+- `allow-cancel`
+- `allow-end-session`
 
 ## Permission Table
 
@@ -24,6 +28,32 @@ Also allows to load or close a connection.
 <th>Description</th>
 </tr>
 
+
+<tr>
+<td>
+
+`sql:allow-cancel`
+
+</td>
+<td>
+
+Enables the cancel command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sql:deny-cancel`
+
+</td>
+<td>
+
+Denies the cancel command without any pre-configured scope.
+
+</td>
+</tr>
 
 <tr>
 <td>
@@ -47,6 +77,32 @@ Enables the close command without any pre-configured scope.
 <td>
 
 Denies the close command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sql:allow-end-session`
+
+</td>
+<td>
+
+Enables the end_session command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sql:deny-end-session`
+
+</td>
+<td>
+
+Denies the end_session command without any pre-configured scope.
 
 </td>
 </tr>
@@ -99,6 +155,32 @@ Enables the load command without any pre-configured scope.
 <td>
 
 Denies the load command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sql:allow-run`
+
+</td>
+<td>
+
+Enables the run command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sql:deny-run`
+
+</td>
+<td>
+
+Denies the run command without any pre-configured scope.
 
 </td>
 </tr>

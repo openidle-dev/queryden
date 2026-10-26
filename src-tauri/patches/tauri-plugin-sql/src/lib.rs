@@ -12,9 +12,11 @@
 mod commands;
 mod decode;
 mod error;
+mod session;
 mod wrapper;
 
 pub use error::Error;
+pub use session::{notice_capture_layer, ColumnInfo, ResultSet, RunOutput};
 pub use wrapper::DbPool;
 
 use futures_core::future::BoxFuture;
@@ -140,7 +142,10 @@ impl Builder {
                 commands::load,
                 commands::execute,
                 commands::select,
-                commands::close
+                commands::close,
+                commands::run,
+                commands::cancel,
+                commands::end_session
             ])
             .setup(|app, api| {
                 let config = api.config().clone().unwrap_or_default();
@@ -164,6 +169,7 @@ impl Builder {
                     drop(lock);
 
                     app.manage(instances);
+                    app.manage(session::Sessions::default());
                     app.manage(Migrations(Mutex::new(
                         self.migrations.take().unwrap_or_default(),
                     )));
