@@ -83,6 +83,10 @@ export interface DBSettings {
   enabledExportFormats: string[];
   /** Excel export was enabled once for users who saved settings before it existed. */
   excelExportOffered: boolean;
+
+  // Multi-Query Cluster — restored the next time the dialog opens
+  multiQueryTargets: { connectionId: string; database: string }[];
+  multiQueryDraft: string;
   
   // Actions
   setSetting: <K extends keyof DBSettings>(key: K, value: DBSettings[K]) => void;
@@ -157,6 +161,10 @@ const defaultSettings: Omit<DBSettings, "setSetting" | "resetSettings"> = {
   // Export Formats
   enabledExportFormats: ["csv", "excel", "json", "xml", "html", "sql"],
   excelExportOffered: true,
+
+  // Multi-Query Cluster
+  multiQueryTargets: [],
+  multiQueryDraft: "",
 
   // AI Assistant
   aiProvider: "openai",
