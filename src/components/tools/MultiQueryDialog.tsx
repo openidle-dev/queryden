@@ -4,7 +4,10 @@ import { SavedQueryList } from "../explorer/SavedQueryList";
 import { toCsv, toHtml, toInsertStatements, toXml } from "../../utils/exportFormats";
 import { invokeCmd } from "../../lib/ipc";
 import { dialectForDbType } from "../editor/sqlBuiltins";
-import { useSettings } from "../../store/settingsStore";
+import { settingsReady, useSettings } from "../../store/settingsStore";
+import { useSavedQueries } from "../../store/savedQueryStore";
+import { useConfirmDialog } from "../ui/ConfirmDialog";
+import { isSaveShortcut, pruneMissingDatabases, restoreTargets, savedQueryConnectionId } from "../../utils/multiQueryTargets";
 import { save } from "@tauri-apps/plugin-dialog";
 import { QueryEditor } from "../editor/QueryEditor";
 import { useConnections } from "../../contexts/useConnections";
@@ -132,13 +135,65 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
     });
   }, [currentResult, sortCol, sortDir]);
 
+  // Selection and draft persist to settings only after the restore below has
+  // run, so the empty initial state never overwrites what was saved.
+  const [restored, setRestored] = useState(false);
+
   useEffect(() => {
-    if (isOpen) {
-      setSelectedTargets([]); setExpandedConnections(new Set()); setAvailableDatabases({}); setLoadingDatabases(new Set()); setResults([]); setQuery(""); setError(null); setShowMerged(false);
-      dbListRequestsRef.current.clear();
-      setSidebarTab("targets");
-    }
+    if (!isOpen) return;
+    let cancelled = false;
+    setRestored(false);
+    setSelectedTargets([]); setExpandedConnections(new Set()); setAvailableDatabases({}); setLoadingDatabases(new Set()); setResults([]); setQuery(""); setError(null); setShowMerged(false);
+    dbListRequestsRef.current.clear();
+    setSidebarTab("targets");
+
+    void (async () => {
+      await settingsReady;
+      if (cancelled) return;
+      const saved = useSettings.getState();
+      const targets = restoreTargets(saved.multiQueryTargets, connections.map(c => c.id));
+      setQuery(saved.multiQueryDraft ?? "");
+      setSelectedTargets(targets);
+      const targetConnIds = [...new Set(targets.map(t => t.connectionId))];
+      setExpandedConnections(new Set(targetConnIds));
+      setRestored(true);
+
+      // A failed fetch drops its ref entry, so only successfully listed connections prune targets.
+      const listed: Record<string, string[]> = {};
+      await Promise.all(targetConnIds.map(async id => {
+        const dbs = await fetchDatabases(id);
+        if (dbListRequestsRef.current.has(id)) listed[id] = dbs;
+      }));
+      if (!cancelled) setSelectedTargets(prev => pruneMissingDatabases(prev, listed));
+    })();
+    return () => { cancelled = true; };
+    // Restore once per open; connections/fetchDatabases changing mid-session must not reset the selection.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!restored) return;
+    useSettings.getState().setSetting("multiQueryTargets", selectedTargets);
+  }, [restored, selectedTargets]);
+
+  // Draft saves debounced while typing, then flushed on close so the last keystrokes aren't lost.
+  const latestDraftRef = useRef(query);
+  latestDraftRef.current = query;
+  useEffect(() => {
+    if (!restored) return;
+    const timer = setTimeout(() => {
+      if (useSettings.getState().multiQueryDraft !== query) useSettings.getState().setSetting("multiQueryDraft", query);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [restored, query]);
+  useEffect(() => {
+    if (!restored) return;
+    return () => {
+      if (useSettings.getState().multiQueryDraft !== latestDraftRef.current) {
+        useSettings.getState().setSetting("multiQueryDraft", latestDraftRef.current);
+      }
+    };
+  }, [restored]);
 
   // Sync scroll to search
   useEffect(() => {
@@ -344,6 +399,62 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
       return allSelected ? others : [...others, ...dbs.map(db => ({ connectionId: conn.id, database: db }))];
     });
   };
+
+  const confirmDialog = useConfirmDialog();
+  const { addQuery: addSavedQuery, updateQueryText, findByName } = useSavedQueries();
+  // Blocks a second save while the name dialog is open (button + Ctrl+S).
+  const savingRef = useRef(false);
+
+  const saveClusterQuery = async () => {
+    if (savingRef.current) return;
+    const queryToSave = query;
+    if (!queryToSave.trim()) {
+      setError("Query is empty — type a SQL statement before saving.");
+      return;
+    }
+    savingRef.current = true;
+    try {
+      // Single-connection selections save under that connection; mixed ones save as global.
+      const connectionId = savedQueryConnectionId(selectedTargets);
+      const conn = connections.find(c => c.id === connectionId);
+      const entered = await confirmDialog.dialog({
+        title: "Save Query",
+        message: `Save to your library${conn ? ` for ${conn.name}` : ""}. An existing query with the same name${conn ? " on this connection" : ""} is overwritten.`,
+        inputLabel: "Query Name",
+        inputDefaultValue: "Cluster Query",
+        confirmLabel: "Save",
+        cancelLabel: "Cancel",
+        type: "info",
+        requireInput: true,
+      });
+      const name = typeof entered === "string" ? entered.trim() : "";
+      if (!name) return;
+      const existing = findByName(name, connectionId);
+      if (existing) await updateQueryText(existing.id, queryToSave, "");
+      else await addSavedQuery({ name, query: queryToSave, database: "", connectionId });
+      flashToast(`Saved query: ${name}`);
+    } catch (e) {
+      setError(`Could not save query: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      savingRef.current = false;
+    }
+  };
+  const saveClusterQueryRef = useRef(saveClusterQuery);
+  saveClusterQueryRef.current = saveClusterQuery;
+
+  // Capture phase on window runs before MainContent's bubble-phase Ctrl+S,
+  // which would otherwise save the main editor tab behind this dialog.
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!isSaveShortcut(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      void saveClusterQueryRef.current();
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [isOpen]);
 
   const exportData = async (f: "csv" | "excel" | "json" | "xml" | "html" | "sql") => {
     if (!currentResult?.rows?.length) return;
@@ -581,8 +692,10 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
                                   }}
                                   onMouseLeave={() => setHoveredStatus(null)}
                                   onClick={(e) => {
+                                    // Without a result the indicator is the selection radio, so the click toggles the row.
+                                    if (!result) return;
                                     e.stopPropagation();
-                                    if (result) setStatusDetailModal(result);
+                                    setStatusDetailModal(result);
                                   }}
                                 >
                                   {status === 'running' ? (
@@ -638,17 +751,29 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
           <div className="flex-1 flex flex-col overflow-hidden bg-[var(--surface-base)]">
             <div className="p-4 flex flex-col gap-3 border-b border-[var(--neutral-6)] bg-[var(--surface-elevated)] shrink-0">
                <div className="h-40 relative rounded-xl border border-[var(--neutral-6)] overflow-hidden shadow-inner bg-[var(--surface-base)]"><QueryEditor value={query} onChange={setQuery} onRun={executeQuery} /></div>
-               <Button
-                 variant="primary"
-                 size="md"
-                 className="w-full"
-                 onClick={executeQuery}
-                 loading={isExecuting}
-                 disabled={!query.trim() || selectedTargets.length === 0}
-                 leftIcon={isExecuting ? undefined : <Play className="w-4 h-4 fill-current" />}
-               >
-                 {isExecuting ? `Executing SQL on ${selectedTargets.length} Nodes...` : `Execute SQL on ${selectedTargets.length} Nodes`}
-               </Button>
+               <div className="flex gap-2">
+                 <Button
+                   variant="primary"
+                   size="md"
+                   className="flex-1"
+                   onClick={executeQuery}
+                   loading={isExecuting}
+                   disabled={!query.trim() || selectedTargets.length === 0}
+                   leftIcon={isExecuting ? undefined : <Play className="w-4 h-4 fill-current" />}
+                 >
+                   {isExecuting ? `Executing SQL on ${selectedTargets.length} Nodes...` : `Execute SQL on ${selectedTargets.length} Nodes`}
+                 </Button>
+                 <Button
+                   variant="secondary"
+                   size="md"
+                   onClick={() => void saveClusterQuery()}
+                   disabled={!query.trim()}
+                   leftIcon={<Star className="w-4 h-4" />}
+                   title="Save to Saved Queries (Ctrl+S)"
+                 >
+                   Save
+                 </Button>
+               </div>
             </div>
             <div className="flex-1 flex flex-col overflow-hidden">
                {results.length > 0 ? (<>

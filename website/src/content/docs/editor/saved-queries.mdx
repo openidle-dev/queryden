@@ -3,7 +3,7 @@ title: Saved queries and Multi Query
 description: Keep a library of queries per connection, and run one query across many databases and servers at once.
 section: editor
 order: 80
-updated: 2026-10-26
+updated: 2026-11-16
 ---
 
 ## Saving a query
@@ -27,5 +27,9 @@ The **Multi-Query** toolbar button runs one query against many targets in a sing
 1. Pick targets: individual databases, whole connections, or **Select All** for every database of every connection.
 2. Write the query, or load one from the same **Saved Queries** list.
 3. Run. Targets execute in parallel (four at a time), each through its own SSH tunnel and credentials, and each result appears under its target with its status, row count and time.
+
+**Save** (or **Ctrl+S** while the dialog is open) adds the query to Saved Queries. If every target is on one connection, it is saved for that connection; otherwise it is saved for all connections. Saving under an existing name overwrites that query.
+
+Your targets and query draft are kept and restored the next time you open Multi Query. Targets on deleted connections or dropped databases are removed.
 
 Results can be [exported](/docs/editor/exporting-results) per target, including to Excel.
