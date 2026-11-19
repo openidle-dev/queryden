@@ -1,17 +1,35 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { X, Play, Loader2, AlertCircle, Check, Layers, ChevronDown, ChevronRight, Folder, Search, CheckCircle, Database, Clock, Table2, AlertTriangle, Info, Star, Download, FileCode, Globe, RefreshCw, Copy, Trash2, FileJson, Sheet } from "lucide-react";
+import { useState, useEffect, useCallback, useRef, useMemo, type SetStateAction, type ReactNode } from "react";
+import { X, Play, Loader2, AlertCircle, Layers, ChevronDown, ChevronRight, Folder, Search, CheckCircle, Database, Clock, Table2, AlertTriangle, Info, Star, Download, FileCode, Globe, RefreshCw, Copy, Trash2, FileJson, Sheet, Bookmark, BookmarkPlus, Pencil, Save, Server } from "lucide-react";
 import { SavedQueryList } from "../explorer/SavedQueryList";
+import { GroupCheckbox } from "./GroupCheckbox";
+import { NodeTemplateEditorDialog } from "./NodeTemplateEditorDialog";
 import { toCsv, toHtml, toInsertStatements, toXml } from "../../utils/exportFormats";
 import { invokeCmd } from "../../lib/ipc";
 import { dialectForDbType } from "../editor/sqlBuiltins";
 import { settingsReady, useSettings } from "../../store/settingsStore";
 import { useSavedQueries } from "../../store/savedQueryStore";
 import { useConfirmDialog } from "../ui/ConfirmDialog";
-import { isSaveShortcut, pruneMissingDatabases, restoreTargets, savedQueryConnectionId } from "../../utils/multiQueryTargets";
+import { isSaveShortcut, pruneMissingDatabases, restoreTargets, savedQueryConnectionId, type MultiQueryTarget } from "../../utils/multiQueryTargets";
+import {
+  editTemplate,
+  filterConnectionNodes,
+  groupCheckState,
+  groupNodesByDatabase,
+  isNodeGroupBy,
+  sanitizeTemplates,
+  templateMatch,
+  toggleTargetGroup,
+  upsertTemplate,
+  isTargetIn,
+  selectionAfterTemplateEdit,
+  type ConnectionNode,
+  type NodeGroupBy,
+  type GroupCheckState,
+  type NodeTemplate,
+} from "../../utils/multiQueryNodes";
 import { save } from "@tauri-apps/plugin-dialog";
 import { QueryEditor } from "../editor/QueryEditor";
 import { useConnections } from "../../contexts/useConnections";
-import { DatabaseConnection } from "../../contexts/ConnectionContext";
 import { GridView, GridViewRef } from "../ui/GridView";
 import { CompactSelection } from "@glideapps/glide-data-grid";
 import { Dialog } from "../ui/Dialog";
@@ -39,16 +57,40 @@ interface QueryResult {
   status?: 'running' | 'done' | 'error';
 }
 
-interface SelectedTarget {
-  connectionId: string;
-  database: string;
-}
+type SelectedTarget = MultiQueryTarget;
+type SidebarTab = "targets" | "saved";
+const GROUP_BY_LABELS: Record<NodeGroupBy, string> = { connection: "Server", database: "Database" };
 
 export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
   const { connections, ensureConnectionDb } = useConnections();
   const settings = useSettings();
-  const [sidebarTab, setSidebarTab] = useState<"targets" | "saved">("targets");
-  const [selectedTargets, setSelectedTargets] = useState<SelectedTarget[]>([]);
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>("targets");
+  const [nodeFilter, setNodeFilter] = useState("");
+  const [selectedOnly, setSelectedOnly] = useState(false);
+  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
+  // Template last used or saved; changing the selection afterwards marks it Modified.
+  const [currentTemplateId, setCurrentTemplateId] = useState<string | null>(null);
+  const [expandedDbGroups, setExpandedDbGroups] = useState<Set<string>>(new Set());
+  // Collapsed whenever the Nodes tab is shown; only a click on its header opens it.
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const groupBy: NodeGroupBy = isNodeGroupBy(settings.multiQueryGroupBy) ? settings.multiQueryGroupBy : "connection";
+  const templates = useMemo(() => sanitizeTemplates(settings.multiQueryNodeTemplates), [settings.multiQueryNodeTemplates]);
+  const [selectedTargets, commitSelectedTargets] = useState<SelectedTarget[]>([]);
+  // Every selection intent supersedes pending discovery, even before it commits.
+  const selectionOperation = useRef(0);
+  const applyingTemplate = useRef(false);
+  const [selectionPending, setSelectionPending] = useState(false);
+  const beginSelection = () => {
+    applyingTemplate.current = false;
+    setSelectionPending(false);
+    return ++selectionOperation.current;
+  };
+  const setSelectedTargets = (value: SetStateAction<SelectedTarget[]>) => {
+    beginSelection();
+    commitSelectedTargets(value);
+  };
+  const [collapsedConnections, setCollapsedConnections] = useState<Set<string>>(new Set());
+  const [collapsedDbGroups, setCollapsedDbGroups] = useState<Set<string>>(new Set());
   const [expandedConnections, setExpandedConnections] = useState<Set<string>>(new Set());
   const [availableDatabases, setAvailableDatabases] = useState<Record<string, string[]>>({});
   const [loadingDatabases, setLoadingDatabases] = useState<Set<string>>(new Set());
@@ -141,11 +183,14 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
 
   useEffect(() => {
     if (!isOpen) return;
+    setCollapsedConnections(new Set());
+    setCollapsedDbGroups(new Set());
     let cancelled = false;
     setRestored(false);
     setSelectedTargets([]); setExpandedConnections(new Set()); setAvailableDatabases({}); setLoadingDatabases(new Set()); setResults([]); setQuery(""); setError(null); setShowMerged(false);
-    dbListRequestsRef.current.clear();
+    dbListRequestsRef.current = new Map();
     setSidebarTab("targets");
+    setNodeFilter(""); setSelectedOnly(false); setEditingTemplateId(null); setCurrentTemplateId(null); setTemplatesOpen(false); setExpandedDbGroups(new Set());
 
     void (async () => {
       await settingsReady;
@@ -157,6 +202,7 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
       const targetConnIds = [...new Set(targets.map(t => t.connectionId))];
       setExpandedConnections(new Set(targetConnIds));
       setRestored(true);
+      const restoreOperation = selectionOperation.current;
 
       // A failed fetch drops its ref entry, so only successfully listed connections prune targets.
       const listed: Record<string, string[]> = {};
@@ -164,9 +210,9 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
         const dbs = await fetchDatabases(id);
         if (dbListRequestsRef.current.has(id)) listed[id] = dbs;
       }));
-      if (!cancelled) setSelectedTargets(prev => pruneMissingDatabases(prev, listed));
+      if (!cancelled && restoreOperation === selectionOperation.current) setSelectedTargets(prev => pruneMissingDatabases(prev, listed));
     })();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; selectionOperation.current++; applyingTemplate.current = false; };
     // Restore once per open; connections/fetchDatabases changing mid-session must not reset the selection.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
@@ -220,10 +266,16 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
     const conn = connections.find(c => c.id === connId);
     if (!conn) return Promise.resolve([]);
 
+    const operation = selectionOperation.current;
+    const requests = dbListRequestsRef.current;
     const request = (async () => {
       setLoadingDatabases(prev => new Set(prev).add(connId));
       try {
-        if (conn.type === "sqlite") return [conn.filepath || conn.database || "main"];
+        if (conn.type === "sqlite") {
+          const list = [conn.filepath || conn.database || "main"];
+          setAvailableDatabases(prev => ({ ...prev, [connId]: list }));
+          return list;
+        }
         const { db } = await ensureConnectionDb(conn.id, conn.database || undefined);
         let dbs: string[] = [];
         if (["postgres", "supabase", "cockroach"].includes(conn.type)) {
@@ -236,14 +288,14 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
             .filter(name => !["information_schema", "performance_schema", "mysql", "sys"].includes(name));
         }
         const list = dbs.length > 0 ? dbs : [conn.database].filter(Boolean);
-        setAvailableDatabases(prev => ({ ...prev, [connId]: list }));
+        if (requests === dbListRequestsRef.current) setAvailableDatabases(prev => ({ ...prev, [connId]: list }));
         return list;
       } catch (e) {
-        dbListRequestsRef.current.delete(connId);
-        setError(`Could not list databases for ${conn.name}: ${e instanceof Error ? e.message : String(e)}`);
+        requests.delete(connId);
+        if (operation === selectionOperation.current) setError(`Could not list databases for ${conn.name}: ${e instanceof Error ? e.message : String(e)}`);
         return [conn.database].filter(Boolean);
       } finally {
-        setLoadingDatabases(prev => { const next = new Set(prev); next.delete(connId); return next; });
+        if (requests === dbListRequestsRef.current) setLoadingDatabases(prev => { const next = new Set(prev); next.delete(connId); return next; });
       }
     })();
     dbListRequestsRef.current.set(connId, request);
@@ -253,6 +305,7 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
   const [isExecuting, setIsExecuting] = useState(false);
 
   const executeQuery = async (queryText?: any, _statementInfo?: any) => {
+    if (applyingTemplate.current) return;
     if (selectedTargets.length === 0) { setError("Please select at least one database"); return; }
 
     // Determine what text to run. Pre-split `__runAll` payloads (already
@@ -362,11 +415,42 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
   const getSelectedCount = (connId: string) => selectedTargets.filter(t => t.connectionId === connId).length;
   const isTargetSelected = (connId: string, db: string) => selectedTargets.some(t => t.connectionId === connId && t.database === db);
 
+  const filterActive = nodeFilter.trim() !== "" || selectedOnly;
+  const visibleNodes = useMemo(
+    () => filterConnectionNodes(connections, availableDatabases, selectedTargets, { query: nodeFilter, selectedOnly }),
+    [connections, availableDatabases, selectedTargets, nodeFilter, selectedOnly],
+  );
+  const visibleTargets = useMemo(
+    () => visibleNodes.flatMap(n => n.databases.map(database => ({ connectionId: n.connectionId, database }))),
+    [visibleNodes],
+  );
+  const connectionById = useMemo(() => new Map(connections.map(c => [c.id, c])), [connections]);
+  const modifiedTemplate = templates.find(t => t.id === currentTemplateId && selectedTargets.length > 0 && templateMatch(t.targets, selectedTargets) !== "exact");
+  const activeTemplate = useMemo(
+    () => templates.find(t => templateMatch(t.targets, selectedTargets) === "exact"),
+    [templates, selectedTargets],
+  );
+
+  // Database-name filtering and grouping by database need every server's
+  // database list, not just the expanded ones.
+  const needAllLists = nodeFilter.trim() !== "" || groupBy === "database";
+  useEffect(() => {
+    if (!isOpen || !restored || !needAllLists) return;
+    connections.forEach(c => { void fetchDatabases(c.id); });
+    // fetchDatabases caches requests, including when connections change.
+  }, [isOpen, restored, needAllLists, connections, fetchDatabases]);
+
   // Select All means every database on every connection, so the lists are
   // fetched first (they were only known for expanded connections, which made
-  // Select All pick just each connection's default database).
+  // Select All pick just each connection's default database). With a filter
+  // active it toggles only what the filter shows.
   const [selectingAll, setSelectingAll] = useState(false);
   const toggleSelectAll = async () => {
+    const operation = beginSelection();
+    if (filterActive) {
+      setSelectedTargets(prev => toggleTargetGroup(prev, visibleTargets));
+      return;
+    }
     if (selectedTargets.length > 0) {
       setSelectedTargets([]);
       return;
@@ -374,6 +458,7 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
     setSelectingAll(true);
     try {
       const lists = await Promise.all(connections.map(async conn => ({ conn, dbs: await fetchDatabases(conn.id) })));
+      if (operation !== selectionOperation.current) return;
       setSelectedTargets(lists.flatMap(({ conn, dbs }) => dbs.map(db => ({ connectionId: conn.id, database: db }))));
       setExpandedConnections(new Set(connections.map(c => c.id)));
     } finally {
@@ -389,16 +474,31 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
     });
   };
 
-  const toggleConnAll = async (conn: DatabaseConnection) => {
-    const dbs = await fetchDatabases(conn.id);
-    setExpandedConnections(prev => new Set(prev).add(conn.id));
-    setSelectedTargets(prev => {
-      const current = prev.filter(t => t.connectionId === conn.id);
-      const allSelected = current.length > 0 && dbs.every(db => current.some(t => t.database === db));
-      const others = prev.filter(t => t.connectionId !== conn.id);
-      return allSelected ? others : [...others, ...dbs.map(db => ({ connectionId: conn.id, database: db }))];
-    });
+  /** Unfiltered, a server checkbox covers every database (lists fetched first); filtered, only the visible ones. */
+  const toggleNodes = async (nodes: readonly ConnectionNode[]) => {
+    const operation = beginSelection();
+    let group: SelectedTarget[];
+    if (filterActive) {
+      group = nodes.flatMap(n => n.databases.map(database => ({ connectionId: n.connectionId, database })));
+    } else {
+      const lists = await Promise.all(nodes.map(async n => ({ id: n.connectionId, dbs: await fetchDatabases(n.connectionId) })));
+      if (operation !== selectionOperation.current) return;
+      group = lists.flatMap(({ id, dbs }) => dbs.map(database => ({ connectionId: id, database })));
+      setExpandedConnections(prev => { const next = new Set(prev); nodes.forEach(n => next.add(n.connectionId)); return next; });
+    }
+    setSelectedTargets(prev => toggleTargetGroup(prev, group));
   };
+
+  const nodeCheckState = (nodes: readonly ConnectionNode[]): GroupCheckState => {
+    const all = nodes.flatMap(n => (filterActive ? n.databases : availableDatabases[n.connectionId] ?? n.databases)
+      .map(database => ({ connectionId: n.connectionId, database })));
+    const state = groupCheckState(selectedTargets, all);
+    // Databases outside the known list (not fetched yet) still count as a partial selection.
+    if (!filterActive && nodes.some(n => availableDatabases[n.connectionId] === undefined && getSelectedCount(n.connectionId) > 0)) return "some";
+    return state;
+  };
+
+  const setGroupBy = (value: NodeGroupBy) => useSettings.getState().setSetting("multiQueryGroupBy", value);
 
   const confirmDialog = useConfirmDialog();
   const { addQuery: addSavedQuery, updateQueryText, findByName } = useSavedQueries();
@@ -439,6 +539,125 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
       savingRef.current = false;
     }
   };
+  const templatesNow = () => sanitizeTemplates(useSettings.getState().multiQueryNodeTemplates);
+  const writeTemplates = (next: NodeTemplate[]) => useSettings.getState().setSetting("multiQueryNodeTemplates", next);
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+  const saveNodeTemplate = async () => {
+    if (savingRef.current) return;
+    if (selectedTargets.length === 0) {
+      setError("Select at least one database before saving a node template.");
+      return;
+    }
+    savingRef.current = true;
+    try {
+      const entered = await confirmDialog.dialog({
+        title: "Save Node Template",
+        message: `Save the ${plural(selectedTargets.length, "selected database")} as a reusable template. An existing template with the same name is overwritten.`,
+        inputLabel: "Template Name",
+        inputDefaultValue: activeTemplate?.name ?? "",
+        confirmLabel: "Save",
+        cancelLabel: "Cancel",
+        type: "info",
+        requireInput: true,
+      });
+      const name = typeof entered === "string" ? entered.trim() : "";
+      if (!name) return;
+      const result = upsertTemplate(templatesNow(), name, selectedTargets, Date.now(), () => crypto.randomUUID());
+      writeTemplates(result.templates);
+      setCurrentTemplateId(result.template.id);
+      flashToast(`${result.replaced ? "Updated" : "Saved"} template: ${name}`);
+    } finally {
+      savingRef.current = false;
+    }
+  };
+
+  const applyTemplate = async (template: NodeTemplate) => {
+    const targets = restoreTargets(template.targets, connections.map(c => c.id));
+    const operation = beginSelection();
+    applyingTemplate.current = true;
+    setSelectionPending(true);
+    const connIds = [...new Set(targets.map(t => t.connectionId))];
+    const listed: Record<string, string[]> = {};
+    await Promise.all(connIds.map(async id => {
+      const dbs = await fetchDatabases(id);
+      if (dbListRequestsRef.current.has(id)) listed[id] = dbs;
+    }));
+    if (operation !== selectionOperation.current) return;
+    const finalized = pruneMissingDatabases(targets, listed);
+    const missing = template.targets.length - finalized.length;
+    commitSelectedTargets(finalized);
+    applyingTemplate.current = false;
+    setSelectionPending(false);
+    setCurrentTemplateId(template.id);
+    setExpandedConnections(prev => new Set([...prev, ...connIds]));
+    flashToast(`Applied template: ${template.name} (${plural(finalized.length, "database")})`);
+    setError(missing > 0 ? `${plural(missing, "database")} in "${template.name}" no longer exist${missing === 1 ? "s" : ""} and ${missing === 1 ? "was" : "were"} skipped.` : null);
+  };
+
+  const saveTemplateEdit = (id: string, name: string, targets: MultiQueryTarget[]): string | null => {
+    const current = templatesNow();
+    const result = editTemplate(current, id, name, targets, Date.now());
+    if (result.error !== undefined) return result.error;
+    writeTemplates(result.templates);
+    setEditingTemplateId(null);
+
+    const previous = current.find(t => t.id === id)?.targets ?? [];
+    const nextSelection = selectionAfterTemplateEdit(previous, targets, selectedTargets, id === currentTemplateId, connections.map(c => c.id), availableDatabases);
+    if (nextSelection) {
+      setSelectedTargets(nextSelection);
+      setCurrentTemplateId(id);
+      setExpandedConnections(prev => new Set([...prev, ...nextSelection.map(t => t.connectionId)]));
+      flashToast(`Updated template: ${name.trim()} — ${plural(nextSelection.length, "database")} selected`);
+    } else {
+      flashToast(`Updated template: ${name.trim()}`);
+    }
+    return null;
+  };
+
+  const updateTemplateFromSelection = async (template: NodeTemplate) => {
+    if (selectedTargets.length === 0) {
+      setError("Select at least one database to store in the template.");
+      return;
+    }
+    const added = selectedTargets.filter(t => !isTargetIn(template.targets, t.connectionId, t.database)).length;
+    const removed = template.targets.filter(t => !isTargetIn(selectedTargets, t.connectionId, t.database)).length;
+    const changes = [added > 0 && `add ${plural(added, "database")}`, removed > 0 && `remove ${plural(removed, "database")}`].filter(Boolean).join(" and ");
+    const ok = await confirmDialog.confirm({
+      title: "Update node template",
+      message: `Save the ${plural(selectedTargets.length, "selected database")} into "${template.name}"? This will ${changes}.`,
+      confirmLabel: "Update",
+      type: "info",
+    });
+    if (!ok) return;
+    const result = editTemplate(templatesNow(), template.id, template.name, selectedTargets, Date.now());
+    if (result.error !== undefined) {
+      setError(result.error);
+      return;
+    }
+    writeTemplates(result.templates);
+    setCurrentTemplateId(template.id);
+    flashToast(`Updated template: ${template.name} (${plural(selectedTargets.length, "database")})`);
+  };
+
+  const deleteTemplate = async (template: NodeTemplate) => {
+    const ok = await confirmDialog.confirm({
+      title: "Delete node template",
+      message: `Delete the template "${template.name}"? The databases themselves are not affected.`,
+      confirmLabel: "Delete",
+      type: "danger",
+    });
+    if (!ok) return;
+    writeTemplates(templatesNow().filter(t => t.id !== template.id));
+    setEditingTemplateId(null);
+  };
+
+  const isTargetMissing = (t: SelectedTarget) => {
+    if (!connectionById.has(t.connectionId)) return true;
+    const listed = availableDatabases[t.connectionId];
+    return !!listed && !listed.includes(t.database);
+  };
+
   const saveClusterQueryRef = useRef(saveClusterQuery);
   saveClusterQueryRef.current = saveClusterQuery;
 
@@ -543,6 +762,87 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
     setContextMenu(null);
   };
 
+  const renderTargetRow = (connId: string, db: string, label: string, icon: ReactNode, subtitle?: string) => {
+    const selected = isTargetSelected(connId, db);
+    const status = getTargetStatus(connId, db);
+    const result = results.find(r => r.connectionId === connId && r.databaseName === db);
+    return (
+      <div
+        key={`${connId}/${db}`}
+        className={`flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all ${
+          selected
+            ? "bg-[var(--accent-9)]/15 text-[var(--accent-11)] border border-[var(--accent-9)]/30"
+            : "hover:bg-[var(--neutral-4)] opacity-70 border border-transparent"
+        }`}
+      >
+        <GroupCheckbox state={selected ? "all" : "none"} size="sm" label={`Select ${connectionById.get(connId)?.name ?? connId} / ${db}`} onChange={() => toggleTarget(connId, db)} />
+        {result && <button type="button" aria-label={`Open result details for ${connectionById.get(connId)?.name ?? connId} / ${db}`} onClick={() => setStatusDetailModal(result)}
+          onMouseEnter={() => { if (status) setHoveredStatus({ connId, db, result }); }} onMouseLeave={() => setHoveredStatus(null)}>
+          {status === "running" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : status === "error" ? <AlertCircle className="w-3.5 h-3.5" /> : <CheckCircle className="w-3.5 h-3.5" />}
+        </button>}
+        {icon}
+        <div className="flex-1 min-w-0">
+          <span className="text-[11px] truncate block font-medium">{label}</span>
+          {subtitle && <span className="text-[9px] text-[var(--neutral-11)] truncate block">{subtitle}</span>}
+        </div>
+        {status && (
+          <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold cursor-pointer hover:scale-105 transition-transform ${
+            status === 'done' ? "bg-[var(--success-3)] text-[var(--success-11)]" :
+            status === 'error' ? "bg-[var(--danger-3)] text-[var(--danger-11)]" :
+            "bg-[var(--warning-3)] text-[var(--warning-11)]"
+          }`}>
+            {status}
+          </span>
+        )}
+      </div>
+    );
+  };
+
+  const renderConnectionNode = (node: ConnectionNode) => {
+    const conn = connectionById.get(node.connectionId);
+    if (!conn) return null;
+    // A filter shows its matches without needing each server expanded by hand.
+    const isExp = !collapsedConnections.has(conn.id) && (expandedConnections.has(conn.id) || filterActive);
+    const count = getSelectedCount(conn.id);
+    const total = (availableDatabases[conn.id] || [conn.database]).length;
+    return (
+      <div key={conn.id} className="mb-2">
+        <div className="flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-[var(--neutral-4)] group bg-[var(--surface-panel)] border border-[var(--neutral-6)]">
+          <button
+            onClick={() => { setCollapsedConnections(prev => { const n = new Set(prev); if (isExp) n.add(conn.id); else n.delete(conn.id); return n; }); if (!isExp) void fetchDatabases(conn.id); setExpandedConnections(prev => { const n = new Set(prev); if (isExp) n.delete(conn.id); else n.add(conn.id); return n; }); }}
+            className="p-1 rounded hover:bg-[var(--neutral-5)] transition-colors"
+            aria-label={isExp ? "Collapse" : "Expand"}
+          >
+            {isExp ? <ChevronDown className="w-4 h-4 text-[var(--accent-11)]" /> : <ChevronRight className="w-4 h-4 text-[var(--accent-11)]" />}
+          </button>
+          <label className="flex-1 flex items-center gap-3 cursor-pointer min-w-0">
+            <GroupCheckbox state={nodeCheckState([node])} label={`Select databases on ${conn.name}`} onChange={() => void toggleNodes([node])} />
+            <div className="flex-1 min-w-0">
+              <span className="text-xs font-semibold truncate block">{conn.name}</span>
+              <span className="text-[9px] text-[var(--neutral-11)] truncate block">{conn.type} • {conn.host}</span>
+            </div>
+            {loadingDatabases.has(conn.id) && (
+              <Loader2 className="w-3 h-3 animate-spin text-[var(--neutral-11)]" aria-label="Loading databases" />
+            )}
+            {count > 0 && (
+              <span
+                className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--accent-9)]/20 text-[var(--accent-11)] font-bold"
+                title={`${count} of ${total} databases selected`}
+              >
+                {count}
+              </span>
+            )}
+          </label>
+        </div>
+        {isExp && (
+          <div className="ml-4 pl-3 py-2 border-l-2 border-[var(--neutral-6)] space-y-1.5">
+            {node.databases.map(db => renderTargetRow(conn.id, db, db, <Folder className={`w-4 h-4 ${isTargetSelected(conn.id, db) ? "text-[var(--accent-11)]" : "text-[var(--neutral-9)]"}`} />))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -550,6 +850,7 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
       <Dialog
         open={isOpen}
         onClose={onClose}
+        dismissOnEsc={!editingTemplateId && !statusDetailModal}
         className="relative w-[95vw] h-[90vh] max-w-none rounded-2xl overflow-hidden"
         backdropClassName="bg-black/70 backdrop-blur-md"
       >
@@ -591,36 +892,167 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
         </div>
         <div className="flex-1 flex overflow-hidden">
           {/* Sidebar */}
-          <div className="w-80 border-r border-[var(--neutral-6)] flex flex-col bg-[var(--surface-elevated)] shrink-0">
+          <div className="w-[22rem] border-r border-[var(--neutral-6)] flex flex-col bg-[var(--surface-elevated)] shrink-0">
             {/* Sidebar Tabs */}
             <div className="flex border-b border-[var(--neutral-6)] bg-[var(--surface-panel)]">
-              <button
-                onClick={() => setSidebarTab("targets")}
-                className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-all border-b-2 flex items-center justify-center gap-2 ${sidebarTab === "targets" ? "text-[var(--accent-11)] border-[var(--accent-9)] bg-[var(--surface-base)]" : "text-[var(--neutral-11)] border-transparent hover:text-[var(--neutral-12)] hover:bg-[var(--neutral-4)]"}`}
-              >
-                <Database className="w-3.5 h-3.5" />
-                Nodes
-              </button>
-              <button
-                onClick={() => setSidebarTab("saved")}
-                className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-all border-b-2 flex items-center justify-center gap-2 ${sidebarTab === "saved" ? "text-[var(--accent-11)] border-[var(--accent-9)] bg-[var(--surface-base)]" : "text-[var(--neutral-11)] border-transparent hover:text-[var(--neutral-12)] hover:bg-[var(--neutral-4)]"}`}
-              >
-                <Star className="w-3.5 h-3.5" />
-                Saved Queries
-              </button>
+              {([
+                { id: "targets", label: "Nodes", icon: <Database className="w-3.5 h-3.5" /> },
+                { id: "saved", label: "Saved Queries", icon: <Star className="w-3.5 h-3.5" /> },
+              ]as { id: SidebarTab; label: string; icon: ReactNode }[]).map(tab => (
+                <button
+                  key={tab.id}
+                  onClick={() => { if (tab.id === "targets" && sidebarTab !== "targets") setTemplatesOpen(false); setSidebarTab(tab.id); }}
+                  className={`flex-1 py-3 text-[10px] font-bold uppercase tracking-wider transition-all border-b-2 flex items-center justify-center gap-1.5 whitespace-nowrap ${sidebarTab === tab.id ? "text-[var(--accent-11)] border-[var(--accent-9)] bg-[var(--surface-base)]" : "text-[var(--neutral-11)] border-transparent hover:text-[var(--neutral-12)] hover:bg-[var(--neutral-4)]"}`}
+                >
+                  {tab.icon}
+                  {tab.label}
+                </button>
+              ))}
             </div>
 
-            {sidebarTab === "targets" ? (
-              <div className="p-4 border-b border-[var(--neutral-6)] flex justify-between items-center bg-[var(--surface-panel)]">
-                <div className="flex items-center gap-2">
-                  <Database className="w-4 h-4 text-[var(--accent-11)]" />
-                  <span className="text-[11px] font-bold text-[var(--neutral-11)] uppercase tracking-wider">Sync Group</span>
+            {sidebarTab === "targets" && (
+              <div className="border-b border-[var(--neutral-6)] bg-[var(--surface-panel)]">
+                <div className="flex items-center gap-2 px-3 py-2">
+                  <button
+                    onClick={() => setTemplatesOpen(!templatesOpen)}
+                    aria-expanded={templatesOpen}
+                    className="flex-1 flex items-center gap-2 min-w-0 text-left"
+                  >
+                    {templatesOpen ? <ChevronDown className="w-4 h-4 text-[var(--accent-11)] shrink-0" /> : <ChevronRight className="w-4 h-4 text-[var(--accent-11)] shrink-0" />}
+                    <Bookmark className={`w-4 h-4 text-[var(--accent-11)] shrink-0 ${activeTemplate ? "fill-current" : ""}`} />
+                    <span className="text-[11px] font-bold text-[var(--neutral-11)] uppercase tracking-wider shrink-0">Templates</span>
+                    {templates.length > 0 && (
+                      <span className="text-[9px] px-1.5 rounded-full bg-[var(--neutral-5)] text-[var(--neutral-11)] shrink-0">{templates.length}</span>
+                    )}
+                    {!templatesOpen && activeTemplate && (
+                      <span className="text-[10px] font-semibold text-[var(--accent-11)] truncate" title="The selection matches this template">{activeTemplate.name}</span>
+                    )}
+                    {!templatesOpen && !activeTemplate && modifiedTemplate && (
+                      <span className="text-[10px] font-semibold text-[var(--warning-11)] truncate" title="The selection has changed since this template was used">{modifiedTemplate.name} • Modified</span>
+                    )}
+                  </button>
+                  <IconButton
+                    size="xs"
+                    icon={<BookmarkPlus />}
+                    label="Save selection as template"
+                    title="Save the selected databases as a node template"
+                    onClick={() => void saveNodeTemplate()}
+                    disabled={selectedTargets.length === 0}
+                    className="text-[var(--accent-11)] hover:bg-[var(--accent-3)]"
+                  />
                 </div>
-                <Button size="xs" variant="secondary" onClick={toggleSelectAll} loading={selectingAll} disabled={selectingAll}>
-                  {selectedTargets.length ? "Clear All" : "Select All"}
-                </Button>
+                {templatesOpen && (
+                  templates.length === 0 ? (
+                    <p className="px-3 pb-3 text-[10px] text-[var(--neutral-11)] opacity-70">
+                      Select databases below, then click <BookmarkPlus className="w-3 h-3 inline -mt-0.5" /> to save them as a template you can re-select in one click.
+                    </p>
+                  ) : (
+                    <div className="px-3 pb-3 space-y-1 max-h-56 overflow-y-auto scrollbar-thin">
+                      {templates.map(template => {
+                        const match = templateMatch(template.targets, selectedTargets);
+                        const serverCount = new Set(template.targets.map(t => t.connectionId)).size;
+                        const missing = template.targets.filter(isTargetMissing).length;
+                        const modified = template.id === modifiedTemplate?.id;
+                        return (
+                          <div
+                            key={template.id}
+                            className={`group flex items-center gap-2 pl-2.5 pr-1 py-1.5 rounded-md border transition-all ${
+                              match === "exact"
+                                ? "border-[var(--accent-9)] bg-[var(--accent-9)]/10"
+                                : match === "partial"
+                                ? "border-[var(--accent-9)]/40"
+                                : "border-transparent hover:border-[var(--neutral-6)] hover:bg-[var(--neutral-4)]"
+                            }`}
+                          >
+                            <button
+                              onClick={() => void applyTemplate(template)}
+                              className="flex-1 flex items-center gap-2 min-w-0 text-left"
+                              title={`Select ${plural(template.targets.length, "database")} on ${plural(serverCount, "server")}`}
+                            >
+                              <Bookmark className={`w-3.5 h-3.5 shrink-0 text-[var(--accent-11)] ${match === "exact" ? "fill-current" : ""}`} />
+                              <span className="text-xs font-semibold truncate text-[var(--neutral-12)]">{template.name}</span>
+                              {match === "exact" && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--accent-9)] text-white font-bold shrink-0">Active</span>}
+                              {modified && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--warning-3)] text-[var(--warning-11)] font-bold shrink-0" title="The selection has changed since this template was used">Modified</span>}
+                              {match === "partial" && !modified && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--accent-9)]/20 text-[var(--accent-11)] font-bold shrink-0">Partial</span>}
+                              {missing > 0 && (
+                                <span title={`${plural(missing, "database")} no longer exist${missing === 1 ? "s" : ""}`} className="shrink-0">
+                                  <AlertTriangle className="w-3 h-3 text-[var(--warning-11)]" />
+                                </span>
+                              )}
+                            </button>
+                            <IconButton
+                              size="xs"
+                              icon={<Save />}
+                              label="Update template with current selection"
+                              title={`Save the ${plural(selectedTargets.length, "selected database")} into this template`}
+                              onClick={() => void updateTemplateFromSelection(template)}
+                              disabled={selectedTargets.length === 0 || match === "exact"}
+                              className={`text-[var(--accent-11)] hover:bg-[var(--accent-3)] transition-opacity ${modified ? "" : "opacity-0 group-hover:opacity-100 focus:opacity-100"}`}
+                            />
+                            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                              <IconButton size="xs" icon={<Pencil />} label="Edit template" title="Edit name and databases" onClick={() => setEditingTemplateId(template.id)} />
+                              <IconButton size="xs" icon={<Trash2 />} label="Delete template" title="Delete" onClick={() => void deleteTemplate(template)} className="text-[var(--danger-11)] hover:bg-[var(--danger-3)]" />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )
+                )}
               </div>
-            ) : (
+            )}
+            {sidebarTab === "targets" && (
+              <div className="p-3 border-b border-[var(--neutral-6)] space-y-2 bg-[var(--surface-panel)]">
+                <div className="flex justify-between items-center gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Database className="w-4 h-4 text-[var(--accent-11)] shrink-0" />
+                    <span className="text-[11px] font-bold text-[var(--neutral-11)] uppercase tracking-wider">Sync Group</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Button size="xs" variant="secondary" onClick={toggleSelectAll} loading={selectingAll} disabled={selectingAll || (filterActive && visibleTargets.length === 0)}>
+                      {filterActive
+                        ? (groupCheckState(selectedTargets, visibleTargets) === "all" ? "Clear Visible" : "Select Visible")
+                        : (selectedTargets.length ? "Clear All" : "Select All")}
+                    </Button>
+                  </div>
+                </div>
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-[var(--neutral-11)]" />
+                  <input
+                    value={nodeFilter}
+                    onChange={(e) => setNodeFilter(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Escape" && nodeFilter) { e.stopPropagation(); setNodeFilter(""); } }}
+                    placeholder="Filter servers or databases…"
+                    aria-label="Filter servers or databases"
+                    className="w-full pl-7 pr-7 py-1.5 text-xs rounded bg-[var(--surface-base)] border border-[var(--neutral-6)] outline-none focus:border-[var(--accent-8)] text-[var(--neutral-12)]"
+                  />
+                  {nodeFilter && (
+                    <button onClick={() => setNodeFilter("")} className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-[var(--neutral-5)]" aria-label="Clear filter">
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex rounded-md border border-[var(--neutral-6)] overflow-hidden" role="group" aria-label="Group nodes by">
+                    {(Object.keys(GROUP_BY_LABELS) as NodeGroupBy[]).map(mode => (
+                      <button
+                        key={mode}
+                        onClick={() => setGroupBy(mode)}
+                        aria-pressed={groupBy === mode}
+                        className={`px-2 py-1 text-[10px] font-semibold transition-colors ${groupBy === mode ? "bg-[var(--accent-9)] text-white" : "text-[var(--neutral-11)] hover:bg-[var(--neutral-4)]"}`}
+                      >
+                        {GROUP_BY_LABELS[mode]}
+                      </button>
+                    ))}
+                  </div>
+                  <label className="flex items-center gap-1.5 text-[10px] text-[var(--neutral-11)] cursor-pointer select-none">
+                    <input type="checkbox" checked={selectedOnly} onChange={(e) => setSelectedOnly(e.target.checked)} className="accent-[var(--accent-9)]" />
+                    Selected only
+                  </label>
+                </div>
+              </div>
+            )}
+            {sidebarTab === "saved" && (
               <div className="p-4 border-b border-[var(--neutral-6)] flex items-center gap-2 bg-[var(--surface-panel)]">
                 <Folder className="w-4 h-4 text-[var(--accent-11)]" />
                 <span className="text-[11px] font-bold text-[var(--neutral-11)] uppercase tracking-wider">Saved Queries</span>
@@ -628,110 +1060,60 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
             )}
 
             <div className="flex-1 overflow-y-auto p-3 scrollbar-thin">
-              {sidebarTab === "targets" ? (
+              {sidebarTab === "targets" && (
                 <div className="space-y-2">
-                  {connections.map(conn => {
-                    const isExp = expandedConnections.has(conn.id);
-                    const count = getSelectedCount(conn.id);
-                    return (<div key={conn.id} className="mb-2">
-                      <div className="flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-[var(--neutral-4)] group bg-[var(--surface-panel)] border border-[var(--neutral-6)]">
-                        <button
-                          onClick={() => { setExpandedConnections(prev => { const n = new Set(prev); if (n.has(conn.id)) n.delete(conn.id); else { n.add(conn.id); void fetchDatabases(conn.id); } return n; }); }}
-                          className="p-1 rounded hover:bg-[var(--neutral-5)] transition-colors"
-                        >
-                          {isExp ? <ChevronDown className="w-4 h-4 text-[var(--accent-11)]" /> : <ChevronRight className="w-4 h-4 text-[var(--accent-11)]" />}
-                        </button>
-                        <div onClick={() => toggleConnAll(conn)} className={`flex-1 flex items-center gap-3 cursor-pointer`}>
-                          <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all ${
-                            count === (availableDatabases[conn.id] || [conn.database]).length
-                              ? "bg-[var(--accent-9)] border-[var(--accent-9)] text-white"
-                              : count > 0
-                              ? "bg-[var(--accent-9)]/30 border-[var(--accent-9)] text-[var(--accent-11)]"
-                              : "border-[var(--neutral-7)]"
-                          }`}>
-                            {count > 0 && <Check className="w-3 h-3" />}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <span className="text-xs font-semibold truncate block">{conn.name}</span>
-                            <span className="text-[9px] text-[var(--neutral-11)] truncate block">{conn.type} • {conn.host}</span>
-                          </div>
-                          {loadingDatabases.has(conn.id) && (
-                            <Loader2 className="w-3 h-3 animate-spin text-[var(--neutral-11)]" aria-label="Loading databases" />
-                          )}
-                          {count > 0 && (
-                            <span
-                              className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--accent-9)]/20 text-[var(--accent-11)] font-bold"
-                              title={`${count} of ${(availableDatabases[conn.id] || [conn.database]).length} databases selected`}
-                            >
-                              {count}
-                            </span>
-                          )}
+                  {visibleNodes.length === 0 && (
+                    <p className="text-center py-6 text-[11px] opacity-50">
+                      {connections.length === 0 ? "No connections yet." : selectedOnly && !nodeFilter.trim() ? "Nothing selected." : `No servers or databases match "${nodeFilter.trim()}".`}
+                    </p>
+                  )}
+                  {groupBy === "connection" && visibleNodes.map(renderConnectionNode)}
+                  {groupBy === "database" && groupNodesByDatabase(visibleNodes).map(group => {
+                    const members = group.connectionIds.map(connectionId => ({ connectionId, database: group.database }));
+                    const isExp = !collapsedDbGroups.has(group.database) && (expandedDbGroups.has(group.database) || filterActive);
+                    const count = members.filter(t => isTargetSelected(t.connectionId, t.database)).length;
+                    return (
+                      <div key={group.database} className="mb-2">
+                        <div className="flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-[var(--neutral-4)] bg-[var(--surface-panel)] border border-[var(--neutral-6)]">
+                          <button
+                            onClick={() => { setCollapsedDbGroups(prev => { const n = new Set(prev); if (isExp) n.add(group.database); else n.delete(group.database); return n; }); setExpandedDbGroups(prev => { const n = new Set(prev); if (isExp) n.delete(group.database); else n.add(group.database); return n; }); }}
+                            className="p-1 rounded hover:bg-[var(--neutral-5)] transition-colors"
+                            aria-label={isExp ? "Collapse" : "Expand"}
+                          >
+                            {isExp ? <ChevronDown className="w-4 h-4 text-[var(--accent-11)]" /> : <ChevronRight className="w-4 h-4 text-[var(--accent-11)]" />}
+                          </button>
+                          <label className="flex-1 flex items-center gap-3 cursor-pointer min-w-0">
+                            <GroupCheckbox state={groupCheckState(selectedTargets, members)} label={`Select ${group.database} on visible servers`} onChange={() => setSelectedTargets(prev => toggleTargetGroup(prev, members))} />
+                            <div className="flex-1 min-w-0">
+                              <span className="text-xs font-semibold truncate block">{group.database}</span>
+                              <span className="text-[9px] text-[var(--neutral-11)] truncate block">on {plural(group.connectionIds.length, "server")}</span>
+                            </div>
+                            {count > 0 && (
+                              <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--accent-9)]/20 text-[var(--accent-11)] font-bold" title={`${count} of ${members.length} servers selected`}>
+                                {count}
+                              </span>
+                            )}
+                          </label>
                         </div>
+                        {isExp && (
+                          <div className="ml-4 pl-3 py-2 border-l-2 border-[var(--neutral-6)] space-y-1.5">
+                            {group.connectionIds.map(connId => {
+                              const conn = connectionById.get(connId);
+                              return renderTargetRow(connId, group.database, conn?.name ?? connId, <Server className={`w-4 h-4 ${isTargetSelected(connId, group.database) ? "text-[var(--accent-11)]" : "text-[var(--neutral-9)]"}`} />, conn ? `${conn.type} • ${conn.host ?? conn.filepath ?? ""}` : undefined);
+                            })}
+                          </div>
+                        )}
                       </div>
-                      {isExp && (
-                        <div className="ml-4 pl-3 py-2 border-l-2 border-[var(--neutral-6)] space-y-1.5">
-                          {(availableDatabases[conn.id] || [conn.database])?.map(db => {
-                            const status = getTargetStatus(conn.id, db);
-                            const result = results.find(r => r.connectionId === conn.id && r.databaseName === db);
-                            return (
-                              <div
-                                key={db}
-                                onClick={() => toggleTarget(conn.id, db)}
-                                className={`flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all ${
-                                  isTargetSelected(conn.id, db)
-                                    ? "bg-[var(--accent-9)]/15 text-[var(--accent-11)] border border-[var(--accent-9)]/30"
-                                    : "hover:bg-[var(--neutral-4)] opacity-70 border border-transparent"
-                                }`}
-                              >
-                                <div
-                                  className="relative"
-                                  onMouseEnter={() => {
-                                    if (status && result) {
-                                      setHoveredStatus({ connId: conn.id, db, result });
-                                    }
-                                  }}
-                                  onMouseLeave={() => setHoveredStatus(null)}
-                                  onClick={(e) => {
-                                    // Without a result the indicator is the selection radio, so the click toggles the row.
-                                    if (!result) return;
-                                    e.stopPropagation();
-                                    setStatusDetailModal(result);
-                                  }}
-                                >
-                                  {status === 'running' ? (
-                                    <Loader2 className="w-3.5 h-3.5 text-[var(--warning-11)] animate-spin" />
-                                  ) : status === 'done' ? (
-                                    <CheckCircle className="w-3.5 h-3.5 text-[var(--success-11)] cursor-pointer hover:scale-110 transition-transform" />
-                                  ) : status === 'error' ? (
-                                    <AlertCircle className="w-3.5 h-3.5 text-[var(--danger-11)] cursor-pointer hover:scale-110 transition-transform" />
-                                  ) : (
-                                    <div className={`w-3.5 h-3.5 rounded-md border-2 ${
-                                      isTargetSelected(conn.id, db)
-                                        ? "bg-[var(--accent-9)] border-[var(--accent-9)]"
-                                        : "border-[var(--neutral-7)]"
-                                    }`} />
-                                  )}
-                                </div>
-                                <Folder className={`w-4 h-4 ${isTargetSelected(conn.id, db) ? "text-[var(--accent-11)]" : "text-[var(--neutral-9)]"}`} />
-                                <span className="text-[11px] truncate flex-1 font-medium">{db}</span>
-                                {status && (
-                                  <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold cursor-pointer hover:scale-105 transition-transform ${
-                                    status === 'done' ? "bg-[var(--success-3)] text-[var(--success-11)]" :
-                                    status === 'error' ? "bg-[var(--danger-3)] text-[var(--danger-11)]" :
-                                    "bg-[var(--warning-3)] text-[var(--warning-11)]"
-                                  }`}>
-                                    {status}
-                                  </span>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>);
+                    );
                   })}
+                  {loadingDatabases.size > 0 && needAllLists && (
+                    <p className="flex items-center justify-center gap-1.5 py-2 text-[10px] opacity-60">
+                      <Loader2 className="w-3 h-3 animate-spin" /> Loading database lists…
+                    </p>
+                  )}
                 </div>
-              ) : (
+              )}
+              {sidebarTab === "saved" && (
                 <SavedQueryList
                   runLabel="Run on selected databases"
                   emptyHint="Save queries from the main editor (Ctrl+S) to reuse them here."
@@ -758,7 +1140,7 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
                    className="flex-1"
                    onClick={executeQuery}
                    loading={isExecuting}
-                   disabled={!query.trim() || selectedTargets.length === 0}
+                   disabled={selectionPending || !query.trim() || selectedTargets.length === 0}
                    leftIcon={isExecuting ? undefined : <Play className="w-4 h-4 fill-current" />}
                  >
                    {isExecuting ? `Executing SQL on ${selectedTargets.length} Nodes...` : `Execute SQL on ${selectedTargets.length} Nodes`}
@@ -947,7 +1329,7 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
         {/* Tooltip for hovered status */}
         {hoveredStatus && (
           <div className="absolute z-[200] bg-[var(--surface-overlay)] border border-[var(--neutral-6)] rounded-xl shadow-xl p-3 min-w-[200px] animate-in fade-in zoom-in-95 duration-200"
-               style={{ bottom: 'auto', left: '320px', top: '50%', transform: 'translateY(-50%)' }}>
+               style={{ bottom: 'auto', left: '22rem', top: '50%', transform: 'translateY(-50%)' }}>
             <div className="flex items-center gap-2 mb-2">
               {hoveredStatus.result.status === 'running' && <Loader2 className="w-4 h-4 text-[var(--warning-11)] animate-spin" />}
               {hoveredStatus.result.status === 'done' && <CheckCircle className="w-4 h-4 text-[var(--success-11)]" />}
@@ -972,6 +1354,25 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
           </div>
         )}
       </Dialog>
+
+      {editingTemplateId && (() => {
+        const template = templates.find(t => t.id === editingTemplateId);
+        if (!template) return null;
+        return (
+          <NodeTemplateEditorDialog
+            key={template.id}
+            template={template}
+            connections={connections}
+            availableDatabases={availableDatabases}
+            loadingDatabases={loadingDatabases}
+            fetchDatabases={fetchDatabases}
+            currentSelection={selectedTargets}
+            onSave={(name, targets) => saveTemplateEdit(template.id, name, targets)}
+            onDelete={() => void deleteTemplate(template)}
+            onClose={() => setEditingTemplateId(null)}
+          />
+        );
+      })()}
 
       {/* Detailed status information modal */}
       {statusDetailModal && (
