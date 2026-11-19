@@ -1,9 +1,9 @@
 ---
 title: Saved queries and Multi Query
-description: Keep a library of queries per connection, and run one query across many databases and servers at once.
+description: Keep a library of queries per connection, and run one query across many databases and servers at once, with reusable node templates.
 section: editor
 order: 80
-updated: 2026-11-16
+updated: 2026-11-19
 ---
 
 ## Saving a query
@@ -24,12 +24,33 @@ The **Files** panel in the sidebar lists your saved queries with a search box:
 
 The **Multi-Query** toolbar button runs one query against many targets in a single go — every tenant database, every environment, every server:
 
-1. Pick targets: individual databases, whole connections, or **Select All** for every database of every connection.
+1. Pick targets on the **Nodes** tab: individual databases, whole connections, **Select All** for every database of every connection, or a saved [node template](#node-templates).
 2. Write the query, or load one from the same **Saved Queries** list.
 3. Run. Targets execute in parallel (four at a time), each through its own SSH tunnel and credentials, and each result appears under its target with its status, row count and time.
 
 **Save** (or **Ctrl+S** while the dialog is open) adds the query to Saved Queries. If every target is on one connection, it is saved for that connection; otherwise it is saved for all connections. Saving under an existing name overwrites that query.
 
 Your targets and query draft are kept and restored the next time you open Multi Query. Targets on deleted connections or dropped databases are removed.
+
+### Finding targets
+
+On the **Nodes** tab:
+
+- **Filter** narrows the tree as you type. A match on a server's name, host or engine (`postgres`, `mysql`) shows all of its databases; otherwise only databases whose name matches are shown, so `tenant_` lists every tenant database on every server. While a filter is active, **Select Visible** and the server checkboxes act on the matching databases only.
+- **Group by** switches the tree between **Server** (the default) and **Database**. Grouping by database puts same-named databases on different servers together, e.g. one `app` group covering production, staging and dev, with one checkbox for all of them.
+- **Selected only** hides everything that isn't currently selected.
+
+Filtering and grouping by database need the database list of every connection, so they connect to each server once. A server that can't be reached shows an error and keeps only its default database in the tree.
+
+### Node templates
+
+A node template is a named set of databases you can select again in one click. Templates live in the **Templates** section at the top of the **Nodes** tab, above the server tree. It starts collapsed each time you open the Nodes tab; click its header to show the list. While collapsed, the header shows the template that matches your selection (or the one you last used, marked **Modified**).
+
+- **Save:** select databases in the tree and click the bookmark **+** button in the Templates header. Saving under an existing name overwrites that template.
+- **Use:** click a template's name to select exactly its databases. The template that matches the current selection is marked **Active** (its name also shows in the header while the section is collapsed); one that overlaps it is marked **Partial**.
+- **Update:** after using a template, tick or untick databases in the tree and the template is marked **Modified**, with a save icon next to it. Click it to store the current selection in that template (it confirms how many databases are added and removed). The same icon appears on hover for any template.
+- **Edit:** hover a template and click the pencil. The editor shows the template's databases grouped per server: rename it, tick or untick databases (or a whole server), turn on **Show all servers** to add databases from other servers, or click **Use current selection** to replace them with what is ticked in the Nodes tree. **Save** stores the changes in the template; if it's the template you're using (it was **Active**, or the one you last used), the Nodes tree is re-selected to match. **Delete** is in the editor and on hover.
+
+Databases that have since been dropped, or whose connection was deleted, show a warning on the template, are flagged as missing in the editor (untick them to remove them), and are skipped when the template is used. Templates store only connection IDs and database names, never credentials.
 
 Results can be [exported](/docs/editor/exporting-results) per target, including to Excel.

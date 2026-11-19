@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { invokeCmd } from "../lib/ipc";
 import { logger } from "../utils/logger";
+import type { NodeGroupBy, NodeTemplate } from "../utils/multiQueryNodes";
 
 export interface DBSettings {
   // Explorer View Options
@@ -87,6 +88,8 @@ export interface DBSettings {
   // Multi-Query Cluster — restored the next time the dialog opens
   multiQueryTargets: { connectionId: string; database: string }[];
   multiQueryDraft: string;
+  multiQueryNodeTemplates: NodeTemplate[];
+  multiQueryGroupBy: NodeGroupBy;
   
   // Actions
   setSetting: <K extends keyof DBSettings>(key: K, value: DBSettings[K]) => void;
@@ -165,6 +168,8 @@ const defaultSettings: Omit<DBSettings, "setSetting" | "resetSettings"> = {
   // Multi-Query Cluster
   multiQueryTargets: [],
   multiQueryDraft: "",
+  multiQueryNodeTemplates: [],
+  multiQueryGroupBy: "connection",
 
   // AI Assistant
   aiProvider: "openai",
