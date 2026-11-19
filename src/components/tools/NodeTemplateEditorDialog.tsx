@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { AlertTriangle, Bookmark, ChevronDown, ChevronRight, Folder, Loader2, Search, Server, Trash2, X } from "lucide-react";
 import { Dialog } from "../ui/Dialog";
 import { Button } from "../ui/Button";
@@ -11,7 +11,6 @@ import {
   type NodeConnection,
   type NodeTemplate,
 } from "../../utils/multiQueryNodes";
-import { GroupCheckbox } from "./GroupCheckbox";
 
 interface NodeTemplateEditorDialogProps {
   template: NodeTemplate;
@@ -39,6 +38,19 @@ export function NodeTemplateEditorDialog({
   onDelete,
   onClose,
 }: NodeTemplateEditorDialogProps) {
+  const editorRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const trapFocus = (e: KeyboardEvent) => {
+      if (e.key !== "Tab") return;
+      const elements = Array.from(editorRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), [tabindex="0"]') ?? []).filter(el => el.getClientRects().length > 0);
+      const first = elements[0], last = elements[elements.length - 1];
+      if (!first) { e.preventDefault(); return; }
+      if (e.shiftKey && (document.activeElement === first || !editorRef.current?.contains(document.activeElement))) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && (document.activeElement === last || !editorRef.current?.contains(document.activeElement))) { e.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", trapFocus, true);
+    return () => document.removeEventListener("keydown", trapFocus, true);
+  }, []);
   const [name, setName] = useState(template.name);
   const [draft, setDraft] = useState<MultiQueryTarget[]>(template.targets);
   const [query, setQuery] = useState("");
@@ -78,14 +90,17 @@ export function NodeTemplateEditorDialog({
     groupCheckState(draft, currentSelection) !== "all" || draft.length !== currentSelection.length
   );
 
+  const canSave = dirty && draft.length > 0 && !!name.trim();
   const toggle = (group: MultiQueryTarget[]) => setDraft(prev => toggleTargetGroup(prev, group));
   const save = () => {
+    if (!canSave) return;
     const result = onSave(name, draft);
     if (result) setError(result);
   };
 
   return (
     <Dialog open onClose={onClose} className="w-[560px] max-w-[95vw] h-[80vh]">
+      <div ref={editorRef} className="flex flex-col min-h-0 flex-1">
       <Dialog.Title onClose={onClose}>
         <span className="flex items-center gap-2">
           <Bookmark className="w-4 h-4 text-[var(--accent-11)]" />
@@ -165,8 +180,8 @@ export function NodeTemplateEditorDialog({
                 >
                   {isOpen ? <ChevronDown className="w-4 h-4 text-[var(--accent-11)]" /> : <ChevronRight className="w-4 h-4 text-[var(--accent-11)]" />}
                 </button>
-                <div onClick={() => toggle(members)} className="flex-1 flex items-center gap-3 cursor-pointer min-w-0">
-                  <GroupCheckbox state={groupCheckState(draft, members)} />
+                <label className="flex-1 flex items-center gap-3 cursor-pointer min-w-0">
+                  <input type="checkbox" aria-label={`Include databases on ${conn.name}`} checked={groupCheckState(draft, members) === "all"} ref={el => { if (el) el.indeterminate = groupCheckState(draft, members) === "some"; }} onChange={() => toggle(members)} />
                   <Server className="w-4 h-4 text-[var(--neutral-11)] shrink-0" />
                   <div className="flex-1 min-w-0">
                     <span className="text-xs font-semibold truncate block">{conn.name}</span>
@@ -174,24 +189,23 @@ export function NodeTemplateEditorDialog({
                   </div>
                   {loadingDatabases.has(server.connectionId) && <Loader2 className="w-3 h-3 animate-spin text-[var(--neutral-11)]" aria-label="Loading databases" />}
                   <span className="text-[10px] text-[var(--neutral-11)] tabular-nums">{included}/{members.length}</span>
-                </div>
+                </label>
               </div>
               {isOpen && (
                 <div className="ml-6 mr-2 mb-2 pl-3 border-l-2 border-[var(--neutral-6)] space-y-0.5">
                   {server.databases.map(db => {
                     const checked = isTargetIn(draft, server.connectionId, db.name);
                     return (
-                      <div
+                      <label
                         key={db.name}
-                        onClick={() => toggle([{ connectionId: server.connectionId, database: db.name }])}
                         className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-[11px] ${checked ? "bg-[var(--accent-9)]/15 text-[var(--accent-11)]" : "text-[var(--neutral-11)] hover:bg-[var(--neutral-4)]"}`}
                         title={db.missing ? "This database no longer exists on the server" : undefined}
                       >
-                        <GroupCheckbox state={checked ? "all" : "none"} size="sm" />
+                        <input type="checkbox" aria-label={`Include ${conn.name} / ${db.name}`} checked={checked} onChange={() => toggle([{ connectionId: server.connectionId, database: db.name }])} />
                         {db.missing ? <AlertTriangle className="w-3.5 h-3.5 text-[var(--warning-11)] shrink-0" /> : <Folder className="w-3.5 h-3.5 shrink-0" />}
                         <span className={`truncate font-medium ${db.missing ? "text-[var(--warning-11)]" : ""}`}>{db.name}</span>
                         {db.missing && <span className="ml-auto text-[9px] text-[var(--warning-11)]">missing</span>}
-                      </div>
+                      </label>
                     );
                   })}
                 </div>
@@ -208,15 +222,14 @@ export function NodeTemplateEditorDialog({
               {view.orphaned.map(t => {
                 const checked = isTargetIn(draft, t.connectionId, t.database);
                 return (
-                  <div
+                  <label
                     key={`${t.connectionId}/${t.database}`}
-                    onClick={() => toggle([t])}
                     className="flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-[11px] text-[var(--warning-11)] hover:bg-[var(--neutral-4)]"
                     title="This database's connection was deleted; untick to remove it from the template"
                   >
-                    <GroupCheckbox state={checked ? "all" : "none"} size="sm" />
-                    <span className="truncate font-medium">{t.database}</span>
-                  </div>
+                    <input type="checkbox" aria-label={`Include ${t.connectionId} / ${t.database}`} checked={checked} onChange={() => toggle([t])} />
+                    <span className="truncate font-medium">{connectionById.get(t.connectionId)?.name ?? t.connectionId} / {t.database}</span>
+                  </label>
                 );
               })}
             </div>
@@ -235,11 +248,12 @@ export function NodeTemplateEditorDialog({
         </Button>
         <div className="flex items-center gap-2">
           <Button variant="secondary" size="sm" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" size="sm" onClick={save} disabled={!dirty || draft.length === 0 || !name.trim()}>
+          <Button variant="primary" size="sm" onClick={save} disabled={!canSave}>
             Save
           </Button>
         </div>
       </Dialog.Footer>
+      </div>
     </Dialog>
   );
 }

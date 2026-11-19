@@ -24,7 +24,7 @@ The **Files** panel in the sidebar lists your saved queries with a search box:
 
 The **Multi-Query** toolbar button runs one query against many targets in a single go — every tenant database, every environment, every server:
 
-1. Pick targets on the **Nodes** tab: individual databases, whole connections, **Select All** for every database of every connection, or a saved [node template](#node-templates).
+1. Pick targets on the **Nodes** tab: individual databases, whole connections, **Select All** for every database of every connection, or a saved [node template](#node-templates). **Select All** is available only after clearing the text filter and turning off **Selected only**; otherwise **Select Visible** or **Clear Visible** applies only to the visible subset.
 2. Write the query, or load one from the same **Saved Queries** list.
 3. Run. Targets execute in parallel (four at a time), each through its own SSH tunnel and credentials, and each result appears under its target with its status, row count and time.
 

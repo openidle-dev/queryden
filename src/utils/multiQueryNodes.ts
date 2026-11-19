@@ -43,6 +43,7 @@ export function sanitizeTemplates(saved: unknown): NodeTemplate[] {
   if (!Array.isArray(saved)) return [];
   const ids = new Set<string>();
   const templates: NodeTemplate[] = [];
+  const names = new Set<string>();
   for (const entry of saved) {
     if (typeof entry !== "object" || entry === null) continue;
     const { id, name, targets, createdAt, updatedAt } = entry as Record<string, unknown>;
@@ -50,11 +51,15 @@ export function sanitizeTemplates(saved: unknown): NodeTemplate[] {
     if (typeof name !== "string" || !name.trim()) continue;
     const cleanTargets = sanitizeTargets(targets);
     if (cleanTargets.length === 0) continue;
+    let uniqueName = name.trim();
+    let suffix = 2;
+    while (names.has(uniqueName.toLowerCase())) uniqueName = `${name.trim()} (${suffix++})`;
+    names.add(uniqueName.toLowerCase());
     ids.add(id);
     const created = typeof createdAt === "number" ? createdAt : 0;
     templates.push({
       id,
-      name: name.trim(),
+      name: uniqueName,
       targets: cleanTargets,
       createdAt: created,
       updatedAt: typeof updatedAt === "number" ? updatedAt : created,
@@ -207,7 +212,7 @@ export function editTemplate(
   const cleanTargets = sanitizeTargets(targets);
   if (cleanTargets.length === 0) return { error: "A template needs at least one database." };
   if (!templates.some((t) => t.id === id)) return { error: "This template no longer exists." };
-  const clash = findTemplateByName(templates, trimmed);
+  const clash = templates.find(t => t.id !== id && t.name.toLowerCase() === trimmed.toLowerCase());
   if (clash && clash.id !== id) return { error: `A template named "${clash.name}" already exists.` };
   return {
     templates: templates.map((t) => (t.id === id ? { ...t, name: trimmed, targets: cleanTargets, updatedAt: now } : t)),
@@ -274,8 +279,9 @@ export function selectionAfterTemplateEdit(
   selected: readonly MultiQueryTarget[],
   wasCurrent: boolean,
   connectionIds: readonly string[],
+  listedDatabases: Readonly<Record<string, readonly string[]>> = {},
 ): MultiQueryTarget[] | null {
   if (!wasCurrent && templateMatch(previous, selected) !== "exact") return null;
   const known = new Set(connectionIds);
-  return sanitizeTargets(next).filter((t) => known.has(t.connectionId));
+  return sanitizeTargets(next).filter((t) => known.has(t.connectionId) && (listedDatabases[t.connectionId] === undefined || listedDatabases[t.connectionId].includes(t.database)));
 }

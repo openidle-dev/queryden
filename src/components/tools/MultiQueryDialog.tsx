@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, type SetStateAction, type ReactNode } from "react";
 import { X, Play, Loader2, AlertCircle, Layers, ChevronDown, ChevronRight, Folder, Search, CheckCircle, Database, Clock, Table2, AlertTriangle, Info, Star, Download, FileCode, Globe, RefreshCw, Copy, Trash2, FileJson, Sheet, Bookmark, BookmarkPlus, Pencil, Save, Server } from "lucide-react";
 import { SavedQueryList } from "../explorer/SavedQueryList";
 import { GroupCheckbox } from "./GroupCheckbox";
@@ -75,7 +75,22 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const groupBy: NodeGroupBy = isNodeGroupBy(settings.multiQueryGroupBy) ? settings.multiQueryGroupBy : "connection";
   const templates = useMemo(() => sanitizeTemplates(settings.multiQueryNodeTemplates), [settings.multiQueryNodeTemplates]);
-  const [selectedTargets, setSelectedTargets] = useState<SelectedTarget[]>([]);
+  const [selectedTargets, commitSelectedTargets] = useState<SelectedTarget[]>([]);
+  // Every selection intent supersedes pending discovery, even before it commits.
+  const selectionOperation = useRef(0);
+  const applyingTemplate = useRef(false);
+  const [selectionPending, setSelectionPending] = useState(false);
+  const beginSelection = () => {
+    applyingTemplate.current = false;
+    setSelectionPending(false);
+    return ++selectionOperation.current;
+  };
+  const setSelectedTargets = (value: SetStateAction<SelectedTarget[]>) => {
+    beginSelection();
+    commitSelectedTargets(value);
+  };
+  const [collapsedConnections, setCollapsedConnections] = useState<Set<string>>(new Set());
+  const [collapsedDbGroups, setCollapsedDbGroups] = useState<Set<string>>(new Set());
   const [expandedConnections, setExpandedConnections] = useState<Set<string>>(new Set());
   const [availableDatabases, setAvailableDatabases] = useState<Record<string, string[]>>({});
   const [loadingDatabases, setLoadingDatabases] = useState<Set<string>>(new Set());
@@ -168,10 +183,12 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
 
   useEffect(() => {
     if (!isOpen) return;
+    setCollapsedConnections(new Set());
+    setCollapsedDbGroups(new Set());
     let cancelled = false;
     setRestored(false);
     setSelectedTargets([]); setExpandedConnections(new Set()); setAvailableDatabases({}); setLoadingDatabases(new Set()); setResults([]); setQuery(""); setError(null); setShowMerged(false);
-    dbListRequestsRef.current.clear();
+    dbListRequestsRef.current = new Map();
     setSidebarTab("targets");
     setNodeFilter(""); setSelectedOnly(false); setEditingTemplateId(null); setCurrentTemplateId(null); setTemplatesOpen(false); setExpandedDbGroups(new Set());
 
@@ -185,6 +202,7 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
       const targetConnIds = [...new Set(targets.map(t => t.connectionId))];
       setExpandedConnections(new Set(targetConnIds));
       setRestored(true);
+      const restoreOperation = selectionOperation.current;
 
       // A failed fetch drops its ref entry, so only successfully listed connections prune targets.
       const listed: Record<string, string[]> = {};
@@ -192,9 +210,9 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
         const dbs = await fetchDatabases(id);
         if (dbListRequestsRef.current.has(id)) listed[id] = dbs;
       }));
-      if (!cancelled) setSelectedTargets(prev => pruneMissingDatabases(prev, listed));
+      if (!cancelled && restoreOperation === selectionOperation.current) setSelectedTargets(prev => pruneMissingDatabases(prev, listed));
     })();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; selectionOperation.current++; applyingTemplate.current = false; };
     // Restore once per open; connections/fetchDatabases changing mid-session must not reset the selection.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
@@ -248,10 +266,16 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
     const conn = connections.find(c => c.id === connId);
     if (!conn) return Promise.resolve([]);
 
+    const operation = selectionOperation.current;
+    const requests = dbListRequestsRef.current;
     const request = (async () => {
       setLoadingDatabases(prev => new Set(prev).add(connId));
       try {
-        if (conn.type === "sqlite") return [conn.filepath || conn.database || "main"];
+        if (conn.type === "sqlite") {
+          const list = [conn.filepath || conn.database || "main"];
+          setAvailableDatabases(prev => ({ ...prev, [connId]: list }));
+          return list;
+        }
         const { db } = await ensureConnectionDb(conn.id, conn.database || undefined);
         let dbs: string[] = [];
         if (["postgres", "supabase", "cockroach"].includes(conn.type)) {
@@ -264,14 +288,14 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
             .filter(name => !["information_schema", "performance_schema", "mysql", "sys"].includes(name));
         }
         const list = dbs.length > 0 ? dbs : [conn.database].filter(Boolean);
-        setAvailableDatabases(prev => ({ ...prev, [connId]: list }));
+        if (requests === dbListRequestsRef.current) setAvailableDatabases(prev => ({ ...prev, [connId]: list }));
         return list;
       } catch (e) {
-        dbListRequestsRef.current.delete(connId);
-        setError(`Could not list databases for ${conn.name}: ${e instanceof Error ? e.message : String(e)}`);
+        requests.delete(connId);
+        if (operation === selectionOperation.current) setError(`Could not list databases for ${conn.name}: ${e instanceof Error ? e.message : String(e)}`);
         return [conn.database].filter(Boolean);
       } finally {
-        setLoadingDatabases(prev => { const next = new Set(prev); next.delete(connId); return next; });
+        if (requests === dbListRequestsRef.current) setLoadingDatabases(prev => { const next = new Set(prev); next.delete(connId); return next; });
       }
     })();
     dbListRequestsRef.current.set(connId, request);
@@ -281,6 +305,7 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
   const [isExecuting, setIsExecuting] = useState(false);
 
   const executeQuery = async (queryText?: any, _statementInfo?: any) => {
+    if (applyingTemplate.current) return;
     if (selectedTargets.length === 0) { setError("Please select at least one database"); return; }
 
     // Determine what text to run. Pre-split `__runAll` payloads (already
@@ -412,9 +437,8 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
   useEffect(() => {
     if (!isOpen || !restored || !needAllLists) return;
     connections.forEach(c => { void fetchDatabases(c.id); });
-    // Fetch once per switch into a mode that needs the lists; fetchDatabases caches per connection.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, restored, needAllLists]);
+    // fetchDatabases caches requests, including when connections change.
+  }, [isOpen, restored, needAllLists, connections, fetchDatabases]);
 
   // Select All means every database on every connection, so the lists are
   // fetched first (they were only known for expanded connections, which made
@@ -422,6 +446,7 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
   // active it toggles only what the filter shows.
   const [selectingAll, setSelectingAll] = useState(false);
   const toggleSelectAll = async () => {
+    const operation = beginSelection();
     if (filterActive) {
       setSelectedTargets(prev => toggleTargetGroup(prev, visibleTargets));
       return;
@@ -433,6 +458,7 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
     setSelectingAll(true);
     try {
       const lists = await Promise.all(connections.map(async conn => ({ conn, dbs: await fetchDatabases(conn.id) })));
+      if (operation !== selectionOperation.current) return;
       setSelectedTargets(lists.flatMap(({ conn, dbs }) => dbs.map(db => ({ connectionId: conn.id, database: db }))));
       setExpandedConnections(new Set(connections.map(c => c.id)));
     } finally {
@@ -450,11 +476,13 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
 
   /** Unfiltered, a server checkbox covers every database (lists fetched first); filtered, only the visible ones. */
   const toggleNodes = async (nodes: readonly ConnectionNode[]) => {
+    const operation = beginSelection();
     let group: SelectedTarget[];
     if (filterActive) {
       group = nodes.flatMap(n => n.databases.map(database => ({ connectionId: n.connectionId, database })));
     } else {
       const lists = await Promise.all(nodes.map(async n => ({ id: n.connectionId, dbs: await fetchDatabases(n.connectionId) })));
+      if (operation !== selectionOperation.current) return;
       group = lists.flatMap(({ id, dbs }) => dbs.map(database => ({ connectionId: id, database })));
       setExpandedConnections(prev => { const next = new Set(prev); nodes.forEach(n => next.add(n.connectionId)); return next; });
     }
@@ -466,7 +494,7 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
       .map(database => ({ connectionId: n.connectionId, database })));
     const state = groupCheckState(selectedTargets, all);
     // Databases outside the known list (not fetched yet) still count as a partial selection.
-    if (state === "none" && nodes.some(n => getSelectedCount(n.connectionId) > 0)) return "some";
+    if (!filterActive && nodes.some(n => availableDatabases[n.connectionId] === undefined && getSelectedCount(n.connectionId) > 0)) return "some";
     return state;
   };
 
@@ -546,22 +574,25 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
 
   const applyTemplate = async (template: NodeTemplate) => {
     const targets = restoreTargets(template.targets, connections.map(c => c.id));
-    setSelectedTargets(targets);
-    setCurrentTemplateId(template.id);
+    const operation = beginSelection();
+    applyingTemplate.current = true;
+    setSelectionPending(true);
     const connIds = [...new Set(targets.map(t => t.connectionId))];
-    setExpandedConnections(prev => new Set([...prev, ...connIds]));
-    flashToast(`Applied template: ${template.name} (${plural(targets.length, "database")})`);
-
     const listed: Record<string, string[]> = {};
     await Promise.all(connIds.map(async id => {
       const dbs = await fetchDatabases(id);
       if (dbListRequestsRef.current.has(id)) listed[id] = dbs;
     }));
-    const missing = template.targets.length - pruneMissingDatabases(targets, listed).length;
-    if (missing > 0) {
-      setSelectedTargets(prev => pruneMissingDatabases(prev, listed));
-      setError(`${plural(missing, "database")} in "${template.name}" no longer exist${missing === 1 ? "s" : ""} and ${missing === 1 ? "was" : "were"} skipped.`);
-    }
+    if (operation !== selectionOperation.current) return;
+    const finalized = pruneMissingDatabases(targets, listed);
+    const missing = template.targets.length - finalized.length;
+    commitSelectedTargets(finalized);
+    applyingTemplate.current = false;
+    setSelectionPending(false);
+    setCurrentTemplateId(template.id);
+    setExpandedConnections(prev => new Set([...prev, ...connIds]));
+    flashToast(`Applied template: ${template.name} (${plural(finalized.length, "database")})`);
+    setError(missing > 0 ? `${plural(missing, "database")} in "${template.name}" no longer exist${missing === 1 ? "s" : ""} and ${missing === 1 ? "was" : "were"} skipped.` : null);
   };
 
   const saveTemplateEdit = (id: string, name: string, targets: MultiQueryTarget[]): string | null => {
@@ -572,7 +603,7 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
     setEditingTemplateId(null);
 
     const previous = current.find(t => t.id === id)?.targets ?? [];
-    const nextSelection = selectionAfterTemplateEdit(previous, targets, selectedTargets, id === currentTemplateId, connections.map(c => c.id));
+    const nextSelection = selectionAfterTemplateEdit(previous, targets, selectedTargets, id === currentTemplateId, connections.map(c => c.id), availableDatabases);
     if (nextSelection) {
       setSelectedTargets(nextSelection);
       setCurrentTemplateId(id);
@@ -738,36 +769,17 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
     return (
       <div
         key={`${connId}/${db}`}
-        onClick={() => toggleTarget(connId, db)}
         className={`flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all ${
           selected
             ? "bg-[var(--accent-9)]/15 text-[var(--accent-11)] border border-[var(--accent-9)]/30"
             : "hover:bg-[var(--neutral-4)] opacity-70 border border-transparent"
         }`}
       >
-        <div
-          className="relative"
-          onMouseEnter={() => {
-            if (status && result) setHoveredStatus({ connId, db, result });
-          }}
-          onMouseLeave={() => setHoveredStatus(null)}
-          onClick={(e) => {
-            // Without a result the indicator is the selection radio, so the click toggles the row.
-            if (!result) return;
-            e.stopPropagation();
-            setStatusDetailModal(result);
-          }}
-        >
-          {status === 'running' ? (
-            <Loader2 className="w-3.5 h-3.5 text-[var(--warning-11)] animate-spin" />
-          ) : status === 'done' ? (
-            <CheckCircle className="w-3.5 h-3.5 text-[var(--success-11)] cursor-pointer hover:scale-110 transition-transform" />
-          ) : status === 'error' ? (
-            <AlertCircle className="w-3.5 h-3.5 text-[var(--danger-11)] cursor-pointer hover:scale-110 transition-transform" />
-          ) : (
-            <div className={`w-3.5 h-3.5 rounded-md border-2 ${selected ? "bg-[var(--accent-9)] border-[var(--accent-9)]" : "border-[var(--neutral-7)]"}`} />
-          )}
-        </div>
+        <GroupCheckbox state={selected ? "all" : "none"} size="sm" label={`Select ${connectionById.get(connId)?.name ?? connId} / ${db}`} onChange={() => toggleTarget(connId, db)} />
+        {result && <button type="button" aria-label={`Open result details for ${connectionById.get(connId)?.name ?? connId} / ${db}`} onClick={() => setStatusDetailModal(result)}
+          onMouseEnter={() => { if (status) setHoveredStatus({ connId, db, result }); }} onMouseLeave={() => setHoveredStatus(null)}>
+          {status === "running" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : status === "error" ? <AlertCircle className="w-3.5 h-3.5" /> : <CheckCircle className="w-3.5 h-3.5" />}
+        </button>}
         {icon}
         <div className="flex-1 min-w-0">
           <span className="text-[11px] truncate block font-medium">{label}</span>
@@ -790,21 +802,21 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
     const conn = connectionById.get(node.connectionId);
     if (!conn) return null;
     // A filter shows its matches without needing each server expanded by hand.
-    const isExp = expandedConnections.has(conn.id) || filterActive;
+    const isExp = !collapsedConnections.has(conn.id) && (expandedConnections.has(conn.id) || filterActive);
     const count = getSelectedCount(conn.id);
     const total = (availableDatabases[conn.id] || [conn.database]).length;
     return (
       <div key={conn.id} className="mb-2">
         <div className="flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-[var(--neutral-4)] group bg-[var(--surface-panel)] border border-[var(--neutral-6)]">
           <button
-            onClick={() => { setExpandedConnections(prev => { const n = new Set(prev); if (n.has(conn.id)) n.delete(conn.id); else { n.add(conn.id); void fetchDatabases(conn.id); } return n; }); }}
+            onClick={() => { setCollapsedConnections(prev => { const n = new Set(prev); if (isExp) n.add(conn.id); else n.delete(conn.id); return n; }); if (!isExp) void fetchDatabases(conn.id); setExpandedConnections(prev => { const n = new Set(prev); if (isExp) n.delete(conn.id); else n.add(conn.id); return n; }); }}
             className="p-1 rounded hover:bg-[var(--neutral-5)] transition-colors"
             aria-label={isExp ? "Collapse" : "Expand"}
           >
             {isExp ? <ChevronDown className="w-4 h-4 text-[var(--accent-11)]" /> : <ChevronRight className="w-4 h-4 text-[var(--accent-11)]" />}
           </button>
-          <div onClick={() => void toggleNodes([node])} className="flex-1 flex items-center gap-3 cursor-pointer min-w-0">
-            <GroupCheckbox state={nodeCheckState([node])} />
+          <label className="flex-1 flex items-center gap-3 cursor-pointer min-w-0">
+            <GroupCheckbox state={nodeCheckState([node])} label={`Select databases on ${conn.name}`} onChange={() => void toggleNodes([node])} />
             <div className="flex-1 min-w-0">
               <span className="text-xs font-semibold truncate block">{conn.name}</span>
               <span className="text-[9px] text-[var(--neutral-11)] truncate block">{conn.type} • {conn.host}</span>
@@ -820,7 +832,7 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
                 {count}
               </span>
             )}
-          </div>
+          </label>
         </div>
         {isExp && (
           <div className="ml-4 pl-3 py-2 border-l-2 border-[var(--neutral-6)] space-y-1.5">
@@ -1058,20 +1070,20 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
                   {groupBy === "connection" && visibleNodes.map(renderConnectionNode)}
                   {groupBy === "database" && groupNodesByDatabase(visibleNodes).map(group => {
                     const members = group.connectionIds.map(connectionId => ({ connectionId, database: group.database }));
-                    const isExp = expandedDbGroups.has(group.database) || filterActive;
+                    const isExp = !collapsedDbGroups.has(group.database) && (expandedDbGroups.has(group.database) || filterActive);
                     const count = members.filter(t => isTargetSelected(t.connectionId, t.database)).length;
                     return (
                       <div key={group.database} className="mb-2">
                         <div className="flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-[var(--neutral-4)] bg-[var(--surface-panel)] border border-[var(--neutral-6)]">
                           <button
-                            onClick={() => setExpandedDbGroups(prev => { const n = new Set(prev); if (n.has(group.database)) n.delete(group.database); else n.add(group.database); return n; })}
+                            onClick={() => { setCollapsedDbGroups(prev => { const n = new Set(prev); if (isExp) n.add(group.database); else n.delete(group.database); return n; }); setExpandedDbGroups(prev => { const n = new Set(prev); if (isExp) n.delete(group.database); else n.add(group.database); return n; }); }}
                             className="p-1 rounded hover:bg-[var(--neutral-5)] transition-colors"
                             aria-label={isExp ? "Collapse" : "Expand"}
                           >
                             {isExp ? <ChevronDown className="w-4 h-4 text-[var(--accent-11)]" /> : <ChevronRight className="w-4 h-4 text-[var(--accent-11)]" />}
                           </button>
-                          <div onClick={() => setSelectedTargets(prev => toggleTargetGroup(prev, members))} className="flex-1 flex items-center gap-3 cursor-pointer min-w-0">
-                            <GroupCheckbox state={groupCheckState(selectedTargets, members)} />
+                          <label className="flex-1 flex items-center gap-3 cursor-pointer min-w-0">
+                            <GroupCheckbox state={groupCheckState(selectedTargets, members)} label={`Select ${group.database} on visible servers`} onChange={() => setSelectedTargets(prev => toggleTargetGroup(prev, members))} />
                             <div className="flex-1 min-w-0">
                               <span className="text-xs font-semibold truncate block">{group.database}</span>
                               <span className="text-[9px] text-[var(--neutral-11)] truncate block">on {plural(group.connectionIds.length, "server")}</span>
@@ -1081,7 +1093,7 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
                                 {count}
                               </span>
                             )}
-                          </div>
+                          </label>
                         </div>
                         {isExp && (
                           <div className="ml-4 pl-3 py-2 border-l-2 border-[var(--neutral-6)] space-y-1.5">
@@ -1128,7 +1140,7 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
                    className="flex-1"
                    onClick={executeQuery}
                    loading={isExecuting}
-                   disabled={!query.trim() || selectedTargets.length === 0}
+                   disabled={selectionPending || !query.trim() || selectedTargets.length === 0}
                    leftIcon={isExecuting ? undefined : <Play className="w-4 h-4 fill-current" />}
                  >
                    {isExecuting ? `Executing SQL on ${selectedTargets.length} Nodes...` : `Execute SQL on ${selectedTargets.length} Nodes`}

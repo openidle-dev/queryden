@@ -240,3 +240,24 @@ describe("selectionAfterTemplateEdit", () => {
     expect(selectionAfterTemplateEdit(before, after, [], false, ["a", "b"])).toBeNull();
   });
 });
+
+describe("template discovery and legacy name regressions", () => {
+  const template = (id: string, name: string, database: string): NodeTemplate => ({ id, name, targets: [t("a", database)], createdAt: 1, updatedAt: 1 });
+
+  it("resolves case-insensitive loaded names without losing target sets and remains stable on reload", () => {
+    const result = sanitizeTemplates([template("1", "Prod", "one"), template("2", "PROD", "two"), template("3", "prod (2)", "three")]);
+    expect(new Set(result.map(item => item.name.toLowerCase())).size).toBe(3);
+    expect(result.map(item => item.targets)).toEqual([[t("a", "one")], [t("a", "two")], [t("a", "three")]]);
+    expect(sanitizeTemplates(result)).toEqual(result);
+  });
+
+  it("checks every other ID when editing legacy duplicate names", () => {
+    expect(editTemplate([template("1", "Prod", "one"), template("2", "PROD", "two")], "1", "Prod", [t("a", "one")], 2).error).toBeDefined();
+  });
+
+  it("keeps missing members saved while pruning confirmed missing execution targets and preserving unknown ones", () => {
+    const members = [t("a", "present"), t("a", "missing"), t("b", "unknown")];
+    expect(selectionAfterTemplateEdit(members, members, members, true, ["a", "b"], { a: ["present"] })).toEqual([t("a", "present"), t("b", "unknown")]);
+    expect(members).toHaveLength(3);
+  });
+});
