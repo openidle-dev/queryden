@@ -70,15 +70,29 @@ pub(crate) fn float_to_json(v: f64) -> JsonValue {
     serde_json::Number::from_f64(v).map(JsonValue::Number).unwrap_or(JsonValue::Null)
 }
 
-/// `bytes` as a JSON array of byte values — the contract the frontend's
-/// binary preview expects for bytea / BLOB columns.
+/// `bytes` for bytea / BLOB columns as `{"$binary": <base64>, "size": <len>}`.
+/// A JSON array of byte values costs ~4 characters per byte over IPC and one
+/// JS number per byte in the webview, which froze the grid on multi-MB files.
 pub(crate) fn bytes_to_json(bytes: &[u8]) -> JsonValue {
-    JsonValue::Array(bytes.iter().map(|b| JsonValue::Number((*b).into())).collect())
+    use base64::Engine as _;
+    let mut object = serde_json::Map::with_capacity(2);
+    object.insert(
+        "$binary".into(),
+        JsonValue::String(base64::engine::general_purpose::STANDARD.encode(bytes)),
+    );
+    object.insert("size".into(), JsonValue::Number(bytes.len().into()));
+    JsonValue::Object(object)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bytes_are_base64_with_their_size() {
+        assert_eq!(bytes_to_json(b"Hi"), serde_json::json!({ "$binary": "SGk=", "size": 2 }));
+        assert_eq!(bytes_to_json(&[]), serde_json::json!({ "$binary": "", "size": 0 }));
+    }
 
     #[test]
     fn decimals_stay_exact() {

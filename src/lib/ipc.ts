@@ -331,8 +331,16 @@ export interface IpcCommands {
       sshPassword: string | null;
       sshKeyPath: string | null;
       sshKeyPassphrase: string | null;
+      /** Database host/port as the SSH server sees them; forwarding is tested when both are set. */
+      remoteHost: string | null;
+      remotePort: number | null;
     };
-    result: void;
+    /** Step-by-step report; a failed step is reported, not thrown. */
+    result: {
+      success: boolean;
+      checks: { name: string; status: "ok" | "warn" | "fail" | "skipped"; detail: string }[];
+      hostKeyFingerprint: string | null;
+    };
   };
 
   // cli

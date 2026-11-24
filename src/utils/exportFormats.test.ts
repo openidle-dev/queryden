@@ -49,3 +49,25 @@ describe("SQL generation", () => {
     expect(toUpdateStatements("t", ["id", "name", "note"], ["id"], [row], "postgres")).toBe("UPDATE t SET name = 'x', note = NULL WHERE id = 7;");
   });
 });
+
+describe("binary values", () => {
+  const row = { id: 1, file: { $binary: "SGk=", size: 2 } };
+
+  it("export as bytea hex text, not the transport object", () => {
+    expect(toCsv(["id", "file"], [row])).toBe("id,file\r\n1,\\x4869");
+  });
+
+  it("become engine-specific literals in generated SQL", () => {
+    expect(toInsertStatements("t", ["id", "file"], [row], "postgres")).toBe("INSERT INTO t (id, file) VALUES (1, '\\x4869');");
+    expect(toInsertStatements("t", ["id", "file"], [row], "mysql")).toBe("INSERT INTO t (id, file) VALUES (1, X'4869');");
+  });
+});
+
+describe("reserved words in generated SQL", () => {
+  it("are quoted as identifiers", () => {
+    expect(toInsertStatements("order", ["id", "user", "group"], [{ id: 1, user: "a", group: "b" }], "postgres")).toBe(
+      'INSERT INTO "order" (id, "user", "group") VALUES (1, \'a\', \'b\');',
+    );
+    expect(toDeleteStatements("t", ["key"], ["key"], [{ key: 5 }], "mysql")).toBe("DELETE FROM t WHERE `key` = 5;");
+  });
+});

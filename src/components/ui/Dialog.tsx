@@ -8,6 +8,7 @@ import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { cn } from "../../lib/cn";
 import { IconButton } from "./IconButton";
+import { useBackdropDismiss } from "./backdropDismiss";
 
 export type DialogSize = "sm" | "md" | "lg" | "xl";
 
@@ -52,6 +53,7 @@ export function Dialog({
   children,
 }: DialogProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const backdropDismiss = useBackdropDismiss(onClose, dismissOnBackdrop);
 
   // Focus management — only on open/close transitions
   useEffect(() => {
@@ -87,9 +89,7 @@ export function Dialog({
         "bg-black/60 backdrop-blur-sm",
         backdropClassName
       )}
-      onClick={(e) => {
-        if (e.target === e.currentTarget && dismissOnBackdrop) onClose();
-      }}
+      {...backdropDismiss}
     >
       <div
         ref={panelRef}

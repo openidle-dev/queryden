@@ -1,11 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Copy, AlertCircle, Info } from "lucide-react";
 import { useConnections } from "../../contexts/useConnections";
-import { quoteIdentifier } from "../../utils/sqlSecurity";
-import { escapeSqlStringLiteral } from "../../utils/sqlDialect";
+import { escapeSqlStringLiteral, quoteIdentifierPart } from "../../utils/sqlDialect";
 import { ToolGuideWizard } from "./ToolGuideWizard";
 import { useConfirmDialog } from "../ui/ConfirmDialog";
 import { logger } from "../../utils/logger";
+import { cancelSession, endSession, runInSession, type SessionDb } from "../../lib/sqlSession";
 import { Dialog } from "../ui/Dialog";
 import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
@@ -18,7 +18,7 @@ interface CloneDialogProps {
 }
 
 export function CloneDialog({ isOpen, onClose }: CloneDialogProps) {
-  const { databases, activeConnection, currentDb, connectToDatabase, selectedDatabase } = useConnections();
+  const { databases, activeConnection, connectToDatabase, selectedDatabase, ensureConnectionDb, dropCachedConnection, listServerDatabases } = useConnections();
   const [sourceDB, setSourceDB] = useState("");
   const [targetDB, setTargetDB] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -29,6 +29,10 @@ export function CloneDialog({ isOpen, onClose }: CloneDialogProps) {
   const [elapsedTime, setElapsedTime] = useState(0);
   const [strategyUsed, setStrategyUsed] = useState<"FILE_COPY" | "TEMPLATE" | null>(null);
   const [showGuide, setShowGuide] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [isCancelling, setIsCancelling] = useState(false);
+  // The clone runs on its own server session so Cancel can stop it there.
+  const cloneRunRef = useRef<{ db: SessionDb; sessionId: string; cancelled: boolean } | null>(null);
 
   const confirm = useConfirmDialog();
 
@@ -37,6 +41,7 @@ export function CloneDialog({ isOpen, onClose }: CloneDialogProps) {
       setSourceDB(databases[0]);
       setError(null);
       setSuccess(null);
+      setNotice(null);
       setTargetDB("");
     }
   }, [isOpen, databases]);
@@ -58,6 +63,8 @@ export function CloneDialog({ isOpen, onClose }: CloneDialogProps) {
     setIsLoading(true);
     setError(null);
     setSuccess(null);
+    setNotice(null);
+    setIsCancelling(false);
     setElapsedTime(0);
     setStrategyUsed(null);
 
@@ -67,7 +74,7 @@ export function CloneDialog({ isOpen, onClose }: CloneDialogProps) {
     }, 1000);
 
     try {
-      if (!currentDb || !activeConnection) {
+      if (!activeConnection) {
          throw new Error("No active database connection.");
       }
 
@@ -75,9 +82,9 @@ export function CloneDialog({ isOpen, onClose }: CloneDialogProps) {
          throw new Error("Cloning is only supported for PostgreSQL databases.");
       }
 
-      const dbType = activeConnection.type || "postgres";
-      const quotedTarget = quoteIdentifier(targetDB, dbType);
-      const quotedSource = quoteIdentifier(sourceDB, dbType);
+      // Database names are single identifiers: a dot is part of the name.
+      const quotedTarget = quoteIdentifierPart(targetDB, "postgres");
+      const quotedSource = quoteIdentifierPart(sourceDB, "postgres");
       let cloneQuery = `CREATE DATABASE ${quotedTarget} TEMPLATE ${quotedSource}`;
       if (useInstantClone) {
         cloneQuery += " STRATEGY FILE_COPY";
@@ -102,61 +109,83 @@ ${cloneQuery};`;
         return;
       }
 
-      // If we are attempting to clone the currently active database, we MUST
-      // connect to a different database (e.g. 'postgres') first, otherwise
-      // PostgreSQL will reject it because we are using the template DB.
-      let executionDb = currentDb;
+      // PostgreSQL refuses to copy a template anyone is connected to, so the
+      // clone runs from another database on the server, through the same
+      // connection path as the editor (SSH tunnel, vault credentials, IPv6).
+      const maintenanceDb = [activeConnection.database, "postgres", "template1"].find((d) => d && d !== sourceDB) ?? "postgres";
+      await dropCachedConnection(activeConnection.id, sourceDB);
+      const { db } = await ensureConnectionDb(activeConnection.id, maintenanceDb);
+      const run = { db: db as SessionDb, sessionId: `clone-${Date.now()}`, cancelled: false };
+      cloneRunRef.current = run;
+      const runSql = (sql: string) => runInSession(run.db, run.sessionId, sql);
 
       try {
-        if (selectedDatabase === sourceDB) {
-          const Database = (await import("@tauri-apps/plugin-sql")).default;
-          const connectionString = `postgres://${encodeURIComponent(activeConnection.username || "")}:${encodeURIComponent(activeConnection.password || "")}@${activeConnection.host}:${activeConnection.port || 5432}/postgres`;
-          executionDb = await Database.load(connectionString);
+        // Step 1: end other sessions on the source database.
+        try {
+          await runSql(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${escapeSqlStringLiteral(sourceDB)} AND pid <> pg_backend_pid()`);
+        } catch (err: any) {
+          logger.warn("Failed to terminate connections:", err);
+        }
+        if (run.cancelled) throw new Error("cancelled");
+
+        // Step 2: the copy itself. Cancel interrupts it on the server, which
+        // removes the partly-copied database.
+        try {
+          await runSql(cloneQuery);
+          setStrategyUsed(useInstantClone ? "FILE_COPY" : "TEMPLATE");
+        } catch (err: any) {
+          const message = String(err?.message ?? err);
+          if (!run.cancelled && useInstantClone && (message.includes("syntax error") || message.includes("STRATEGY"))) {
+            logger.debug("Instant clone failed, falling back to normal clone...");
+            await runSql(`CREATE DATABASE ${quotedTarget} TEMPLATE ${quotedSource}`);
+            setStrategyUsed("TEMPLATE");
+          } else {
+            throw err;
+          }
         }
       } catch (err) {
-        logger.warn("Could not connect to 'postgres' default database. The clone might fail if connections to the source are active.");
-      }
-
-      // Step 1: Terminate all connections to the source database
-      try {
-        // We do not exclude our own pid if we successfully connected to 'postgres',
-        // which kills any dangling connections the UI left open in the background.
-        const terminateQuery = selectedDatabase === sourceDB
-          ? `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${escapeSqlStringLiteral(sourceDB)};`
-          : `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${escapeSqlStringLiteral(sourceDB)} AND pid <> pg_backend_pid();`;
-
-        await executionDb.execute(terminateQuery);
-      } catch (err: any) {
-        logger.warn("Failed to terminate connections:", err);
-      }
-
-      // Step 2: Execute Clone
-      try {
-        await executionDb.execute(cloneQuery);
-        if (useInstantClone) setStrategyUsed("FILE_COPY");
-        else setStrategyUsed("TEMPLATE");
-      } catch (err: any) {
-        // If FILE_COPY is unsupported, fallback to normal clone
-        if (useInstantClone && (err.message?.includes("syntax error") || err.message?.includes("STRATEGY"))) {
-          logger.debug("Instant clone failed, falling back to normal clone...");
-          await executionDb.execute(`CREATE DATABASE ${quotedTarget} TEMPLATE ${quotedSource}`);
-          setStrategyUsed("TEMPLATE");
-        } else {
-          throw err;
+        if (run.cancelled) {
+          setNotice(`Clone cancelled. PostgreSQL removed the partial copy; "${targetDB}" was not created.`);
+          return;
+        }
+        throw err;
+      } finally {
+        cloneRunRef.current = null;
+        void endSession(run.db, run.sessionId).catch(() => undefined);
+        if (selectedDatabase === sourceDB) {
+          // Its connection was ended with the others on the source database.
+          await connectToDatabase(activeConnection.id, sourceDB).catch((e) => logger.warn("Reconnect after clone failed:", e));
         }
       }
 
       setSuccess(`Database '${targetDB}' successfully cloned.`);
-      if (activeConnection) {
-        await connectToDatabase(activeConnection.id, selectedDatabase || undefined);
-      }
+      // Re-read the server's database list so the clone shows up in the
+      // explorer and the editor's database dropdown.
+      await listServerDatabases(activeConnection.id).catch((e) => logger.warn("Refresh after clone failed:", e));
     } catch (err: any) {
       setError(err.message || String(err));
     } finally {
       clearInterval(timer);
       setIsLoading(false);
+      setIsCancelling(false);
     }
   };
+
+  const handleCancelClone = async () => {
+    const run = cloneRunRef.current;
+    if (!run || run.cancelled) return;
+    run.cancelled = true;
+    setIsCancelling(true);
+    try {
+      await cancelSession(run.db, run.sessionId);
+    } catch (err: any) {
+      run.cancelled = false;
+      setIsCancelling(false);
+      setError(`Could not cancel the clone: ${err?.message || String(err)}`);
+    }
+  };
+
+  const cloneRunning = isLoading && directExecute;
 
   if (!isOpen) return null;
 
@@ -201,8 +230,8 @@ ${cloneQuery};`;
   }
 
   return (
-    <Dialog open={isOpen} onClose={onClose} size="lg">
-      <Dialog.Title onClose={onClose}>
+    <Dialog open={isOpen} onClose={onClose} size="lg" dismissOnEsc={!cloneRunning} dismissOnBackdrop={!cloneRunning}>
+      <Dialog.Title onClose={cloneRunning ? undefined : onClose}>
         <span className="flex items-center gap-3">
           <span className="p-2 bg-[var(--accent-3)] rounded-lg">
             <Copy className="w-5 h-5 text-[var(--accent-11)]" />
@@ -221,6 +250,13 @@ ${cloneQuery};`;
           <div className="p-3 bg-[var(--danger-3)] border border-[var(--danger-6)] rounded flex gap-3 text-[var(--danger-11)] text-sm">
             <AlertCircle className="w-5 h-5 shrink-0" />
             <span>{error}</span>
+          </div>
+        )}
+
+        {notice && (
+          <div className="p-3 bg-[var(--neutral-3)] border border-[var(--neutral-6)] rounded flex gap-3 text-[var(--neutral-12)] text-sm">
+            <Info className="w-5 h-5 shrink-0 text-[var(--accent-11)]" />
+            <span>{notice}</span>
           </div>
         )}
 
@@ -305,9 +341,15 @@ ${cloneQuery};`;
       </Dialog.Body>
 
       <Dialog.Footer>
-        <Button variant="ghost" size="md" onClick={onClose} disabled={isLoading}>
-          Cancel
-        </Button>
+        {cloneRunning ? (
+          <Button variant="destructive" size="md" onClick={() => void handleCancelClone()} loading={isCancelling}>
+            {isCancelling ? "Cancelling…" : "Cancel Clone"}
+          </Button>
+        ) : (
+          <Button variant="ghost" size="md" onClick={onClose} disabled={isLoading}>
+            Close
+          </Button>
+        )}
         <Button
           variant={directExecute ? "primary" : "secondary"}
           size="md"

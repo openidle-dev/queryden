@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { bucketCatalogRows, qualifyObjectName, type CatalogRow } from "./schemaCatalog";
+import { bucketCatalogRows, needsDatabaseList, qualifyObjectName, type CatalogRow } from "./schemaCatalog";
 
 describe("qualifyObjectName", () => {
   it("leaves public objects unqualified", () => {
@@ -55,5 +55,20 @@ describe("bucketCatalogRows", () => {
       { sch: "public", nm: "orphan" },
     ] as unknown as CatalogRow[];
     expect(bucketCatalogRows(rows)).toEqual({ tables: ["users"] });
+  });
+});
+
+describe("needsDatabaseList", () => {
+  it("reads the list on a plain server connect", () => {
+    expect(needsDatabaseList(undefined, ["a", "b"])).toBe(true);
+  });
+
+  it("reads it when a named database opens and the list was never read", () => {
+    expect(needsDatabaseList("odoo", undefined)).toBe(true);
+    expect(needsDatabaseList("odoo", [])).toBe(true);
+  });
+
+  it("skips it when switching databases on a server whose list is known", () => {
+    expect(needsDatabaseList("odoo", ["odoo", "postgres"])).toBe(false);
   });
 });

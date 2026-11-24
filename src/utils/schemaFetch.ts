@@ -19,7 +19,7 @@
  */
 import type { SchemaItems } from "../contexts/ConnectionContext";
 import { escapeSqlStringLiteral } from "./sqlDialect";
-import { bucketCatalogRows } from "./schemaCatalog";
+import { bucketCatalogRows, foreignDataWrappersFromCatalog, groupForeignDataWrappers, type ForeignServerRow } from "./schemaCatalog";
 import {
   mapMysqlColumns,
   mapMysqlRoutineNames,
@@ -109,6 +109,19 @@ export async function fetchSchemaItems(req: SchemaFetchRequest): Promise<SchemaI
         ? `AND ${col} IN (${selectedSchemas.map(s => escapeSqlStringLiteral(s)).join(',')})`
         : '';
 
+    // Foreign-data wrappers → servers → user mappings ride the same round
+    // trip. CockroachDB has no foreign-data wrappers, so it skips them.
+    const supportsFdw = activeConnection.type !== "cockroach";
+    const fdwUnion = supportsFdw ? `
+        UNION ALL
+        SELECT 'fdwWrapper', NULL::text, fdwname::text FROM pg_foreign_data_wrapper
+        UNION ALL
+        SELECT 'fdwServer', fdw.fdwname::text, srv.srvname::text
+          FROM pg_foreign_server srv
+          JOIN pg_foreign_data_wrapper fdw ON fdw.oid = srv.srvfdw
+        UNION ALL
+        SELECT 'fdwMapping', srvname::text, usename::text FROM pg_user_mappings` : "";
+
     let objectRows: any[] | null = null;
     try {
       setSchemaProgress({ phase: "objects", current: 1, total: 3 });
@@ -165,7 +178,7 @@ export async function fetchSchemaItems(req: SchemaFetchRequest): Promise<SchemaI
         UNION ALL
         SELECT 'eventTriggers', NULL::text, evtname::text FROM pg_event_trigger
         UNION ALL
-        SELECT 'languages', NULL::text, lanname::text FROM pg_language WHERE lanispl = true
+        SELECT 'languages', NULL::text, lanname::text FROM pg_language WHERE lanispl = true${fdwUnion}
         ORDER BY 1, 2, 3
       `);
     } catch (e) {
@@ -192,6 +205,7 @@ export async function fetchSchemaItems(req: SchemaFetchRequest): Promise<SchemaI
       schema.extensions = byKind.extensions ?? [];
       schema.eventTriggers = byKind.eventTriggers ?? [];
       schema.languages = byKind.languages ?? [];
+      schema.foreignDataWrappers = foreignDataWrappersFromCatalog(objectRows);
     } else {
       setSchemaProgress({ phase: "tables", current: 1, total: 12 });
       try {
@@ -394,6 +408,22 @@ export async function fetchSchemaItems(req: SchemaFetchRequest): Promise<SchemaI
         schema.languages = languages.map((l: any) => l.lanname);
       } catch (e) {
         schema.languages = [];
+      }
+    }
+
+    // Per-object fallback for foreign-data wrappers, their servers and user mappings.
+    if (!objectRows && supportsFdw) {
+      try {
+        const fdwRows = await currentDb.select(`
+          SELECT fdw.fdwname::text AS wrapper, srv.srvname::text AS server, um.usename::text AS mapping
+            FROM pg_foreign_data_wrapper fdw
+            LEFT JOIN pg_foreign_server srv ON srv.srvfdw = fdw.oid
+            LEFT JOIN pg_user_mappings um ON um.srvid = srv.oid
+           ORDER BY 1, 2, 3
+        `) as ForeignServerRow[];
+        schema.foreignDataWrappers = groupForeignDataWrappers(fdwRows);
+      } catch {
+        schema.foreignDataWrappers = [];
       }
     }
 

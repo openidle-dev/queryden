@@ -288,6 +288,35 @@ describe("fetchSchemaItems — per-view schema columns when filtered", () => {
     );
   });
 
+  it("reads foreign-data wrappers, servers and user mappings in the same round trip", async () => {
+    const issued: string[] = [];
+    const rows = [
+      ...PG_OBJECT_ROWS,
+      { kind: "fdwMapping", sch: "remote_odoo", nm: "odoo" },
+      { kind: "fdwServer", sch: "postgres_fdw", nm: "remote_odoo" },
+      { kind: "fdwWrapper", sch: null, nm: "file_fdw" },
+      { kind: "fdwWrapper", sch: null, nm: "postgres_fdw" },
+    ];
+    const db = mockDb((sql) => {
+      issued.push(sql);
+      return sql.includes("AS kind") ? rows : [];
+    });
+    const items = await fetchSchemaItems({ db, connType: "postgres", selectedSchemas: [] });
+    expect(items.foreignDataWrappers).toEqual([
+      { name: "file_fdw", servers: [] },
+      { name: "postgres_fdw", servers: [{ name: "remote_odoo", userMappings: ["odoo"] }] },
+    ]);
+    expect(issued).toHaveLength(3);
+    expect(issued.find((sql) => sql.includes("AS kind"))).toContain("FROM pg_user_mappings");
+  });
+
+  it("leaves foreign-data wrappers out on CockroachDB", async () => {
+    const issued: string[] = [];
+    const items = await fetchSchemaItems({ db: pgDb(issued), connType: "cockroach", selectedSchemas: [] });
+    expect(issued.find((sql) => sql.includes("AS kind"))).not.toContain("pg_foreign_data_wrapper");
+    expect(items.foreignDataWrappers).toEqual([]);
+  });
+
   it("reads every object list in a single round trip", async () => {
     const issued: string[] = [];
     await fetchSchemaItems({ db: pgDb(issued), connType: "postgres", selectedSchemas: [] });

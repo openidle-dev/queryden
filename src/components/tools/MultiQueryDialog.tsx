@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo, type SetStateAction, type ReactNode } from "react";
 import { X, Play, Loader2, AlertCircle, Layers, ChevronDown, ChevronRight, Folder, Search, CheckCircle, Database, Clock, Table2, AlertTriangle, Info, Star, Download, FileCode, Globe, RefreshCw, Copy, Trash2, FileJson, Sheet, Bookmark, BookmarkPlus, Pencil, Save, Server } from "lucide-react";
+import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { SavedQueryList } from "../explorer/SavedQueryList";
 import { GroupCheckbox } from "./GroupCheckbox";
 import { NodeTemplateEditorDialog } from "./NodeTemplateEditorDialog";
@@ -34,6 +35,7 @@ import { GridView, GridViewRef } from "../ui/GridView";
 import { CompactSelection } from "@glideapps/glide-data-grid";
 import { Dialog } from "../ui/Dialog";
 import { splitStatements } from "../../utils/splitStatements";
+import { isGridInternalKey } from "../../utils/resultSet";
 import { isMySqlLike, isSelectLike } from "../../utils/sqlDialect";
 import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
@@ -732,8 +734,8 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
 
     const table = "target_table";
     const sqlColumns = selectedRows.length > 0
-      ? Object.keys(selectedRows[0]).filter(k => !k.startsWith('_'))
-      : columns.filter(k => !k.startsWith('_'));
+      ? Object.keys(selectedRows[0]).filter(k => !isGridInternalKey(k))
+      : columns.filter(k => !isGridInternalKey(k));
 
     let sql = "";
 
@@ -1130,10 +1132,11 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
             </div>
           </div>
           {/* Main area */}
-          <div className="flex-1 flex flex-col overflow-hidden bg-[var(--surface-base)]">
-            <div className="p-4 flex flex-col gap-3 border-b border-[var(--neutral-6)] bg-[var(--surface-elevated)] shrink-0">
-               <div className="h-40 relative rounded-xl border border-[var(--neutral-6)] overflow-hidden shadow-inner bg-[var(--surface-base)]"><QueryEditor value={query} onChange={setQuery} onRun={executeQuery} /></div>
-               <div className="flex gap-2">
+          <PanelGroup direction="vertical" autoSaveId="multi-query-editor-split" className="flex-1 min-h-0 bg-[var(--surface-base)]">
+            <Panel defaultSize={30} minSize={15} maxSize={80}>
+            <div className="h-full p-4 flex flex-col gap-3 bg-[var(--surface-elevated)]">
+               <div className="flex-1 min-h-0 relative rounded-xl border border-[var(--neutral-6)] overflow-hidden shadow-inner bg-[var(--surface-base)]"><QueryEditor value={query} onChange={setQuery} onRun={executeQuery} /></div>
+               <div className="flex gap-2 shrink-0">
                  <Button
                    variant="primary"
                    size="md"
@@ -1157,7 +1160,10 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
                  </Button>
                </div>
             </div>
-            <div className="flex-1 flex flex-col overflow-hidden">
+            </Panel>
+            <PanelResizeHandle className="h-1 bg-[var(--neutral-6)] hover:bg-[var(--accent-9)] transition-colors cursor-row-resize select-none shrink-0 data-[resize-handle-state=drag]:bg-[var(--accent-9)] data-[resize-handle-state=hover]:bg-[var(--accent-9)]/60" />
+            <Panel minSize={15}>
+            <div className="h-full flex flex-col overflow-hidden">
                {results.length > 0 ? (<>
                   <div className="flex items-center bg-[var(--surface-elevated)] border-b border-[var(--neutral-6)] shrink-0 overflow-x-auto" style={{ scrollbarWidth: 'thin' }}>
                     <button onClick={() => { setShowMerged(false); setActiveTab(0); }} className={`px-4 py-3 text-[11px] font-bold border-r border-[var(--neutral-6)] transition-all ${!showMerged && activeTab === 0 ? "bg-[var(--surface-base)] text-[var(--accent-11)] border-b-2 border-[var(--accent-9)]" : "opacity-60 hover:opacity-100"}`}>CLUSTER OUTPUT</button>
@@ -1321,7 +1327,8 @@ export function MultiQueryDialog({ isOpen, onClose }: MultiQueryDialogProps) {
                   </div>
                </>) : (<div className="flex-1 flex flex-col items-center justify-center opacity-10 select-none"><Layers className="w-24 h-24 mb-4" /><p className="text-lg font-bold tracking-tight">Synchronized Query Engine Offline</p><p className="text-xs">Select cluster nodes and execute SQL commands to begin.</p></div>)}
             </div>
-          </div>
+            </Panel>
+          </PanelGroup>
         </div>
         {error && (<div className="absolute bottom-6 left-1/2 -translate-x-1/2 max-w-lg bg-[var(--danger-9)] shadow-2xl text-white px-6 py-4 rounded-2xl text-sm font-bold flex items-center gap-3 animate-in slide-in-from-bottom duration-300 z-[100]"><AlertCircle className="w-5 h-5 shrink-0" /><span className="flex-1 leading-tight">{error}</span><button onClick={() => setError(null)} className="p-1 hover:bg-white/10 rounded-lg"><X className="w-5 h-5" /></button></div>)}
         {showToast && (<div className="absolute bottom-6 right-6 bg-[var(--accent-9)] text-white px-6 py-3 rounded-2xl shadow-2xl text-xs font-bold z-[600] animate-in slide-in-from-right flex items-center gap-2"><CheckCircle className="w-4 h-4" />{toastMessage}</div>)}

@@ -6,7 +6,8 @@
  */
 
 import { formatSqlLiteral } from "./sqlDialect";
-import { quoteIdentifierIfNeeded } from "../components/editor/completionContext";
+import { binaryToHexLiteral } from "./binaryUtils";
+import { quoteName } from "./sqlGenerate";
 import type { SqlDialect } from "../components/editor/sqlBuiltins";
 
 type Row = Record<string, unknown>;
@@ -16,6 +17,8 @@ export const UTF8_BOM = "﻿";
 
 function cellText(value: unknown): string {
   if (value === null || value === undefined) return "";
+  const hex = binaryToHexLiteral(value);
+  if (hex !== null) return hex;
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
 }
@@ -72,19 +75,21 @@ export function toHtml(columns: string[], rows: Row[]): string {
   return `<!DOCTYPE html>\n<meta charset="utf-8">\n<table border="1">\n  <thead>\n    <tr>${head}</tr>\n  </thead>\n  <tbody>\n${body}\n  </tbody>\n</table>`;
 }
 
-const ident = (name: string, dialect: SqlDialect) => name.split(".").map((p) => quoteIdentifierIfNeeded(p, dialect)).join(".");
-const literal = (v: unknown) => (typeof v === "number" ? String(v) : formatSqlLiteral(v));
+// Reserved words (`user`, `order`, `group`…) are quoted too: as bare
+// identifiers they made the generated statements invalid.
+const ident = (name: string, dialect: SqlDialect) => name.split(".").map((p) => quoteName(p, dialect)).join(".");
+const literal = (v: unknown, dialect: SqlDialect) => (typeof v === "number" ? String(v) : formatSqlLiteral(v, dialect));
 
 /** `a = 1 AND b IS NULL` — `= NULL` never matches anything. */
 export function whereFor(row: Row, keyColumns: string[], dialect: SqlDialect): string {
   return keyColumns
-    .map((c) => (row[c] === null || row[c] === undefined ? `${ident(c, dialect)} IS NULL` : `${ident(c, dialect)} = ${literal(row[c])}`))
+    .map((c) => (row[c] === null || row[c] === undefined ? `${ident(c, dialect)} IS NULL` : `${ident(c, dialect)} = ${literal(row[c], dialect)}`))
     .join(" AND ");
 }
 
 export function toInsertStatements(table: string, columns: string[], rows: Row[], dialect: SqlDialect): string {
   const cols = columns.map((c) => ident(c, dialect)).join(", ");
-  return rows.map((r) => `INSERT INTO ${ident(table, dialect)} (${cols}) VALUES (${columns.map((c) => literal(r[c])).join(", ")});`).join("\n");
+  return rows.map((r) => `INSERT INTO ${ident(table, dialect)} (${cols}) VALUES (${columns.map((c) => literal(r[c], dialect)).join(", ")});`).join("\n");
 }
 
 /**
@@ -95,7 +100,7 @@ export function toUpdateStatements(table: string, columns: string[], keyColumns:
   const keys = keyColumns.length > 0 ? keyColumns : columns;
   const setCols = columns.filter((c) => !keyColumns.includes(c));
   return rows
-    .map((r) => `UPDATE ${ident(table, dialect)} SET ${(setCols.length > 0 ? setCols : columns).map((c) => `${ident(c, dialect)} = ${literal(r[c])}`).join(", ")} WHERE ${whereFor(r, keys, dialect)};`)
+    .map((r) => `UPDATE ${ident(table, dialect)} SET ${(setCols.length > 0 ? setCols : columns).map((c) => `${ident(c, dialect)} = ${literal(r[c], dialect)}`).join(", ")} WHERE ${whereFor(r, keys, dialect)};`)
     .join("\n");
 }
 

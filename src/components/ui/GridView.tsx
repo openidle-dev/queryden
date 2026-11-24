@@ -15,16 +15,65 @@ import DataEditor, {
 } from "@glideapps/glide-data-grid";
 import "@glideapps/glide-data-grid/dist/index.css";
 import { useSettings } from "../../store/settingsStore";
-import { toNormalizedBytes, detectFileType, formatFileSize, detectBinaryColumns, FileType } from "../../utils/binaryUtils";
+import { toNormalizedBytes, detectFileType, detectBinaryColumns, binaryCellLabel, isBinaryValue, FileType } from "../../utils/binaryUtils";
 import { isBoolType, isDateTimeType, inferColumnType, getTypeHeaderPrefix } from "../../utils/columnTypes";
 
-interface FkCellData {
-  __fk__: true;
-  value: string;
-  fkCol: string;
-  fk: { refTable: string; refColumns: string[] };
-  fkValue: any;
-  onNavigate: () => void;
+import { editedCellValue, isFkCellData, type FkCellData } from "./fkCell";
+
+interface FkEditorProps {
+  value: GridCell;
+  onChange: (newValue: GridCell) => void;
+  onFinishedEditing: (newValue?: GridCell, movement?: readonly [-1 | 0 | 1, -1 | 0 | 1]) => void;
+  /** The key that started editing (type-to-edit), which replaces the value. */
+  initialValue?: string;
+}
+
+/**
+ * Plain-text editor for FK cells. Every keystroke is reported to the grid,
+ * because the grid commits the last reported value itself when Tab or a
+ * click elsewhere ends the edit; an editor that only reported on Enter let
+ * Tab commit the FK cell's internal object, saved as "[object Object]".
+ * Defined once at module level so the input isn't remounted while typing.
+ */
+function FkTextEditor({ value, onChange, initialValue }: FkEditorProps) {
+  const original = isFkCellData((value as CustomCell).data)
+    ? (value as CustomCell<FkCellData>).data.value
+    : "displayData" in value ? String(value.displayData ?? "") : "";
+  const [text, setText] = useState(initialValue ?? (original === "NULL" ? "" : original));
+  const toCell = (t: string): GridCell => ({
+    kind: GridCellKind.Text,
+    data: t === "" ? (null as unknown as string) : t,
+    displayData: t,
+    allowOverlay: true,
+  });
+  // Type-to-edit: the typed key is already a change, even if Tab follows at once.
+  React.useEffect(() => {
+    if (initialValue !== undefined) onChange(toCell(initialValue));
+    // Once, for the key that opened the editor.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div className="w-full h-full bg-[var(--surface-base)] p-1 flex items-center">
+      <input
+        type="text"
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          onChange(toCell(e.target.value));
+        }}
+        // Enter, Tab and Escape are the grid's: it commits the last reported
+        // value (or cancels) and moves the selection like any other cell.
+        autoFocus
+        // Caret after the text, so typing continues after the key that opened the editor.
+        onFocus={(e) => {
+          const end = e.currentTarget.value.length;
+          e.currentTarget.setSelectionRange(end, end);
+        }}
+        className="w-full bg-transparent text-[var(--neutral-12)] outline-none border-none text-[13px] font-mono"
+      />
+    </div>
+  );
 }
 
 const ICON_W = 12;
@@ -129,7 +178,7 @@ interface GridViewProps {
     colIdx: number,
     pos: { clientX: number; clientY: number }
   ) => void;
-  onBinaryCellClick?: (rowIdx: number, col: string, bytes: number[], fileType: FileType, base64?: string) => void;
+  onBinaryCellClick?: (rowIdx: number, col: string, bytes: Uint8Array, fileType: FileType, base64?: string) => void;
   isProductionMode?: boolean;
   rowMarkers?: "none" | "number" | "checkbox" | "both";
   gridSelection?: any;
@@ -146,6 +195,7 @@ interface GridViewProps {
   tableSchema?: {
     columns: { name: string; type: string; nullable: boolean; default: string | null }[];
     foreignKeys: { columns: string[]; refTable: string; refColumns: string[] }[];
+    primaryKeys?: string[];
   };
   loadFKOptions?: (fk: { refTable: string; refColumns: string[] }, search: string) => Promise<{ pk: any; label: string }[]>;
   onFkCellClick?: (fk: { refTable: string; refColumns: string[] }, fkValue: any) => void;
@@ -254,6 +304,9 @@ const maskValue = (val: string) => {
   return "********";
 };
 
+const EMPTY_RESULT_SCROLL_STEP_PX = 150;
+const MAX_CELL_DISPLAY_CHARS = 1000;
+
 export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
   data,
   columns,
@@ -315,6 +368,8 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
     return map;
   }, [tableSchema]);
 
+  const primaryKeyCols = useMemo(() => new Set(tableSchema?.primaryKeys ?? []), [tableSchema]);
+
   const gridColumns = useMemo<GridColumn[]>(() => 
     columns.map(col => {
       let type = columnTypes?.[col];
@@ -323,7 +378,7 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
       }
       
       const isFk = fkCols.has(col);
-      const prefix = type ? getTypeHeaderPrefix(type, isFk, col) : "";
+      const prefix = type ? getTypeHeaderPrefix(type, isFk, primaryKeyCols.has(col)) : "";
       const title = `${prefix}${col}`;
       
       return { 
@@ -333,7 +388,7 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
         hasMenu: false 
       };
     }), 
-  [columns, columnWidths, columnTypes, fkCols, data]);
+  [columns, columnWidths, columnTypes, fkCols, primaryKeyCols, data]);
 
   // Pre-compute column metadata so getCellContent avoids per-cell string ops
   const sensitiveColumns = useMemo(() => new Set(
@@ -477,7 +532,8 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
     // Common text color for data rows
     themeOverride.textDark = palette.text;
 
-    if (dateColumns.has(col)) {
+    // A binary value is never a date, whatever its column is called.
+    if (dateColumns.has(col) && !isBinaryValue(val)) {
       return {
         kind: GridCellKind.Text,
         data: String(val),
@@ -520,16 +576,15 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
       } as BooleanCell;
     }
 
-    // Binary / BLOB / BYTEA — show a readable label instead of raw byte arrays
-    if (binaryColumns.has(col)) {
-      const bytes = toNormalizedBytes(val);
-      if (bytes !== null) {
-        const ft = detectFileType(bytes);
-        const size = formatFileSize(bytes.length);
+    // Binary / BLOB / BYTEA — a label from the value's size and first bytes;
+    // the full value is only decoded when the cell is opened.
+    if (binaryColumns.has(col) || isBinaryValue(val)) {
+      const label = binaryCellLabel(val);
+      if (label !== null) {
         return {
           kind: GridCellKind.Text,
           data: `__binary__${col}`,
-          displayData: `[${ft.label} \u00B7 ${size}]`,
+          displayData: label,
           allowOverlay: false,
           readonly: true,
           themeOverride: {
@@ -552,10 +607,13 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
       };
     }
 
+    const text = String(val);
     return {
       kind: GridCellKind.Text,
-      data: String(val),
-      displayData: String(val),
+      data: text,
+      // The canvas measures the whole string on every paint; a cell shows a
+      // line at most, so a multi-MB text value only draws its start.
+      displayData: text.length > MAX_CELL_DISPLAY_CHARS ? `${text.slice(0, MAX_CELL_DISPLAY_CHARS)}\u2026` : text,
       allowOverlay: canEdit,
       readonly: !canEdit,
       themeOverride
@@ -564,7 +622,28 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
 
   return (
     <div
-      className="w-full h-full relative overflow-hidden bg-[var(--surface-base)]"
+      className="gridview-scroll w-full h-full relative overflow-hidden bg-[var(--surface-base)]"
+      // A zero-row result has no cells for the wheel or arrow keys to move
+      // through, so they scroll the column headers sideways instead.
+      onWheel={data.length === 0 ? (e) => {
+        if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+        const scroller = e.currentTarget.querySelector<HTMLElement>(".dvn-scroller");
+        if (scroller) scroller.scrollLeft += e.deltaY;
+      } : undefined}
+      onKeyDownCapture={data.length === 0 ? (e) => {
+        if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+        const scroller = e.currentTarget.querySelector<HTMLElement>(".dvn-scroller");
+        if (!scroller) return;
+        const target =
+          e.key === "ArrowRight" ? scroller.scrollLeft + EMPTY_RESULT_SCROLL_STEP_PX :
+          e.key === "ArrowLeft" ? scroller.scrollLeft - EMPTY_RESULT_SCROLL_STEP_PX :
+          e.key === "End" ? scroller.scrollWidth :
+          e.key === "Home" ? 0 : null;
+        if (target === null) return;
+        e.preventDefault();
+        e.stopPropagation();
+        scroller.scrollLeft = target;
+      } : undefined}
       onContextMenuCapture={(e) => {
         e.preventDefault();
         lastContextMenuPos.current = { x: e.clientX, y: e.clientY };
@@ -636,9 +715,11 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
         }}
         onCellEdited={(cell, newValue) => {
           if (isReadOnly) return;
+          const edited = editedCellValue((newValue as EditableGridCell).data);
+          if (edited === undefined) return;
           if (onCellEdited) {
             const [colIdx, rowIdx] = cell;
-            onCellEdited(rowIdx, columns[colIdx], (newValue as EditableGridCell).data);
+            onCellEdited(rowIdx, columns[colIdx], edited);
           }
         }}
         onCellContextMenu={(cell) => {
@@ -654,7 +735,7 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
           const val = data[rowIdx]?.[col];
 
           // Binary cell click → preview
-          if (onBinaryCellClick && val != null && binaryColumns.has(col)) {
+          if (onBinaryCellClick && val != null && (binaryColumns.has(col) || isBinaryValue(val))) {
             const bytes = toNormalizedBytes(val);
             if (bytes !== null) {
               onBinaryCellClick(rowIdx, col, bytes, detectFileType(bytes), typeof val === "string" ? val : undefined);
@@ -693,50 +774,8 @@ export const GridView = React.forwardRef<GridViewRef, GridViewProps>(({
         customRenderers={[fkCellRenderer]}
         provideEditor={(cell) => {
           // FK column (CustomCell): edit as plain text input
-          if (cell.kind === GridCellKind.Custom && typeof cell.data === "object" && cell.data !== null && "__fk__" in cell.data) {
-            if (!isReadOnly) {
-              return (props) => {
-                const { value, onChange, onFinishedEditing } = props;
-                const initialVal = value.kind === GridCellKind.Custom
-                  ? (value.data as FkCellData).value
-                  : ("displayData" in value ? String(value.displayData ?? "") : "");
-
-                return (
-                  <div className="w-full h-full bg-[var(--surface-base)] p-1 flex items-center">
-                    <input 
-                      type="text" 
-                      defaultValue={initialVal === "NULL" ? "" : initialVal}
-                      onKeyDown={e => {
-                        if (e.key === "Enter") {
-                          const newCell = {
-                            ...value,
-                            kind: GridCellKind.Text,
-                            data: e.currentTarget.value === "" ? null : e.currentTarget.value,
-                            displayData: e.currentTarget.value
-                          } as any;
-                          onChange(newCell);
-                          onFinishedEditing(newCell);
-                        } else if (e.key === "Escape") {
-                          onFinishedEditing();
-                        }
-                      }}
-                      onBlur={e => {
-                        const newCell = {
-                          ...value,
-                          kind: GridCellKind.Text,
-                          data: e.target.value === "" ? null : e.target.value,
-                          displayData: e.target.value
-                        } as any;
-                        onChange(newCell);
-                        onFinishedEditing(newCell);
-                      }}
-                      autoFocus
-                      className="w-full bg-transparent text-[var(--neutral-12)] outline-none border-none text-[13px] font-mono"
-                    />
-                  </div>
-                );
-              };
-            }
+          if (cell.kind === GridCellKind.Custom && isFkCellData(cell.data) && !isReadOnly) {
+            return FkTextEditor;
           }
           // Date/time cells by italic styling in getCellContent
           if (cell.kind === GridCellKind.Text && cell.themeOverride?.baseFontStyle?.includes("italic")) {

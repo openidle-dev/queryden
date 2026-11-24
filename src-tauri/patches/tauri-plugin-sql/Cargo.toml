@@ -68,6 +68,9 @@ sqlite = [
 name = "tauri_plugin_sql"
 path = "src/lib.rs"
 
+[dependencies.base64]
+version = "0.22"
+
 [dependencies.futures-core]
 version = "0.3"
 

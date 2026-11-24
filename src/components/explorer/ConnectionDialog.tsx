@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from "react";
 import { DatabaseConnection } from "../../contexts/ConnectionContext";
 import { useConnections } from "../../contexts/useConnections";
-import { CheckCircle, Database, ServerCrash, Search, Settings, Shield } from "lucide-react";
+import { AlertTriangle, CheckCircle, Database, FolderOpen, MinusCircle, ServerCrash, Search, Settings, Shield, XCircle } from "lucide-react";
+import { parsePort, validateSshForm } from "./sshValidation";
 import { useConfirmDialog } from "../ui/ConfirmDialog";
 import { PasswordInput } from "../ui/PasswordInput";
 import { Dialog } from "../ui/Dialog";
@@ -51,6 +52,21 @@ const getValidHexColor = (color: string): string => {
   return DEFAULT_CONNECTION_COLOR; // default fallback for HTML color input
 };
 
+interface SshCheck {
+  name: string;
+  status: "ok" | "warn" | "fail" | "skipped";
+  detail: string;
+}
+
+interface SshTestResult {
+  success: boolean;
+  message: string;
+  /** Form problems found before testing. */
+  problems?: string[];
+  /** Step-by-step result of the tunnel test. */
+  checks?: SshCheck[];
+}
+
 export function ConnectionDialog({ connection, onClose, defaultFolderId }: { connection?: DatabaseConnection; onClose: () => void; defaultFolderId?: string }) {
   const { addConnection, updateConnection, removeConnection, vaultCredentials, folders, hasLivePool } = useConnections();
   const [step, setStep] = useState<"driver" | "details">(connection ? "details" : "driver");
@@ -87,7 +103,7 @@ export function ConnectionDialog({ connection, onClose, defaultFolderId }: { con
   const [error, setError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isTestingSsh, setIsTestingSsh] = useState(false);
-  const [sshTestResult, setSshTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [sshTestResult, setSshTestResult] = useState<SshTestResult | null>(null);
   const confirmDialog = useConfirmDialog();
 
   const flatFolders = useMemo(() => {
@@ -290,6 +306,25 @@ export function ConnectionDialog({ connection, onClose, defaultFolderId }: { con
     onClose();
   };
 
+  /**
+   * Pick the SSH private key with the system file picker, starting in the
+   * current key's folder or ~/.ssh (pickers hide dot-folders by default).
+   */
+  const handleBrowseKeyFile = async () => {
+    try {
+      const [{ open }, { homeDir, join, dirname }] = await Promise.all([
+        import("@tauri-apps/plugin-dialog"),
+        import("@tauri-apps/api/path"),
+      ]);
+      const current = formData.sshKeyPath.trim();
+      const defaultPath = current ? await dirname(current).catch(() => current) : await join(await homeDir(), ".ssh");
+      const picked = await open({ title: "Select SSH private key", multiple: false, directory: false, defaultPath });
+      if (typeof picked === "string") setFormData((prev) => ({ ...prev, sshKeyPath: picked }));
+    } catch (e) {
+      await confirmDialog.dialog({ title: "Could Not Open File Picker", message: e instanceof Error ? e.message : String(e), confirmLabel: "OK", type: "danger" });
+    }
+  };
+
   const handleTestSsh = async () => {
     setIsTestingSsh(true);
     setSshTestResult(null);
@@ -302,19 +337,31 @@ export function ConnectionDialog({ connection, onClose, defaultFolderId }: { con
         setSshTestResult({ success: false, message: "SSH tests only work in the desktop app." });
         return;
       }
-      if (!formData.sshHost || !formData.sshUsername) {
-        setSshTestResult({ success: false, message: "SSH host and username are required." });
+      // Fix the form first: nothing goes over the network with a bad port or host.
+      const problems = validateSshForm(formData);
+      if (problems.length > 0) {
+        setSshTestResult({ success: false, message: "Fix these before testing:", problems });
         return;
       }
-      await invokeCmd("test_ssh_connection", {
-        sshHost: formData.sshHost,
-        sshPort: parseInt(formData.sshPort, 10) || 22,
-        sshUsername: formData.sshUsername,
+      const report = await invokeCmd("test_ssh_connection", {
+        sshHost: formData.sshHost.trim(),
+        sshPort: parsePort(formData.sshPort)!,
+        sshUsername: formData.sshUsername.trim(),
         sshPassword: formData.sshAuthMethod === "password" ? (formData.sshPassword || null) : null,
-        sshKeyPath: formData.sshAuthMethod === "key" ? (formData.sshKeyPath || null) : null,
+        sshKeyPath: formData.sshAuthMethod === "key" ? (formData.sshKeyPath.trim() || null) : null,
         sshKeyPassphrase: formData.sshAuthMethod === "key" ? (formData.sshKeyPassphrase || null) : null,
+        // The database as the SSH server sees it: the tunnel's real target.
+        remoteHost: formData.host.trim() || null,
+        remotePort: parsePort(formData.port),
       });
-      setSshTestResult({ success: true, message: "SSH authentication succeeded." });
+      const warnings = report.checks.filter((c) => c.status === "warn").length;
+      setSshTestResult({
+        success: report.success,
+        message: report.success
+          ? warnings > 0 ? `SSH tunnel works, with ${warnings} warning${warnings === 1 ? "" : "s"}.` : "SSH tunnel works."
+          : "SSH tunnel test failed.",
+        checks: report.checks,
+      });
     } catch (err: any) {
       setSshTestResult({ success: false, message: err?.message || err?.toString() || "SSH test failed." });
     } finally {
@@ -838,6 +885,16 @@ export function ConnectionDialog({ connection, onClose, defaultFolderId }: { con
                               value={formData.sshKeyPath}
                               onChange={(e) => setFormData({ ...formData, sshKeyPath: e.target.value })}
                               placeholder="/home/user/.ssh/id_ed25519"
+                              rightSlot={
+                                <button
+                                  type="button"
+                                  onClick={() => void handleBrowseKeyFile()}
+                                  className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-sans text-[var(--neutral-11)] hover:text-[var(--neutral-12)] hover:bg-[var(--neutral-4)] cursor-pointer"
+                                  title="Choose the private key file"
+                                >
+                                  <FolderOpen /> Browse…
+                                </button>
+                              }
                             />
                             <div className="flex flex-col gap-1 min-w-0">
                               <label className={fieldLabelClass}>Key Passphrase (Optional)</label>
@@ -869,9 +926,30 @@ export function ConnectionDialog({ connection, onClose, defaultFolderId }: { con
                             </span>
                           )}
                         </div>
+                        {sshTestResult?.problems && (
+                          <ul className="text-[11px] text-[var(--danger-11)] list-disc pl-5 space-y-0.5">
+                            {sshTestResult.problems.map((p) => <li key={p}>{p}</li>)}
+                          </ul>
+                        )}
+                        {sshTestResult?.checks && (
+                          <ul className="rounded-md border border-[var(--neutral-6)] bg-[var(--surface-base)] p-2 space-y-1.5" aria-label="SSH tunnel test steps">
+                            {sshTestResult.checks.map((c) => (
+                              <li key={c.name} className="flex items-start gap-2 text-[11px]">
+                                {c.status === "ok" ? <CheckCircle className="w-3.5 h-3.5 shrink-0 mt-px text-[var(--success-11)]" />
+                                  : c.status === "warn" ? <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px text-[var(--warning-11)]" />
+                                  : c.status === "fail" ? <XCircle className="w-3.5 h-3.5 shrink-0 mt-px text-[var(--danger-11)]" />
+                                  : <MinusCircle className="w-3.5 h-3.5 shrink-0 mt-px text-[var(--neutral-9)]" />}
+                                <span className="min-w-0">
+                                  <span className="font-semibold text-[var(--neutral-12)]">{c.name}</span>
+                                  <span className="text-[var(--neutral-11)] break-words"> · {c.detail}</span>
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
 
                         <p className="text-[10px] text-[var(--neutral-11)] leading-relaxed pt-0.5">
-                          <span className="font-bold text-[var(--neutral-12)]">How it works:</span> An SSH tunnel is opened on a free local port and the DB connection routes through your SSH server. <span className="font-bold text-[var(--neutral-12)]">Test SSH Tunnel</span> verifies SSH auth alone — DB credentials are not required.
+                          <span className="font-bold text-[var(--neutral-12)]">How it works:</span> An SSH tunnel is opened on a free local port and the DB connection routes through your SSH server. <span className="font-bold text-[var(--neutral-12)]">Test SSH Tunnel</span> checks the key file, reaches the server, verifies its host key against ~/.ssh/known_hosts, signs in, and opens a forwarded connection to the database host and port above, as the SSH server sees them. DB credentials are not required.
                         </p>
                       </div>
                     ) : (

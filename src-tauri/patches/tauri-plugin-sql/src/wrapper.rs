@@ -86,15 +86,25 @@ pub enum DbPool {
 // exchange) — close to two seconds on such a link. Keeping an established
 // connection alive is therefore worth far more than any resource it holds.
 
+/// How long a pooled connection may sit unused before it is closed.
+pub(crate) const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
 /// Shared rationale for the per-driver builders below.
 ///
 /// * `acquire_timeout` — sqlx defaults to 30s. A genuinely dead link should
 ///   surface as an error in 10s instead of appearing to hang.
-/// * `idle_timeout` / `max_lifetime` — never reap a warm connection out from
-///   under an idle user. `max_lifetime` **must** stay `Some(..)`: if both it
-///   and `idle_timeout` are `None`, sqlx's `spawn_maintenance_tasks` takes its
-///   `(None, None)` branch, fires a single one-shot task and returns, leaving
-///   the pool with no recurring maintenance at all.
+/// * `idle_timeout` — a pooled connection unused for [`POOL_IDLE_TIMEOUT`] is
+///   closed. Every database the app touches gets its own pool (Multi-Query
+///   across 35 databases makes 35), and with no idle timeout each kept its
+///   server connections open until the app quit. Ten minutes keeps the
+///   database you are working in warm — any query within that window reuses
+///   the connection — and costs one reconnect after a longer break. Editor-tab
+///   sessions are detached from the pool (see `open_session`), so this never
+///   touches them or their open transactions.
+/// * `max_lifetime` **must** stay `Some(..)`: if both it and `idle_timeout`
+///   are `None`, sqlx's `spawn_maintenance_tasks` takes its `(None, None)`
+///   branch, fires a single one-shot task and returns, leaving the pool with
+///   no recurring maintenance at all.
 /// * `test_before_acquire` — sqlx defaults this to `true`, which spends a full
 ///   round trip pinging the server before *every* query. On a 300ms link that
 ///   silently doubles the cost of each statement. It is replaced by an
@@ -111,7 +121,7 @@ fn pg_pool_options() -> PgPoolOptions {
         .max_connections(10)
         .min_connections(0)
         .acquire_timeout(Duration::from_secs(10))
-        .idle_timeout(None)
+        .idle_timeout(Some(POOL_IDLE_TIMEOUT))
         .max_lifetime(Some(Duration::from_secs(4 * 60 * 60)))
         .test_before_acquire(false)
         .before_acquire(|conn, meta| {
@@ -131,7 +141,7 @@ fn mysql_pool_options() -> MySqlPoolOptions {
         .max_connections(10)
         .min_connections(0)
         .acquire_timeout(Duration::from_secs(10))
-        .idle_timeout(None)
+        .idle_timeout(Some(POOL_IDLE_TIMEOUT))
         .max_lifetime(Some(Duration::from_secs(4 * 60 * 60)))
         .test_before_acquire(false)
         .before_acquire(|conn, meta| {
@@ -475,4 +485,27 @@ fn path_mapper(mut app_path: std::path::PathBuf, connection_string: &str) -> Str
             .to_str()
             .expect("Problem creating fully qualified path to Database file!")
     )
+}
+
+#[cfg(test)]
+mod pool_option_tests {
+    use super::*;
+
+    #[cfg(feature = "postgres")]
+    #[test]
+    fn pg_pools_release_idle_connections() {
+        let opts = pg_pool_options();
+        assert_eq!(opts.get_idle_timeout(), Some(POOL_IDLE_TIMEOUT));
+        assert_eq!(opts.get_min_connections(), 0);
+        assert!(opts.get_max_lifetime().is_some());
+    }
+
+    #[cfg(feature = "mysql")]
+    #[test]
+    fn mysql_pools_release_idle_connections() {
+        let opts = mysql_pool_options();
+        assert_eq!(opts.get_idle_timeout(), Some(POOL_IDLE_TIMEOUT));
+        assert_eq!(opts.get_min_connections(), 0);
+        assert!(opts.get_max_lifetime().is_some());
+    }
 }

@@ -200,13 +200,30 @@ describe("getTypeHeaderPrefix", () => {
   ];
   for (const [type, expected] of cases) {
     it(`badges ${type} as ${expected.trim()}`, () => {
-      expect(getTypeHeaderPrefix(type, false, "col")).toBe(expected);
+      expect(getTypeHeaderPrefix(type, false, false)).toBe(expected);
     });
   }
 
-  it("adds key/FK markers", () => {
-    expect(getTypeHeaderPrefix("integer", false, "id")).toBe("123🔑 ");
-    expect(getTypeHeaderPrefix("integer", true, "user_id")).toBe("123🔗 ");
+  it("adds key/FK markers from constraints", () => {
+    expect(getTypeHeaderPrefix("integer", false, true)).toBe("123🔑 ");
+    expect(getTypeHeaderPrefix("integer", true, false)).toBe("123🔗 ");
+  });
+
+  it("does not mark a column as a key because of its name", () => {
+    expect(getTypeHeaderPrefix("INT8", false, false)).toBe("123 ");
+  });
+
+  it.each([
+    ["TIMESTAMPTZ", "🕑 "],
+    ["TIMESTAMP", "🕑 "],
+    ["INT4", "123 "],
+    ["INT8", "123 "],
+    ["FLOAT8", "123 "],
+    ["BPCHAR", "A·Z "],
+    ["JSONB", "{} "],
+    ["BOOL", "bool "],
+  ])("badges server type name %s as %s", (type, expected) => {
+    expect(getTypeHeaderPrefix(type, false, false)).toBe(expected);
   });
 });
 
