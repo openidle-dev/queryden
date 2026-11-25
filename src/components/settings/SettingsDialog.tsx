@@ -27,7 +27,7 @@ const categories: { id: SettingsCategory; label: string; icon: any; keywords: st
   { id: "keymap", label: "Keymap", icon: Keyboard, keywords: ["shortcut", "keyboard", "hotkey", "binding", "preset", "keymap", "shortcuts", "actions"] },
   { id: "sqlCompletion", label: "SQL Code Completion", icon: Zap, keywords: ["completion", "suggest", "alias", "case", "join", "sql", "qualify", "objects", "keyword case", "foreign keys"] },
   { id: "queryExecution", label: "Query Execution", icon: Play, keywords: ["enter", "max rows", "commit", "prefetch", "execute", "run", "auto-commit", "inline", "results"] },
-  { id: "explorer", label: "Database Explorer", icon: Database, keywords: ["view", "function", "trigger", "index", "constraint", "schema", "namespace", "tree", "explorer", "foreign tables", "empty groups", "startup", "reconnect", "reopen", "restore", "session", "connection", "launch", "open"] },
+  { id: "explorer", label: "Database Explorer", icon: Database, keywords: ["view", "function", "trigger", "index", "constraint", "schema", "namespace", "tree", "explorer", "foreign tables", "foreign data wrapper", "fdw", "foreign server", "user mapping", "empty groups", "startup", "reconnect", "reopen", "restore", "session", "connection", "launch", "open"] },
   { id: "copyTransfer", label: "Copy/Transfer", icon: Copy, keywords: ["copy", "transfer", "merge", "schema", "data", "method", "batch size", "parallel", "threads", "compression", "logging", "pg_dump"] },
   { id: "permissions", label: "Permissions & Rules", icon: Shield, keywords: ["drop", "truncate", "delete", "warn", "bypass", "rules", "safety", "guru", "dangerous"] },
   { id: "ai", label: "AI Assistant", icon: Sparkles, keywords: ["ai", "assistant", "openai", "gemini", "anthropic", "claude", "gpt", "llm", "api", "key", "model", "models", "endpoint", "local", "ollama", "lm studio"] },
@@ -513,7 +513,7 @@ function ExplorerSettings() {
         <label className="block text-xs font-semibold mb-2 text-[var(--neutral-11)] uppercase tracking-wider">Advanced</label>
         <ToggleOption
           label="Show Foreign Tables"
-          description="Show foreign tables from fdw"
+          description="Show foreign tables from fdw, plus each database's foreign-data wrappers, foreign servers and user mappings"
           checked={settings.showForeignTables}
           onChange={(checked) => settings.setSetting("showForeignTables", checked)}
         />

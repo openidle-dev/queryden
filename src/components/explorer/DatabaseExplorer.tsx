@@ -1,5 +1,9 @@
 import { useState, useEffect, useRef } from "react";
-import { ChevronRight, ChevronDown, Database, Table, Folder, FolderOpen, Plus, Search, Server, Columns, Hash, Eye, Variable, Trash2, Edit2, Play, Zap, Code, Download, Upload, Loader2, Terminal, Check, AlertCircle, Square, HardDrive, User, Users } from "lucide-react";
+import { ChevronRight, ChevronDown, Database, Table, Folder, FolderOpen, Plus, Search, Server, Columns, Hash, Eye, Variable, Trash2, Edit2, Play, Zap, Code, Download, Upload, Loader2, RefreshCw, Terminal, Plug, Check, AlertCircle, Square, HardDrive, User, Users } from "lucide-react";
+import { buildDatabaseMaintenanceSql, describeDatabaseSessions, isDatabaseInUseError, type DatabaseSession } from "../../utils/ddlBuilders";
+import { buildDatabaseDdl } from "../../utils/databaseDdl";
+import { DisconnectSessionsDialog } from "./DisconnectSessionsDialog";
+import { isMySqlLike } from "../../utils/sqlDialect";
 import { ImportExportDialog } from "./ImportExportDialog";
 import { PROVIDERS } from "../../config/providers";
 import { DatabaseConnection } from "../../contexts/ConnectionContext";
@@ -17,7 +21,7 @@ import { quoteIdentifier } from "../../utils/sqlSecurity";
 import { buildConnectionTree, descendantFolderIds, type FolderTreeNode } from "../../utils/folderTree";
 import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
-import { Menu, MenuItem, MenuLabel, MenuSeparator } from "../ui/Menu";
+import { Menu, MenuItem, MenuLabel, MenuSeparator, MenuSub } from "../ui/Menu";
 import { Dialog } from "../ui/Dialog";
 import { splitDottedIdentifier } from "../../utils/sqlDialect";
 import { quoteIdentifierIfNeeded } from "../editor/completionContext";
@@ -27,7 +31,7 @@ import { classifyRowClick, type LastRowClick } from "./rowClicks";
 interface TreeNode {
   id: string;
   name: string;
-  icon: "server" | "database" | "schema" | "table" | "view" | "column" | "index" | "function" | "trigger" | "type" | "procedure" | "operator" | "foreign_table" | "language" | "extension" | "tablespace" | "login_role" | "group_role" | "folder" | "loading";
+  icon: "server" | "database" | "schema" | "table" | "view" | "column" | "index" | "function" | "trigger" | "type" | "procedure" | "operator" | "foreign_table" | "language" | "extension" | "fdw" | "foreign_server" | "user_mapping" | "tablespace" | "login_role" | "group_role" | "folder" | "loading";
   children?: TreeNode[];
   expanded?: boolean;
   action?: () => void;
@@ -36,6 +40,8 @@ interface TreeNode {
   contextMenuId?: string;
   providerType?: string;
   color?: string;
+  /** Owning object's name where the node's own name is not unique (a user mapping's server). */
+  parentName?: string;
 }
 
 interface TableDetails {
@@ -54,7 +60,7 @@ interface DatabaseExplorerProps {
 }
 
 export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: DatabaseExplorerProps = {}) {
-  const { connections, sessions, activeConnection, selectedDatabase, removeConnection, updateConnection, connectToDatabase, schemaItems, loadSchema, getDDL, generateStatement, isLoadingSchema, currentDb, schemaProgress, dropDatabase, createDatabase, createRole, createTable, vaultCredentials, initialLoadDone, getSelectedSchemas, folders, addFolder, renameFolder, removeFolder, moveConnectionToFolder, moveFolder, dropRole } = useConnections();
+  const { connections, sessions, activeConnection, selectedDatabase, removeConnection, updateConnection, connectToDatabase, schemaItems, loadSchema, getDDL, generateStatement, isLoadingSchema, currentDb, schemaProgress, dropDatabase, renameDatabase, listDatabaseSessions, ensureConnectionDb, createDatabase, createRole, createTable, refreshServer, vaultCredentials, initialLoadDone, getSelectedSchemas, folders, addFolder, renameFolder, removeFolder, moveConnectionToFolder, moveFolder, dropRole } = useConnections();
   // Ref keeps the latest activeConnection so server-node action() closures
   // always see the current value, not the one captured at tree-build time.
   const activeConnectionRef = useRef(activeConnection);
@@ -74,6 +80,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
   const [moveTarget, setMoveTarget] = useState<{ kind: "connection" | "folder"; id: string; name: string } | null>(null);
   const [connectingConnectionIds, setConnectingConnectionIds] = useState<Set<string>>(new Set());
   const isConnecting = connectingConnectionIds.size > 0;
+  const [refreshingServerIds, setRefreshingServerIds] = useState<Set<string>>(new Set());
   const beginConnect = (id: string) => {
     connectingRef.current.add(id);
     setConnectingConnectionIds(new Set(connectingRef.current));
@@ -84,7 +91,6 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
   };
   const [loadingDatabases, setLoadingDatabases] = useState<Set<string>>(new Set());
   const [schemaContextMenu, setSchemaContextMenu] = useState<{ x: number; y: number; node: TreeNode } | null>(null);
-  const [activeSubmenu, setActiveSubmenu] = useState<string | null>(null);
   const [tableDetails, setTableDetails] = useState<Record<string, TableDetails>>({});
   const [loadingTableDetails, setLoadingTableDetails] = useState<Set<string>>(new Set());
   const [backupDialogOpen, setBackupDialogOpen] = useState(false);
@@ -261,8 +267,10 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
       // shadows the outer names, leaving the rest of the builder unchanged.
       const session = sessions[conn.id];
       const isConnected = !!session;
-      const databases = session?.databases ?? [];
       const selectedDatabase = session?.selectedDatabase ?? null;
+      // Until the server's list is read, still show the open database so the
+      // connected server has something to expand.
+      const databases = session?.databases?.length ? session.databases : selectedDatabase ? [selectedDatabase] : [];
       const isLoadingSchema = session?.isLoadingSchema ?? false;
       const roles = session?.roles ?? { login: [], group: [] };
       const tablespaces = session?.tablespaces ?? [];
@@ -458,6 +466,39 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
               if (hasExtensions) {
                 dbChildren.push({ id: `exts-${conn.id}-${db}`, name: "Extensions", icon: "folder", children: items.extensions!.map(e => ({ id: `ext-${conn.id}-${db}-${e}`, name: e, icon: "extension" })) });
               }
+              // Foreign-data wrappers → servers → user mappings, shown with foreign tables.
+              const fdws = items.foreignDataWrappers ?? [];
+              if (settings.showForeignTables && fdws.length > 0) {
+                dbChildren.push({
+                  id: `fdws-${conn.id}-${db}`,
+                  name: "Foreign Data Wrappers",
+                  icon: "folder",
+                  children: fdws.map(w => {
+                    const wrapperId = `${conn.id}-${db}-${w.name}`;
+                    return {
+                      id: `fdw-${wrapperId}`,
+                      name: w.name,
+                      icon: "fdw",
+                      children: [{
+                        id: `fsrvs-${wrapperId}`,
+                        name: "Foreign Servers",
+                        icon: "folder",
+                        children: w.servers.map(s => ({
+                          id: `fsrv-${wrapperId}-${s.name}`,
+                          name: s.name,
+                          icon: "foreign_server",
+                          children: s.userMappings.length > 0 ? [{
+                            id: `umaps-${wrapperId}-${s.name}`,
+                            name: "User Mappings",
+                            icon: "folder",
+                            children: s.userMappings.map(m => ({ id: `umap-${wrapperId}-${s.name}-${m}`, name: m, icon: "user_mapping", parentName: s.name })),
+                          }] : [],
+                        })),
+                      }],
+                    };
+                  }),
+                });
+              }
               if (hasLanguages) {
                 dbChildren.push({ id: `langs-${conn.id}-${db}`, name: "Languages", icon: "folder", children: items.languages!.map(l => ({ id: `lang-${conn.id}-${db}-${l}`, name: l, icon: "language" })) });
               }
@@ -491,6 +532,9 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
             if (isPg) {
               dbChildren.push({ id: `events-${conn.id}-${db}`, name: "Event Triggers", icon: "folder", action: activateDb });
               dbChildren.push({ id: `exts-${conn.id}-${db}`, name: "Extensions", icon: "folder", action: activateDb });
+              if (settings.showForeignTables) {
+                dbChildren.push({ id: `fdws-${conn.id}-${db}`, name: "Foreign Data Wrappers", icon: "folder", action: activateDb });
+              }
               dbChildren.push({ id: `langs-${conn.id}-${db}`, name: "Languages", icon: "folder", action: activateDb });
             }
             dbChildren.push({ id: `store-${conn.id}-${db}`, name: "Storage", icon: "folder", action: activateDb });
@@ -977,7 +1021,6 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
   const closeContextMenu = () => {
     setContextMenu(null);
     setSchemaContextMenu(null);
-    setActiveSubmenu(null);
     setViewModeMenuOpen(false);
   };
 
@@ -1445,7 +1488,18 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
 
   const getCreateTemplate = (folderName: string): string | null => {
     const name = folderName.toLowerCase();
-    if (name.includes("table")) {
+    // Foreign-object folders first: "Foreign Tables" would otherwise match "table".
+    if (name.includes("foreign data wrapper")) {
+      return `-- Most wrappers come from an extension, e.g. CREATE EXTENSION postgres_fdw;\nCREATE FOREIGN DATA WRAPPER new_wrapper\n  HANDLER handler_function\n  VALIDATOR validator_function;`;
+    } else if (name.includes("foreign server")) {
+      return `CREATE SERVER new_server\n  FOREIGN DATA WRAPPER postgres_fdw\n  OPTIONS (host 'remote-host', port '5432', dbname 'remote_db');`;
+    } else if (name.includes("user mapping")) {
+      return `CREATE USER MAPPING FOR CURRENT_USER\n  SERVER foreign_server\n  OPTIONS (user 'remote_user', password 'remote_password');`;
+    } else if (name.includes("foreign table")) {
+      return `CREATE FOREIGN TABLE new_foreign_table (\n  id INTEGER,\n  name TEXT\n)\nSERVER foreign_server\nOPTIONS (schema_name 'public', table_name 'remote_table');`;
+    } else if (name.includes("tablespace") || name.includes("storage")) {
+      return `CREATE TABLESPACE new_tablespace\n  OWNER postgres\n  LOCATION '/path/to/data_directory';`;
+    } else if (name.includes("table")) {
       return `CREATE TABLE new_table (\n  id SERIAL PRIMARY KEY,\n  name VARCHAR(255) NOT NULL,\n  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);`;
     } else if (name.includes("view")) {
       return `CREATE VIEW new_view AS\nSELECT * FROM table_name\nWHERE condition;`;
@@ -1465,10 +1519,6 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
       return `CREATE OR REPLACE PROCEDURE new_procedure()\nLANGUAGE plpgsql\nAS $$\nBEGIN\n  -- procedure body\nEND;\n$$;`;
     } else if (name.includes("operator")) {
       return `CREATE OPERATOR !! (\n  FUNCTION = function_name,\n  LEFTARG = integer,\n  RIGHTARG = integer\n);`;
-    } else if (name.includes("foreign table")) {
-      return `CREATE FOREIGN TABLE new_foreign_table (\n  id INTEGER,\n  name TEXT\n)\nSERVER foreign_server\nOPTIONS (schema_name 'public', table_name 'remote_table');`;
-    } else if (name.includes("tablespace") || name.includes("storage")) {
-      return `CREATE TABLESPACE new_tablespace\n  OWNER postgres\n  LOCATION '/path/to/data_directory';`;
     } else if (name.includes("database")) {
       return `-- Template for Create Database\nCREATE DATABASE new_database\n  WITH \n  OWNER = postgres\n  TEMPLATE = template1\n  ENCODING = 'UTF8'\n  LC_COLLATE = 'en_US.utf8'\n  LC_CTYPE = 'en_US.utf8'\n  TABLESPACE = pg_default\n  CONNECTION LIMIT = -1\n  IS_TEMPLATE = False;`;
     }
@@ -1671,6 +1721,20 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
   // toggle, tables open their data, other objects open their DDL. (A single
   // click used to connect AND toggle, so a double click expanded and then
   // immediately collapsed the node again.)
+  /** Wrappers, servers and user mappings are database-level, looked up by plain name. */
+  const openForeignObjectDdl = async (node: TreeNode) => {
+    try {
+      const ddl = await getDDL(node.icon, node.name, undefined, node.parentName);
+      const label = node.icon === "user_mapping" ? `${node.name}@${node.parentName}` : node.name;
+      if (ddl) {
+        window.dispatchEvent(new CustomEvent("open-query-with-text", { detail: { query: ddl, name: `DDL ${label}` } }));
+      }
+    } catch (e) {
+      const errMsg = typeof e === "string" ? e : (e as any)?.message || "Failed to get DDL";
+      confirmDialog.dialog({ title: "Failed to Load DDL", message: errMsg, confirmLabel: "OK", type: "danger" });
+    }
+  };
+
   const openNode = async (node: TreeNode) => {
     setFocusedNodeId(node.id);
     if (node.icon === "server" || node.icon === "database") {
@@ -1690,6 +1754,10 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
       await openTableData(node);
       return;
     }
+    if (node.icon === "fdw" || node.icon === "foreign_server" || node.icon === "user_mapping") {
+      await openForeignObjectDdl(node);
+      return;
+    }
     if (isLeafSchemaItem(node.icon)) await openDdl(node);
   };
 
@@ -1701,6 +1769,86 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
     const { isDouble, next } = classifyRowClick(node.id, e.detail, performance.now(), lastRowClickRef.current);
     lastRowClickRef.current = next;
     if (isDouble) void openNode(node);
+  };
+
+  const errorText = (e: unknown) => (typeof e === "string" ? e : (e as any)?.message || String(e));
+
+  /** Rename, offering to disconnect other sessions when PostgreSQL reports the database in use. */
+  const handleRenameDatabase = async (conn: { id: string; name: string; type: string }, dbName: string) => {
+    closeContextMenu();
+    const input = await confirmDialog.dialog({
+      title: "Rename Database",
+      message: `Rename "${dbName}" on ${conn.name}. QueryDen first closes its own connections to it, so open transactions in editor tabs on this database are rolled back. Editor tabs and Multi-Query targets then follow the new name.`,
+      inputLabel: "New name",
+      inputDefaultValue: dbName,
+      requireInput: true,
+      confirmLabel: "Rename",
+      type: "warning",
+    });
+    const newName = input?.trim();
+    if (!newName || newName === dbName) return;
+    const fail = (e: unknown) => confirmDialog.dialog({ title: "Rename Failed", message: errorText(e), confirmLabel: "OK", type: "danger" });
+    try {
+      await renameDatabase(conn.id, dbName, newName);
+    } catch (e) {
+      if (!isDatabaseInUseError(errorText(e)) || !["postgres", "supabase"].includes(conn.type)) {
+        await fail(e);
+        return;
+      }
+      const connected = await listDatabaseSessions(conn.id, dbName).catch(() => [] as DatabaseSession[]);
+      const disconnect = await confirmDialog.confirm({
+        title: "Database In Use",
+        message: `Warning: ${connected.length > 0 ? `${connected.length} other session${connected.length === 1 ? " is" : "s are"}` : "other sessions are"} connected to "${dbName}", and PostgreSQL only renames a database nobody is connected to. Disconnecting them stops their running queries and rolls back open transactions.${connected.length > 0 ? `\n\n${describeDatabaseSessions(connected, 5)}` : ""}${connected.length > 5 ? "\n\nCancel and use Disconnect Sessions… to review every session." : ""}`,
+        confirmLabel: "Disconnect and Rename",
+        cancelLabel: "Cancel",
+        type: "danger",
+      });
+      if (!disconnect) return;
+      try {
+        await renameDatabase(conn.id, dbName, newName, { terminateSessions: true });
+      } catch (e2) {
+        await fail(e2);
+        return;
+      }
+    }
+    await confirmDialog.dialog({ title: "Database Renamed", message: `"${dbName}" is now "${newName}".`, confirmLabel: "OK", type: "success" });
+  };
+
+  const [disconnectTarget, setDisconnectTarget] = useState<{ conn: { id: string; name: string }; dbName: string } | null>(null);
+
+  const handleDisconnectSessions = (conn: { id: string; name: string }, dbName: string) => {
+    closeContextMenu();
+    setDisconnectTarget({ conn: { id: conn.id, name: conn.name }, dbName });
+  };
+
+  /** Opens `text` in a new editor tab on the given database. */
+  const openSqlTab = (conn: { id: string; name: string }, dbName: string, text: string, name: string) => {
+    window.dispatchEvent(new CustomEvent("open-query-with-text", {
+      detail: { query: text, name, connectionId: conn.id, connectionName: conn.name, database: dbName },
+    }));
+  };
+
+  const handleShowDatabaseDdl = async (conn: { id: string; name: string; type: string }, dbName: string) => {
+    closeContextMenu();
+    try {
+      const { db } = await ensureConnectionDb(conn.id, dbName);
+      openSqlTab(conn, dbName, await buildDatabaseDdl(db, conn.type, dbName), `DDL ${dbName}`);
+    } catch (e) {
+      await confirmDialog.dialog({ title: "Failed to Load DDL", message: errorText(e), confirmLabel: "OK", type: "danger" });
+    }
+  };
+
+  const handleRefreshServer = async (connId: string) => {
+    if (refreshingServerIds.has(connId)) return;
+    setRefreshingServerIds(prev => new Set(prev).add(connId));
+    try {
+      await refreshServer(connId);
+    } catch (error) {
+      console.error("Refresh failed:", error);
+      confirmDialog.dialog({ title: "Refresh Failed", message: String(error), confirmLabel: "OK", type: "danger" });
+    } finally {
+      setRefreshingServerIds(prev => { const next = new Set(prev); next.delete(connId); return next; });
+    }
   };
 
   const renderTree = (nodes: TreeNode[], depth: number = 0) => {
@@ -1721,6 +1869,8 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
        *  Views, Columns are not. */
       const isUserFolderNode = (node.contextMenuId?.startsWith("folder:")) ?? false;
       const isServerNode = node.icon === "server" && !!node.contextMenuId;
+      const serverConnId = isServerNode && sessions[node.contextMenuId!] ? node.contextMenuId! : null;
+      const isServerRefreshing = !!serverConnId && refreshingServerIds.has(serverConnId);
       /** Drag sources: both user folders and server connections. */
       const isDragSource = isUserFolderNode || isServerNode;
       /** Drop targets: only user folders. */
@@ -1758,7 +1908,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
               }
             }}
             id={`node-${node.id}`}
-            className={`w-full flex items-center gap-1 px-2 py-1 transition-colors text-sm text-left truncate ${
+            className={`group w-full flex items-center gap-1 px-2 py-1 transition-colors text-sm text-left truncate ${
               isDragSource ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
             } ${
               focusedNodeId === node.id
@@ -1807,8 +1957,26 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
             {(isSchemaLoading || isTableDetailsLoading) && (
               <Loader2 className="w-3 h-3 animate-spin ml-auto text-[var(--neutral-11)] shrink-0" />
             )}
+            {serverConnId && (
+              <span
+                role="button"
+                tabIndex={-1}
+                title="Refresh databases"
+                aria-label="Refresh databases"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleRefreshServer(serverConnId);
+                }}
+                onDoubleClick={(e) => e.stopPropagation()}
+                className={`ml-auto p-0.5 rounded shrink-0 text-[var(--neutral-11)] hover:text-[var(--accent-11)] hover:bg-[var(--neutral-5)] transition-opacity ${
+                  isServerRefreshing ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                }`}
+              >
+                <RefreshCw className={`w-3 h-3 ${isServerRefreshing ? "animate-spin" : ""}`} />
+              </span>
+            )}
             {hasChildren && !(isSchemaLoading || isTableDetailsLoading) && (
-              <span className="text-[10px] text-[var(--neutral-11)] ml-auto">{node.children?.length}</span>
+              <span className={`text-[10px] text-[var(--neutral-11)] ${serverConnId ? "ml-1" : "ml-auto"}`}>{node.children?.length}</span>
             )}
           </button>
           {hasChildren && isExpanded && node.children && renderTree(node.children, depth + 1)}
@@ -1848,7 +2016,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
   };
 
   const handleTreeKeyDown = (e: React.KeyboardEvent) => {
-    if (activeSubmenu || contextMenu || schemaContextMenu || isAddConnectionDialogOpen || showEditDialog || backupDialogOpen || restoreDialogOpen || isCreateTableOpen || isCreateDatabaseOpen || isCreateRoleOpen || showSchemaDialog) return;
+    if (contextMenu || schemaContextMenu || isAddConnectionDialogOpen || showEditDialog || backupDialogOpen || restoreDialogOpen || isCreateTableOpen || isCreateDatabaseOpen || isCreateRoleOpen || showSchemaDialog) return;
 
     const visibleNodes = getVisibleNodes(schemaTree);
     if (visibleNodes.length === 0) return;
@@ -1962,6 +2130,9 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
       case "foreign_table": return <Database className="w-3.5 h-3.5 text-indigo-400" />;
       case "language": return <Terminal className="w-3.5 h-3.5 text-pink-400" />;
       case "extension": return <Server className="w-3.5 h-3.5 text-teal-400" />;
+      case "fdw": return <Plug className="w-3.5 h-3.5 text-indigo-400" />;
+      case "foreign_server": return <Server className="w-3.5 h-3.5 text-indigo-400" />;
+      case "user_mapping": return <User className="w-3.5 h-3.5 text-indigo-300" />;
       case "tablespace": return <HardDrive className="w-3.5 h-3.5 text-amber-400" />;
       case "login_role": return <User className="w-3.5 h-3.5 text-green-400" />;
       case "group_role": return <Users className="w-3.5 h-3.5 text-blue-400" />;
@@ -2312,6 +2483,17 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
           >
             Connect
           </MenuItem>
+          {sessions[contextMenu.connectionId] && (
+            <MenuItem
+              icon={<RefreshCw className="w-3 h-3" />}
+              onClick={() => {
+                void handleRefreshServer(contextMenu.connectionId);
+                closeContextMenu();
+              }}
+            >
+              Refresh
+            </MenuItem>
+          )}
           <MenuItem
             icon={<Edit2 className="w-3 h-3" />}
             onClick={() => {
@@ -2473,28 +2655,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
               <MenuSeparator />
 
               {/* Create Submenu */}
-              <div
-                className="relative group/submenu"
-                onMouseEnter={() => setActiveSubmenu("create")}
-                onMouseLeave={(e) => {
-                  // Prevent flickering if moving directly to the submenu
-                  const related = e.relatedTarget as HTMLElement;
-                  if (related && (related.closest('.submenu-panel') || related.closest('.group\\/submenu'))) return;
-                  setActiveSubmenu(null);
-                }}
-              >
-                <div className="w-full flex items-center justify-between px-3 py-1.5 text-xs hover:bg-[var(--neutral-4)] cursor-default transition-colors">
-                  <div className="flex items-center gap-2">
-                    <Plus className="w-3 h-3" /> Create
-                  </div>
-                  <ChevronRight className="w-3 h-3 opacity-50" />
-                </div>
-
-                {activeSubmenu === "create" && (
-                  <div
-                    className="absolute left-full top-0 ml-[-4px] bg-[var(--surface-overlay)] border border-[var(--neutral-6)] rounded-lg shadow-xl py-1 min-w-[180px] animate-in fade-in slide-in-from-left-2 duration-150 z-[60] submenu-panel"
-                    onMouseEnter={() => setActiveSubmenu("create")}
-                  >
+              <MenuSub icon={<Plus className="w-3 h-3" />} label="Create" width="w-48">
                     <MenuItem
                       icon={<Table className="w-3 h-3" />}
                       onClick={() => {
@@ -2594,32 +2755,10 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                     >
                       Database (New)
                     </MenuItem>
-                  </div>
-                )}
-              </div>
+              </MenuSub>
 
               {/* Tools Submenu */}
-              <div 
-                className="relative group/submenu"
-                onMouseEnter={() => setActiveSubmenu("tools")}
-                onMouseLeave={(e) => {
-                  const related = e.relatedTarget as HTMLElement;
-                  if (related && (related.closest('.submenu-panel') || related.closest('.group\\/submenu'))) return;
-                  setActiveSubmenu(null);
-                }}
-              >
-                <div className="w-full flex items-center justify-between px-3 py-1.5 text-xs hover:bg-[var(--neutral-4)] cursor-default transition-colors">
-                  <div className="flex items-center gap-2">
-                    <Check className="w-3 h-3" /> Tools
-                  </div>
-                  <ChevronRight className="w-3 h-3 opacity-50" />
-                </div>
-
-                {activeSubmenu === "tools" && (
-                  <div
-                    className="absolute left-full top-0 ml-[-4px] bg-[var(--surface-overlay)] border border-[var(--neutral-6)] rounded-lg shadow-xl py-1 min-w-[140px] animate-in fade-in slide-in-from-left-2 duration-150 z-[60] submenu-panel"
-                    onMouseEnter={() => setActiveSubmenu("tools")}
-                  >
+              <MenuSub icon={<Check className="w-3 h-3" />} label="Tools" width="w-44">
                     <MenuItem
                       icon={<Download className="w-3 h-3" />}
                       onClick={() => {
@@ -2648,9 +2787,18 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                     >
                       Restore
                     </MenuItem>
-                  </div>
-                )}
-              </div>
+                    {nodeConn && buildDatabaseMaintenanceSql(nodeConn.type, nodeDb) && (
+                      <MenuItem
+                        icon={<Zap className="w-3 h-3" />}
+                        onClick={() => {
+                          openSqlTab(nodeConn, nodeDb, buildDatabaseMaintenanceSql(nodeConn.type, nodeDb) ?? "", `Maintenance ${nodeDb}`);
+                          closeContextMenu();
+                        }}
+                      >
+                        {isMySqlLike(nodeConn.type) ? "Analyze / Optimize…" : "Vacuum / Analyze…"}
+                      </MenuItem>
+                    )}
+              </MenuSub>
 
               <MenuSeparator />
 
@@ -2663,6 +2811,26 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
               >
                 Copy Database Name
               </MenuItem>
+              {nodeConn && nodeConn.type !== "sqlite" && (
+                <MenuItem icon={<Code className="w-3 h-3" />} onClick={() => void handleShowDatabaseDdl(nodeConn, nodeDb)}>
+                  Show DDL
+                </MenuItem>
+              )}
+              {nodeConn && nodeConn.type !== "sqlite" && (
+                <MenuItem
+                  icon={<Edit2 className="w-3 h-3" />}
+                  disabled={isMySqlLike(nodeConn.type)}
+                  title={isMySqlLike(nodeConn.type) ? "MySQL and MariaDB cannot rename a database" : undefined}
+                  onClick={() => void handleRenameDatabase(nodeConn, nodeDb)}
+                >
+                  Rename Database…
+                </MenuItem>
+              )}
+              {nodeConn && ["postgres", "supabase"].includes(nodeConn.type) && (
+                <MenuItem tone="warning" icon={<Users className="w-3 h-3" />} onClick={() => handleDisconnectSessions(nodeConn, nodeDb)}>
+                  Disconnect Sessions…
+                </MenuItem>
+              )}
 
               <MenuItem
                 tone="danger"
@@ -2950,27 +3118,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                   <MenuSeparator />
 
                   {/* Create Submenu for Schema */}
-                  <div
-                    className="relative group/submenu"
-                    onMouseEnter={() => setActiveSubmenu("create")}
-                    onMouseLeave={(e) => {
-                      const related = e.relatedTarget as HTMLElement;
-                      if (related && (related.closest('.submenu-panel') || related.closest('.group\\/submenu'))) return;
-                      setActiveSubmenu(null);
-                    }}
-                  >
-                    <div className="w-full flex items-center justify-between px-3 py-1.5 text-xs hover:bg-[var(--neutral-4)] cursor-default transition-colors">
-                      <div className="flex items-center gap-2">
-                        <Plus className="w-3 h-3" /> Create
-                      </div>
-                      <ChevronRight className="w-3 h-3 opacity-50" />
-                    </div>
-
-                    {activeSubmenu === "create" && (
-                      <div
-                        className="absolute left-full top-0 ml-[-4px] bg-[var(--surface-overlay)] border border-[var(--neutral-6)] rounded-lg shadow-xl py-1 min-w-[180px] animate-in fade-in slide-in-from-left-2 duration-150 z-[60] submenu-panel"
-                        onMouseEnter={() => setActiveSubmenu("create")}
-                      >
+                  <MenuSub icon={<Plus className="w-3 h-3" />} label="Create" width="w-48">
                         <MenuItem
                           icon={<Table className="w-3 h-3" />}
                           onClick={() => {
@@ -3047,9 +3195,7 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
                         >
                           Type
                         </MenuItem>
-                      </div>
-                    )}
-                  </div>
+                  </MenuSub>
                 </>
               )}
             </>
@@ -3068,6 +3214,15 @@ export function DatabaseExplorer({ isAddConnectionDialogOpen = false }: Database
             setShowEditDialog(false);
             setEditingConnection(null);
           }} 
+        />
+      )}
+
+      {disconnectTarget && (
+        <DisconnectSessionsDialog
+          open
+          connection={disconnectTarget.conn}
+          database={disconnectTarget.dbName}
+          onClose={() => setDisconnectTarget(null)}
         />
       )}
 

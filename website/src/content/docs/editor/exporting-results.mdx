@@ -23,7 +23,27 @@ Choose which formats appear in the menu under **Settings → Import/Export**.
 
 ## Generate SQL from rows
 
-Select rows in the grid, right-click → **Generate SQL** → **SQL INSERTs**, **SQL UPDATEs** or **SQL DELETEs**. UPDATE and DELETE statements identify each row by its primary key and use `IS NULL` where a key value is NULL, so they match exactly the rows you selected. The SQL goes to the clipboard.
+Select rows in the grid (or right-click a single row), then right-click → **Generate SQL** and pick a statement type. The **Generated SQL** window shows the result; switch types with the tabs along its top, then press **Copy**.
+
+| Type | What you get |
+| --- | --- |
+| SELECT | One `SELECT` listing the result's columns from its table |
+| SELECT by Unique Key | A `SELECT` per row, matched on its primary key |
+| INSERT | An `INSERT` per row |
+| UPDATE | An `UPDATE` per row setting every non-key column, matched on the primary key |
+| DELETE by Unique Key | A `DELETE` per row, matched on its primary key |
+| MERGE / UPSERT | `INSERT … ON CONFLICT (key) DO UPDATE` on PostgreSQL, Supabase, CockroachDB and SQLite; `INSERT … ON DUPLICATE KEY UPDATE` on MySQL and MariaDB |
+| DDL | The table's `CREATE` statement (SQLite also lists its indexes and triggers) |
+
+Rows are matched on the table's primary key. When none is known, every column is used, with `IS NULL` for NULL values, so the statements still match exactly the rows you selected. MERGE needs a primary key on every engine except MySQL/MariaDB.
+
+Settings at the bottom of the window are remembered:
+
+- **Use fully qualified names**: write `schema.table` (the database name on MySQL, `main` on SQLite).
+- **Compact SQL**: one line per statement.
+- **Exclude auto-generated columns**: leave serial / identity, AUTO_INCREMENT, CockroachDB `unique_rowid()`, generated columns and SQLite's `INTEGER PRIMARY KEY` out of INSERT and MERGE.
+
+Binary values are written as hex: `'\x…'` on PostgreSQL-family engines, `X'…'` on MySQL, MariaDB and SQLite.
 
 ## Copy
 

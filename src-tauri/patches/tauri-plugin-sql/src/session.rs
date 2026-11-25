@@ -639,7 +639,7 @@ mod pg_tests {
         one(&s, "SET bytea_output = 'escape'").await;
         assert_eq!(first(&one(&s, "SELECT 'Hi'::bytea").await), serde_json::json!("Hi"));
         one(&s, "RESET ALL").await;
-        assert_eq!(first(&one(&s, "SELECT 'Hi'::bytea").await), serde_json::json!([72, 105]));
+        assert_eq!(first(&one(&s, "SELECT 'Hi'::bytea").await), serde_json::json!({ "$binary": "SGk=", "size": 2 }));
     }
 
     #[tokio::test]

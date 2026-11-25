@@ -164,6 +164,14 @@ describe("sqlDialect — escaping", () => {
     expect(formatSqlLiteral({ q: "o'x" })).toBe('\'{"q":"o\'\'x"}\'');
   });
 
+  it("writes binary values as hex literals per engine", () => {
+    const hi = { $binary: "SGk=", size: 2 };
+    expect(formatSqlLiteral(hi)).toBe("'\\x4869'");
+    expect(formatSqlLiteral(hi, "postgres")).toBe("'\\x4869'");
+    expect(formatSqlLiteral(hi, "mysql")).toBe("X'4869'");
+    expect(formatSqlLiteral(hi, "sqlite")).toBe("X'4869'");
+  });
+
   it("escapes identifier quotes by doubling, not deleting", () => {
     expect(quoteIdentifierPart('a"b', "postgres")).toBe('"a""b"');
     expect(quoteIdentifierPart("a`b", "mysql")).toBe("`a``b`");

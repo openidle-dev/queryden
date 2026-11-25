@@ -1,3 +1,5 @@
+import { base64ToBytes, formatHexCompact, isBinaryValue } from "./binaryUtils";
+import type { SqlDialect } from "../components/editor/sqlBuiltins";
 /**
  * Central SQL dialect helpers.
  *
@@ -375,10 +377,15 @@ export function escapeSqlStringLiteral(value: string): string {
  * work as-is on PostgreSQL, MySQL, and SQLite (`TRUE`/`FALSE` are valid in
  * all three); strings are single-quoted with escaping; objects/arrays
  * (e.g. decoded `jsonb`) are serialized to JSON first instead of becoming
- * `'[object Object]'`; null/undefined become `NULL`.
+ * `'[object Object]'`; null/undefined become `NULL`. Binary values become
+ * a hex literal: `'\x…'` (PostgreSQL bytea input) or `X'…'` (MySQL, SQLite).
  */
-export function formatSqlLiteral(val: unknown): string {
+export function formatSqlLiteral(val: unknown, dialect: SqlDialect = "postgres"): string {
   if (val === null || val === undefined) return "NULL";
+  if (isBinaryValue(val)) {
+    const hex = formatHexCompact(base64ToBytes(val.$binary), Number.POSITIVE_INFINITY);
+    return dialect === "postgres" ? `'\\x${hex}'` : `X'${hex}'`;
+  }
   if (typeof val === "number") return String(val);
   if (typeof val === "boolean") return val ? "TRUE" : "FALSE";
   if (typeof val === "object") return escapeSqlStringLiteral(JSON.stringify(val));

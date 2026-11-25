@@ -12,12 +12,19 @@ import {
   buildCountSql,
   buildCreateDatabaseSql,
   buildDropDatabaseSql,
+  buildRenameDatabaseSql,
   buildRoleDDL,
+  TERMINATE_DATABASE_SESSIONS_SQL,
+  LIST_DATABASE_SESSIONS_SQL,
+  buildTerminateSessionsSql,
+  type DatabaseSession,
   splitDisplayName,
 } from "../utils/ddlBuilders";
 import { buildConnectionString } from "../utils/connectionString";
 import { logger } from "../utils/logger";
 import { buildPgDdl, type PgObjectKind } from "../utils/pgDdl";
+import { needsDatabaseList, type ForeignDataWrapperInfo } from "../utils/schemaCatalog";
+import { buildForeignObjectDdl } from "../utils/fdwDdl";
 
 export interface DatabaseConnection {
   id: string;
@@ -100,6 +107,8 @@ export interface SchemaItems {
   eventTriggers?: string[];
   extensions?: string[];
   languages?: string[];
+  /** PostgreSQL foreign-data wrappers → servers → user mappings. */
+  foreignDataWrappers?: ForeignDataWrapperInfo[];
   columns?: { table_name: string; column_name: string; data_type?: string }[];
   foreignKeys?: { source_table: string; source_column: string; target_table: string; target_column: string }[];
   _ts?: number;
@@ -193,8 +202,8 @@ interface ConnectionContextType {
    * connection removal, or a connection-lost error).
    */
   ensureConnectionDb: (connId: string, database?: string) => Promise<EnsuredConnection>;
-  /** Close + evict all cached lazy handles for a connection. */
-  dropCachedConnection: (connId: string) => Promise<void>;
+  /** Close + evict cached lazy handles for a connection, or for one of its databases. */
+  dropCachedConnection: (connId: string, database?: string) => Promise<void>;
   /**
    * True when `connectionString` is backed by a pool this app is actively
    * using. Pools are keyed by connection string on the Rust side and reused,
@@ -219,10 +228,24 @@ interface ConnectionContextType {
   importConnections: (path: string) => Promise<number>;
   copyTableData: (tableName: string, targetDB: string) => Promise<string>;
   dropDatabase: (dbName: string) => Promise<void>;
+  /**
+   * Rename a database on any connection (PostgreSQL, Supabase, CockroachDB),
+   * run from another database on the same server. Closes this app's own
+   * handles to it first; `terminateSessions` also ends everyone else's.
+   * Throws with the reason on MySQL/MariaDB/SQLite or when it is in use.
+   */
+  renameDatabase: (connId: string, from: string, to: string, opts?: { terminateSessions?: boolean }) => Promise<void>;
+  /** Other sessions on a PostgreSQL / Supabase database, for the warning shown before ending them. */
+  listDatabaseSessions: (connId: string, dbName: string) => Promise<DatabaseSession[]>;
+  /** End exactly the sessions `pids` on a PostgreSQL / Supabase database; returns how many ended. */
+  terminateDatabaseSessions: (connId: string, dbName: string, pids: number[]) => Promise<number>;
   createDatabase: (payload: CreateDatabasePayload) => Promise<void>;
   createRole: (payload: CreateRolePayload) => Promise<void>;
   dropRole: (roleName: string) => Promise<void>;
   refreshRoles: () => Promise<void>;
+  refreshServer: (connId: string) => Promise<void>;
+  /** The databases on any saved connection's server; also refreshes a connected server's explorer list. */
+  listServerDatabases: (connId: string) => Promise<string[]>;
   createTable: (payload: CreateTablePayload) => Promise<void>;
   executeDataCopy: (sourceTable: string, targetTable: string, targetDB: string, options?: {
     method?: "insert" | "copy" | "pgdump";
@@ -809,6 +832,85 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     return { username, password };
   };
 
+  /** Every database on the server `db` is connected to. */
+  const queryDatabaseNames = async (conn: DatabaseConnection, db: any): Promise<string[]> => {
+    if (["postgres", "supabase", "cockroach"].includes(conn.type)) {
+      const result = await db.select("SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname");
+      return result.map((r: any) => r.datname);
+    }
+    if (["mysql", "mariadb"].includes(conn.type)) {
+      const result = await db.select("SHOW DATABASES");
+      return result.map((r: any) => r.Database ?? Object.values(r)[0]);
+    }
+    return [conn.database].filter(Boolean);
+  };
+
+  /**
+   * The databases on a saved connection's server, read through the editor's
+   * connection path (SSH tunnel, vault credentials, IPv6). A connected
+   * server's explorer list is updated with it, so the two never disagree.
+   */
+  const listServerDatabases = async (connId: string): Promise<string[]> => {
+    const conn = connections.find((c) => c.id === connId);
+    if (!conn) throw new Error("Connection not found.");
+    if (conn.type === "sqlite") return [conn.filepath || conn.database || "main"];
+    const { db } = await ensureConnectionDb(connId);
+    const names = await queryDatabaseNames(conn, db);
+    if (sessionsRef.current[connId]) patchSession(connId, { databases: names });
+    return names;
+  };
+
+  /**
+   * Server-level tree data for one connection: database list, roles and
+   * tablespaces. Written to that connection's session by id, never through the
+   * active-connection setters, which resolve via a ref that lags a render.
+   */
+  const loadServerObjects = async (
+    conn: DatabaseConnection,
+    db: any,
+    { includeDatabases }: { includeDatabases: boolean },
+  ) => {
+    const isPgFamily = ["postgres", "supabase", "cockroach"].includes(conn.type);
+    if (includeDatabases) {
+      patchSession(conn.id, { databases: await queryDatabaseNames(conn, db) });
+    }
+    if (!isPgFamily) return;
+
+    try {
+      const roleRows = await db.select("SELECT rolname, rolcanlogin FROM pg_roles WHERE rolname !~ '^pg_' ORDER BY rolname");
+      const login: string[] = [];
+      const group: string[] = [];
+      for (const r of roleRows) {
+        if (r.rolcanlogin) login.push(r.rolname);
+        else group.push(r.rolname);
+      }
+      patchSession(conn.id, { roles: { login, group } });
+    } catch (e) {
+      console.error("Failed to load roles:", e);
+      patchSession(conn.id, { roles: { login: [], group: [] } });
+    }
+    try {
+      const tsRows = await db.select(
+        "SELECT spcname, spcowner::regrole::text AS owner, pg_tablespace_location(oid) AS location, COALESCE(pg_size_pretty(NULLIF(pg_tablespace_size(oid), 0)), '0 bytes') AS size FROM pg_tablespace ORDER BY spcname"
+      );
+      patchSession(conn.id, { tablespaces: tsRows.map((r: any) => ({ name: r.spcname, owner: r.owner, location: r.location, size: r.size })) });
+    } catch (e) {
+      console.error("Failed to load tablespaces:", e);
+      patchSession(conn.id, { tablespaces: [] });
+    }
+  };
+
+  /** Re-read the database list, roles and tablespaces of a connected server, plus the open database's schema. */
+  const refreshServer = async (connId: string) => {
+    const session = sessionsRef.current[connId];
+    if (!session) return;
+    const { db, connection } = await ensureConnectionDb(connId);
+    await loadServerObjects(connection, db, { includeDatabases: true });
+    if (activeConnIdRef.current === connId && session.selectedDatabase) {
+      await loadSchema(session.selectedDatabase, undefined, true);
+    }
+  };
+
   const connectToDatabase = async (connId: string, databaseName?: string, overrideVaultCredential?: VaultCredential) => {
     const conn = connections.find((c) => c.id === connId);
     if (!conn) return;
@@ -873,52 +975,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       // Scoped to this connection by name: the compatibility setters resolve
       // the active connection through a ref that React updates only on the
       // next render, so a bare call here would write to the previous one.
-      const setDatabasesFor = (v: string[]) => patchSession(conn.id, { databases: v });
-      const setRolesFor = (v: { login: string[]; group: string[] }) =>
-        patchSession(conn.id, { roles: v });
-      const setTablespacesFor = (v: ConnSession["tablespaces"]) =>
-        patchSession(conn.id, { tablespaces: v });
+      const knownDatabases = sessionsRef.current[conn.id]?.databases;
       patchSession(conn.id, { selectedDatabase: targetDb });
-      
-      // Get available databases list if it's the first connection or if requested
-      if (!databaseName) {
-        if (["postgres", "supabase", "cockroach"].includes(conn.type)) {
-          const result = await db.select<any[]>("SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname");
-          setDatabasesFor(result.map((r: any) => r.datname));
-        } else if (["mysql", "mariadb"].includes(conn.type)) {
-          const result = await db.select<any[]>("SHOW DATABASES");
-          setDatabasesFor(result.map((r: any) => r.Database));
-        } else {
-          setDatabasesFor([conn.database]);
-        }
-      }
-
-      // Load cluster-wide roles for PostgreSQL connections
-      if (["postgres", "supabase", "cockroach"].includes(conn.type)) {
-        try {
-          const roleRows = await db.select<any[]>("SELECT rolname, rolcanlogin FROM pg_roles WHERE rolname !~ '^pg_' ORDER BY rolname");
-          const login: string[] = [];
-          const group: string[] = [];
-          for (const r of roleRows) {
-            if (r.rolcanlogin) login.push(r.rolname);
-            else group.push(r.rolname);
-          }
-          setRolesFor({ login, group });
-        } catch (e) {
-          console.error("Failed to load roles:", e);
-          setRolesFor({ login: [], group: [] });
-        }
-        // Load tablespaces
-        try {
-          const tsRows = await db.select<any[]>(
-            "SELECT spcname, spcowner::regrole::text AS owner, pg_tablespace_location(oid) AS location, COALESCE(pg_size_pretty(NULLIF(pg_tablespace_size(oid), 0)), '0 bytes') AS size FROM pg_tablespace ORDER BY spcname"
-          );
-          setTablespacesFor(tsRows.map((r: any) => ({ name: r.spcname, owner: r.owner, location: r.location, size: r.size })));
-        } catch (e) {
-          console.error("Failed to load tablespaces:", e);
-          setTablespacesFor([]);
-        }
-      }
+      await loadServerObjects(conn, db, { includeDatabases: needsDatabaseList(databaseName, knownDatabases) });
     } catch (error: any) {
       console.error("Connection failed:", error);
       throw error;
@@ -978,17 +1037,19 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     return false;
   };
 
-  const dropCachedConnection = async (connId: string) => {
+  const dropCachedConnection = async (connId: string, database?: string) => {
+    // Every database on the connection, or just `database` (keys are `${connId}::${db}`).
     const prefix = `${connId}::`;
+    const matches = (key: string) => (database === undefined ? key.startsWith(prefix) : key === `${prefix}${database}`);
     for (const key of [...schemaCacheRef.current.keys()]) {
-      if (key.startsWith(prefix)) schemaCacheRef.current.delete(key);
+      if (matches(key)) schemaCacheRef.current.delete(key);
     }
     for (const key of [...schemaPendingRef.current.keys()]) {
-      if (key.startsWith(prefix)) schemaPendingRef.current.delete(key);
+      if (matches(key)) schemaPendingRef.current.delete(key);
     }
     const settle: Promise<unknown>[] = [];
     for (const [key, pending] of lazyPendingRef.current) {
-      if (key.startsWith(prefix)) {
+      if (matches(key)) {
         lazyPendingRef.current.delete(key);
         settle.push(
           pending
@@ -1008,7 +1069,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     }
     const closes: Promise<unknown>[] = [];
     for (const [key, db] of lazyHandlesRef.current) {
-      if (key.startsWith(prefix)) {
+      if (matches(key)) {
         lazyHandlesRef.current.delete(key);
         closes.push(
           (async () => {
@@ -1254,6 +1315,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
 
   const getDDL = async (type: string, name: string, schema?: string, table?: string): Promise<string> => {
     if (!activeConnection || !currentDb) return "";
+    // Database-level objects: names are not schema-qualified. For a user
+    // mapping, `table` carries the server it belongs to.
+    if (type === "fdw" || type === "foreign_server" || type === "user_mapping") {
+      return buildForeignObjectDdl(currentDb, type, name, table);
+    }
 
     // Parse name - could be "table" or "schema.table"
     let schemaPart = schema || 'public';
@@ -1875,6 +1941,97 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  /** A database on the same server to run admin statements from, other than `exclude`. */
+  const maintenanceDatabaseFor = (conn: DatabaseConnection, exclude: string): string =>
+    [conn.database, "postgres", "defaultdb", "template1"].find((d) => d && d !== exclude) ?? "postgres";
+
+  /** A handle on another database of a PostgreSQL / Supabase server, for session admin on `dbName`. */
+  const sessionAdminDb = async (connId: string, dbName: string) => {
+    const conn = connections.find((c) => c.id === connId);
+    if (!conn) throw new Error("Connection not found.");
+    if (!["postgres", "supabase"].includes(conn.type)) {
+      throw new Error(`Disconnecting sessions is not supported for ${conn.type}.`);
+    }
+    return (await ensureConnectionDb(connId, maintenanceDatabaseFor(conn, dbName))).db;
+  };
+
+  const listDatabaseSessions = async (connId: string, dbName: string): Promise<DatabaseSession[]> => {
+    const db = await sessionAdminDb(connId, dbName);
+    const rows = await db.select(LIST_DATABASE_SESSIONS_SQL, [dbName]) as DatabaseSession[];
+    const num = (v: unknown) => (v == null ? null : Number(v));
+    return rows.map((r) => ({ ...r, pid: Number(r.pid), connected_secs: num(r.connected_secs), state_secs: num(r.state_secs) }));
+  };
+
+  const terminateDatabaseSessions = async (connId: string, dbName: string, pids: number[]): Promise<number> => {
+    if (!schemaStore.allowSqlExecute) {
+      throw new Error(`Execution Denied: Enable "Allow SQL Execution" in settings to disconnect sessions.`);
+    }
+    const sql = buildTerminateSessionsSql(pids);
+    const db = await sessionAdminDb(connId, dbName);
+    const rows = await db.select(sql, [dbName]) as Array<{ terminated: boolean }>;
+    return rows.filter((r) => r.terminated).length;
+  };
+
+  const renameDatabase = async (connId: string, from: string, to: string, opts: { terminateSessions?: boolean } = {}) => {
+    const conn = connections.find((c) => c.id === connId);
+    if (!conn) throw new Error("Connection not found.");
+    const sql = buildRenameDatabaseSql(conn.type, from, to);
+    if (!schemaStore.allowSqlExecute) {
+      throw new Error(`Execution Denied: Enable "Allow SQL Execution" in settings to rename databases.`);
+    }
+    const newName = to.trim();
+
+    // This app's own connections to the database would block the rename.
+    const wasActive = activeConnIdRef.current === connId && sessionsRef.current[connId]?.selectedDatabase === from;
+    await dropCachedConnection(connId, from);
+    if (wasActive && currentDb) {
+      try {
+        await currentDb.close(currentDb.path);
+      } catch {
+        /* already closed */
+      }
+      setCurrentDb(null);
+      patchSession(connId, (s) => ({ selectedDatabase: null, schemaByDb: Object.fromEntries(Object.entries(s.schemaByDb).filter(([db]) => db !== from)) }));
+    }
+
+    try {
+      const { db } = await ensureConnectionDb(connId, maintenanceDatabaseFor(conn, from));
+      if (opts.terminateSessions && conn.type !== "cockroach") {
+        await db.select(TERMINATE_DATABASE_SESSIONS_SQL, [from]);
+      }
+      await db.execute(sql);
+    } catch (e) {
+      // Nothing was renamed: put the open database back the way it was.
+      if (wasActive) await connectToDatabase(connId, from).catch((err) => logger.error("Reconnect after failed rename:", err));
+      throw e;
+    }
+
+    patchSession(connId, (s) => ({ databases: s.databases.map((d) => (d === from ? newName : d)) }));
+    if (conn.database === from) updateConnection(connId, { database: newName });
+    setSelectedSchemasByDatabase((prev) => {
+      const oldKey = `${connId}:${from}`;
+      if (!(oldKey in prev)) return prev;
+      const { [oldKey]: schemas, ...rest } = prev;
+      return { ...rest, [`${connId}:${newName}`]: schemas };
+    });
+    const targets = useSettings.getState().multiQueryTargets;
+    if (targets.some((t) => t.connectionId === connId && t.database === from)) {
+      useSettings.getState().setSetting(
+        "multiQueryTargets",
+        targets.map((t) => (t.connectionId === connId && t.database === from ? { ...t, database: newName } : t)),
+      );
+    }
+    // Editor tabs and other views pointing at the old name follow it.
+    window.dispatchEvent(new CustomEvent("database-renamed", { detail: { connectionId: connId, from, to: newName } }));
+    if (wasActive) {
+      try {
+        await connectToDatabase(connId, newName);
+      } catch (e) {
+        logger.error("Reconnect after rename failed:", e);
+      }
+    }
+  };
+
   const dropDatabase = async (dbName: string) => {
     if (!activeConnection || !currentDb) return;
 
@@ -2292,10 +2449,15 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         importConnections,
         copyTableData,
         dropDatabase,
+        renameDatabase,
+        listDatabaseSessions,
+        terminateDatabaseSessions,
         createDatabase,
         createRole,
         dropRole,
         refreshRoles,
+        refreshServer,
+        listServerDatabases,
         createTable,
         executeDataCopy,
         reloadConnections,

@@ -11,6 +11,18 @@ describe("toRowObjects", () => {
     });
     expect(out.columns).toEqual(["id", "id (2)", "v"]);
     expect(out.rows).toEqual([{ id: 1, "id (2)": 2, v: null }]);
+    expect(out.types).toEqual({ id: "INT4", "id (2)": "INT4", v: "TEXT" });
+  });
+
+  it("keeps column types for a result with no rows", () => {
+    const out = toRowObjects({
+      columns: [{ name: "id", typeName: "INT8" }, { name: "started", typeName: "TIMESTAMPTZ" }, { name: "odd", typeName: "" }, { name: "expr", typeName: "NULL" }],
+      rows: [],
+      rowsAffected: 0,
+      truncated: false,
+    });
+    expect(out.columns).toEqual(["id", "started", "odd", "expr"]);
+    expect(out.types).toEqual({ id: "INT8", started: "TIMESTAMPTZ" });
   });
 });
 

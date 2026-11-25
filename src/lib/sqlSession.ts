@@ -62,17 +62,30 @@ export function endSession(db: SessionDb, sessionId: string): Promise<boolean> {
   return invoke<boolean>("plugin:sql|end_session", { db: db.path, session: sessionId });
 }
 
+const UNKNOWN_TYPE_NAMES = new Set(["NULL", "UNKNOWN"]);
+
 /**
  * Positional rows → the row objects the results grid uses. Duplicate column
  * names (`SELECT a.id, b.id`) get unique keys — `id`, `id (2)` — instead of
- * the second silently overwriting the first.
+ * the second silently overwriting the first. `types` maps those keys to the
+ * server-reported type, so headers are right even when no rows came back.
  */
-export function toRowObjects(set: SessionResultSet): { columns: string[]; rows: Record<string, unknown>[] } {
+export function toRowObjects(set: SessionResultSet): {
+  columns: string[];
+  rows: Record<string, unknown>[];
+  types: Record<string, string>;
+} {
   const seen = new Map<string, number>();
   const columns = set.columns.map((c) => {
     const n = (seen.get(c.name) ?? 0) + 1;
     seen.set(c.name, n);
     return n === 1 ? c.name : `${c.name} (${n})`;
+  });
+  const types: Record<string, string> = {};
+  columns.forEach((key, i) => {
+    const typeName = set.columns[i].typeName?.trim();
+    // SQLite says NULL for expression columns; the grid's guess from the data is better.
+    if (typeName && !UNKNOWN_TYPE_NAMES.has(typeName.toUpperCase())) types[key] = typeName;
   });
   const rows = set.rows.map((values) => {
     const row: Record<string, unknown> = {};
@@ -81,7 +94,7 @@ export function toRowObjects(set: SessionResultSet): { columns: string[]; rows: 
     });
     return row;
   });
-  return { columns, rows };
+  return { columns, rows, types };
 }
 
 /** The result set to show in the grid: the last one that returned columns. */

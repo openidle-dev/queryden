@@ -533,7 +533,7 @@ mod tests {
         assert_eq!(text_to_json(Some(1700), "2.5"), serde_json::json!(2.5));
         assert_eq!(text_to_json(Some(20), "9223372036854775807"), JsonValue::String("9223372036854775807".into()));
         assert_eq!(text_to_json(Some(3802), "{\"a\": 1}"), serde_json::json!({"a": 1}));
-        assert_eq!(text_to_json(Some(17), "\\x4869"), serde_json::json!([72, 105]));
+        assert_eq!(text_to_json(Some(17), "\\x4869"), serde_json::json!({ "$binary": "SGk=", "size": 2 }));
         assert_eq!(text_to_json(Some(2205), "pg_class"), JsonValue::String("pg_class".into()));
         assert_eq!(text_to_json(None, "{a,b}"), JsonValue::String("{a,b}".into()));
     }

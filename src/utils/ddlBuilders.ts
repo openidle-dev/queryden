@@ -20,6 +20,7 @@ import {
   formatSqlLiteral,
   isMySqlLike,
   isPgLike,
+  quoteIdentifierPart,
   splitDottedIdentifier,
 } from "./sqlDialect";
 
@@ -66,12 +67,15 @@ export function buildDropDatabaseSql(dbType: string, dbName: string): string {
   if (!isPgLike(dbType) && !isMySqlLike(dbType)) {
     throw new Error(`Drop Database is not supported for ${dbType}`);
   }
-  return `DROP DATABASE ${quoteIdentifier(dbName, dbType as DatabaseType)}`;
+  // A database name is one identifier: a dot in it is part of the name.
+  return `DROP DATABASE ${quoteIdentifierPart(dbName, dbType)}`;
 }
 
 /** `CREATE DATABASE` for PG/MySQL families. Throws for unsupported engines. */
 export function buildCreateDatabaseSql(dbType: string, payload: CreateDatabaseOptions): string {
-  const qid = (n: string) => quoteIdentifier(n, dbType as DatabaseType);
+  // Database, role, template, tablespace, charset and collation names are
+  // single identifiers: a dot in one is part of the name.
+  const qid = (n: string) => quoteIdentifierPart(n, dbType);
   if (isPgLike(dbType)) {
     let sql = `CREATE DATABASE ${qid(payload.name)}`;
     if (payload.owner) sql += ` OWNER = ${qid(payload.owner)}`;
@@ -82,7 +86,7 @@ export function buildCreateDatabaseSql(dbType: string, payload: CreateDatabaseOp
     if (payload.lcCtype) sql += ` LC_CTYPE = ${escapeSqlStringLiteral(payload.lcCtype)}`;
     if (payload.tablespace) sql += ` TABLESPACE = ${qid(payload.tablespace)}`;
     if (payload.connectionLimit !== undefined && Number.isInteger(payload.connectionLimit) && payload.connectionLimit >= -1) {
-      sql += ` CONNECTION_LIMIT = ${payload.connectionLimit}`;
+      sql += ` CONNECTION LIMIT = ${payload.connectionLimit}`;
     }
     if (payload.isTemplate !== undefined) sql += ` IS_TEMPLATE = ${payload.isTemplate ? "TRUE" : "FALSE"}`;
     return sql;
@@ -206,4 +210,111 @@ SELECT ${colList} FROM ${srcQualified};
   }
 
   return copySQL + `\n-- Table ${args.tableDisplay} appears to be empty.`;
+}
+
+/**
+ * `ALTER DATABASE … RENAME TO …` (PostgreSQL, Supabase, CockroachDB). MySQL
+ * and MariaDB have no rename (RENAME DATABASE was removed in 5.1.23) and a
+ * SQLite database is a file, so those throw with the reason.
+ */
+export function buildRenameDatabaseSql(dbType: string, from: string, to: string): string {
+  if (isMySqlLike(dbType)) {
+    throw new Error("MySQL and MariaDB cannot rename a database. Create a new one and move the tables with RENAME TABLE old_db.t TO new_db.t.");
+  }
+  if (!isPgLike(dbType)) throw new Error(`Rename Database is not supported for ${dbType}.`);
+  const trimmed = to.trim();
+  if (!trimmed) throw new Error("The new database name is empty.");
+  if (trimmed === from) throw new Error("The new name is the same as the current one.");
+  // Database names are a single identifier: a dot in one is part of the name.
+  return `ALTER DATABASE ${quoteIdentifierPart(from, "postgres")} RENAME TO ${quoteIdentifierPart(trimmed, "postgres")}`;
+}
+
+/** True when a rename/drop failed because other sessions are connected (PostgreSQL SQLSTATE 55006). */
+export function isDatabaseInUseError(message: string): boolean {
+  return /being accessed by other users|55006/i.test(message);
+}
+
+/**
+ * Ends every other session on `dbName` (PostgreSQL / Supabase), returning one
+ * row per session ended. Takes the name as `$1`.
+ */
+export const TERMINATE_DATABASE_SESSIONS_SQL =
+  "SELECT pg_terminate_backend(pid) AS terminated FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()";
+
+/** Maintenance statements for a database, opened in an editor for review before running. */
+export function buildDatabaseMaintenanceSql(dbType: string, dbName: string): string | null {
+  const t = dbType.toLowerCase();
+  if (t === "postgres" || t === "supabase") {
+    return `-- Maintenance for ${dbName}. VACUUM cannot run inside a transaction block.\n`
+      + "VACUUM (VERBOSE, ANALYZE);\n\n"
+      + "-- Reclaims disk space but locks each table exclusively while it runs:\n-- VACUUM (FULL, VERBOSE, ANALYZE);\n\n"
+      + "-- Rebuild indexes (PostgreSQL 12+ can do it without blocking writes):\n"
+      + `-- REINDEX DATABASE CONCURRENTLY ${quoteIdentifierPart(dbName, "postgres")};`;
+  }
+  if (t === "sqlite") {
+    return "-- Maintenance for this SQLite file.\nANALYZE;\nVACUUM;\nPRAGMA integrity_check;";
+  }
+  if (isMySqlLike(t)) {
+    const db = escapeSqlStringLiteral(dbName);
+    return `-- MySQL / MariaDB maintain tables one at a time. Run this, then run the statements it returns.\n`
+      + `SELECT CONCAT('ANALYZE TABLE \`', table_schema, '\`.\`', table_name, '\`; OPTIMIZE TABLE \`', table_schema, '\`.\`', table_name, '\`;') AS maintenance\n`
+      + `FROM information_schema.tables\nWHERE table_schema = ${db} AND table_type = 'BASE TABLE'\nORDER BY table_name;`;
+  }
+  return null;
+}
+
+/** A session connected to a database, as listed before disconnecting it. */
+export interface DatabaseSession {
+  pid: number;
+  usename: string | null;
+  application_name: string | null;
+  client_addr: string | null;
+  state: string | null;
+  /** Seconds since the session connected. */
+  connected_secs?: number | null;
+  /** Seconds since it entered its current state. */
+  state_secs?: number | null;
+  /** Its current or last statement, cut to 500 characters. */
+  query?: string | null;
+}
+
+/** Other sessions on the database named `$1`, longest-connected first. */
+export const LIST_DATABASE_SESSIONS_SQL =
+  "SELECT pid, usename::text AS usename, application_name, client_addr::text AS client_addr, state, "
+  + "EXTRACT(EPOCH FROM now() - backend_start)::bigint AS connected_secs, "
+  + "EXTRACT(EPOCH FROM now() - state_change)::bigint AS state_secs, "
+  + "left(query, 500) AS query "
+  + "FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid() ORDER BY backend_start, pid";
+
+/** `42s`, `5m 3s`, `3h 12m`, `2d 4h`; empty for an unknown duration. */
+export function formatDurationShort(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return "";
+  const s = Math.floor(seconds);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+  return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
+}
+
+/**
+ * Ends exactly the sessions `pids` on the database named `$1`, so anyone who
+ * connected after the warning was shown is left alone (and a reused pid on
+ * another database is not touched). Throws on a non-integer pid.
+ */
+export function buildTerminateSessionsSql(pids: readonly number[]): string {
+  if (pids.length === 0) throw new Error("No sessions to disconnect.");
+  for (const pid of pids) {
+    if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error(`Invalid session id: ${pid}`);
+  }
+  return `SELECT pg_terminate_backend(pid) AS terminated FROM pg_stat_activity WHERE datname = $1 AND pid IN (${pids.join(", ")})`;
+}
+
+/** One line per session for a warning, e.g. `odoo · Odoo · 10.0.0.4 · idle in transaction (pid 4211)`. */
+export function describeDatabaseSessions(sessions: readonly DatabaseSession[], max = 10): string {
+  const lines = sessions.slice(0, max).map((s) => {
+    const parts = [s.usename || "unknown user", s.application_name || null, s.client_addr || "local socket", s.state || "unknown state"];
+    return `• ${parts.filter(Boolean).join(" · ")} (pid ${s.pid})`;
+  });
+  if (sessions.length > max) lines.push(`• …and ${sessions.length - max} more`);
+  return lines.join("\n");
 }

@@ -11,6 +11,8 @@
  * name-based heuristic so we don't regress existing behavior.
  */
 
+import { isBinaryValue } from "./binaryUtils";
+
 /**
  * SQL date/time type tokens we recognize across PostgreSQL, MySQL/MariaDB,
  * SQLite, and CockroachDB. Stored normalized to upper case for fast lookup.
@@ -191,6 +193,10 @@ export function compareGridValues(a: unknown, b: unknown): number {
   if (typeof a === "number" && typeof b === "number") {
     return a - b;
   }
+  // Binary values sort by size; stringifying a multi-MB value per comparison froze the grid.
+  if (isBinaryValue(a) && isBinaryValue(b)) {
+    return a.size - b.size;
+  }
   const bigA = asBigIntForCompare(a);
   const bigB = asBigIntForCompare(b);
   if (bigA !== null && bigB !== null) {
@@ -251,7 +257,7 @@ export function inferColumnType(data: any[], col: string): string | undefined {
       seenBoolString = true;
       allNumbers = false;
     } else if (isJson) {
-      return "json";
+      return isBinaryValue(val) ? "bytea" : "json";
     } else {
       const str = String(val).trim();
       if (!str) continue;
@@ -288,7 +294,7 @@ export function inferColumnType(data: any[], col: string): string | undefined {
  * unchanged): `123` numeric, `bool`, date/time glyph, `A·Z` text, `{}`
  * JSON, `01` binary — plus key/FK markers.
  */
-export function getTypeHeaderPrefix(type: string, isFk: boolean, colName: string): string {
+export function getTypeHeaderPrefix(type: string, isFk: boolean, isPrimaryKey: boolean): string {
   const t = type.toLowerCase().trim();
   let base = "";
 
@@ -308,10 +314,11 @@ export function getTypeHeaderPrefix(type: string, isFk: boolean, colName: string
     base = "A·Z"; // Default fallback
   }
 
-  // Key/FK indicators
+  // Key/FK indicators come from the table's real constraints, never the
+  // column name: `install_id` on a view is not a primary key.
   if (isFk) {
     return `${base}🔗 `;
-  } else if (colName === "id" || colName.endsWith("_id")) {
+  } else if (isPrimaryKey) {
     return `${base}🔑 `;
   }
 

@@ -3701,7 +3701,7 @@ dependencies = [
 
 [[package]]
 name = "queryden"
-version = "1.0.25"
+version = "1.0.26"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -5521,6 +5521,7 @@ dependencies = [
 name = "tauri-plugin-sql"
 version = "2.4.0"
 dependencies = [
+ "base64 0.22.1",
  "futures-core",
  "futures-util",
  "indexmap 2.14.0",

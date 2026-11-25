@@ -1,6 +1,6 @@
 {
   "name": "queryden",
-  "version": "1.0.25",
+  "version": "1.0.26",
   "type": "module",
   "description": "A modern multi-database manager built with Tauri, React, and TypeScript",
   "repository": {
@@ -34,7 +34,6 @@
   "dependencies": {
     "@glideapps/glide-data-grid": "^6.0.0",
     "@monaco-editor/react": "^4.7.0",
-    "@radix-ui/react-select": "^2.2.6",
     "@tanstack/react-query": "^5.0.0",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2",

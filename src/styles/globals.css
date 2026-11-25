@@ -313,17 +313,37 @@ summary {
   cursor: pointer;
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar { width: 6px; height: 6px; }
+/* Custom scrollbar. The thumb's transparent border is inset padding: it must
+   stay under half the bar's thickness or the painted thumb is 0px wide. */
+::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-corner { background: transparent; }
 ::-webkit-scrollbar-thumb {
   background: var(--neutral-7);
   border-radius: 10px;
-  border: 4px solid transparent;
+  border: 1px solid transparent;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--neutral-9);
+  background-clip: content-box;
+}
+
+/* Results grid: a full-size bar with a visible track, so wide results
+   (including ones with no rows) can be scrolled with the mouse. */
+.gridview-scroll .dvn-scroller::-webkit-scrollbar { width: 12px; height: 12px; }
+.gridview-scroll .dvn-scroller::-webkit-scrollbar-track { background: var(--surface-panel); }
+.gridview-scroll .dvn-scroller::-webkit-scrollbar-corner { background: var(--surface-panel); }
+.gridview-scroll .dvn-scroller::-webkit-scrollbar-thumb {
+  background: var(--neutral-8);
+  border: 2px solid transparent;
+  background-clip: content-box;
+  border-radius: 10px;
+  min-width: 40px;
+  min-height: 40px;
+}
+.gridview-scroll .dvn-scroller::-webkit-scrollbar-thumb:hover {
+  background: var(--neutral-10);
   background-clip: content-box;
 }
 

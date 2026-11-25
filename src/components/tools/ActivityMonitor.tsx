@@ -100,7 +100,15 @@ export const ActivityMonitor: React.FC<ActivityMonitorProps> = ({ isOpen, onClos
 
   const terminateBackend = async (pid: number | string) => {
     if (!currentDb) return;
-    const confirmed = await confirmDialog.confirm({ title: "Terminate Session", message: `Kill PID ${pid}?`, confirmLabel: "Kill", type: "danger" });
+    const s = stats.find((row) => String(row.pid) === String(pid));
+    const who = s ? `${s.usename || "unknown user"}${s.application_name ? ` · ${s.application_name}` : ""} · ${s.client_addr || "local"} on "${s.datname}" (${s.state})` : `PID ${pid}`;
+    const confirmed = await confirmDialog.confirm({
+      title: "Terminate Session?",
+      message: `Warning: this ends session ${pid} (${who}). Its running query stops, its open transaction is rolled back and its application loses the connection.`,
+      confirmLabel: "Terminate",
+      cancelLabel: "Cancel",
+      type: "danger",
+    });
     if (!confirmed) return;
     try {
       await (currentDb as any).select(`SELECT pg_terminate_backend($1::int)`, [pid]);

@@ -123,7 +123,7 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
             </Dialog.Title>
 
             <Dialog.Body>
-              <p className="text-xs text-[var(--neutral-11)]">{options.message}</p>
+              <p className="text-xs text-[var(--neutral-11)] whitespace-pre-line break-words">{options.message}</p>
 
               {showHelp && options.helpInstructions && (
                 <div className="mt-4 p-3 bg-[var(--accent-3)] border border-[var(--accent-6)] rounded-md text-[10px] space-y-2">
