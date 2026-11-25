@@ -5,7 +5,7 @@ import Editor from "@monaco-editor/react";
 import { defineMonacoThemes, resolveMonacoTheme } from "../../utils/monacoThemes";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useSettings } from "../../store/settingsStore";
-import { GENERATE_SQL_KINDS, generateSql, type GenerateSqlKind, type GenerateSqlOptions, type GenerateSqlTarget } from "../../utils/sqlGenerate";
+import { GENERATE_SQL_KINDS, generateSql, missingKeyColumns, type GenerateSqlKind, type GenerateSqlOptions, type GenerateSqlTarget } from "../../utils/sqlGenerate";
 import { Dialog } from "../ui/Dialog";
 import { Button } from "../ui/Button";
 import { cn } from "../../lib/cn";
@@ -65,6 +65,7 @@ export function GenerateSqlDialog({ open, initialKind, source, target, rows, loa
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, kind, canLoadDdl]);
 
+  const missingKeys = useMemo(() => missingKeyColumns(target), [target]);
   const sql = useMemo(() => {
     if (kind === "ddl") return ddl?.text ?? "";
     return generateSql(kind, target, rows, options);
@@ -173,6 +174,9 @@ export function GenerateSqlDialog({ open, initialKind, source, target, rows, loa
       </fieldset>
 
       <Dialog.Footer>
+        {missingKeys.length > 0 && (kind === "selectByKey" || kind === "update" || kind === "deleteByKey" || kind === "upsert") && (
+          <span className="mr-auto text-[10px] text-[var(--warning-11)]">Add {missingKeys.join(", ")} to the query to generate key-matched statements.</span>
+        )}
         {target.keyColumns.length === 0 && kind !== "select" && kind !== "insert" && kind !== "ddl" && (
           <span className="mr-auto text-[10px] text-[var(--warning-11)]">No primary key known: rows are matched on every column.</span>
         )}

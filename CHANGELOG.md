@@ -32,6 +32,8 @@ All notable changes to QueryDen are documented here. This project adheres to [Se
 - **Ctrl+click definitions resolve on the tab's own connection**, and an unqualified function or table outside the `search_path` is still found.
 
 ### Other fixes
+- **Generate SQL refuses key-matched statements when the result omits part of the primary key.** With a composite key `(tenant_id, id)` and only `id` selected, SELECT/UPDATE/DELETE by key and MERGE used to match on `id` alone, which can hit rows of other tenants. They now return an explanatory comment, and the dialog names the missing key columns.
+- **SSH diagnostics check known_hosts correctly for bracketed IPv6 hosts.** `[2001:db8::1]` was looked up as `[[2001:db8::1]]:port`, so a changed host key only warned instead of stopping before credentials were sent.
 - **A query that matches no rows shows its columns.** The results panel only opened the Results tab when there was at least one row, so an empty `SELECT` left you on "No messages to display". It now shows the grid with the column headers and "0 rows were retrieved".
 - **Column headers show the real data type.** The grid guessed types from the first row, so with no rows every column read as text, and columns named `id` / `*_id` got a 🔑 even on views. Headers now use the type the server reports for each result column (falling back to the guess only when it has none), and 🔑 marks only actual primary-key columns.
 - **Empty results scroll sideways.** With no rows, the mouse wheel and ←/→ (Home/End) scroll the column headers horizontally, so wide results stay reachable.

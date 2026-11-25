@@ -83,6 +83,18 @@ describe("generateSql", () => {
     expect(generateSql("upsert", { ...target, keyColumns: [] }, [row], opts)).toMatch(/^-- MERGE needs the table's primary key/);
   });
 
+  it("refuses key-matched statements when the result omits part of the primary key", () => {
+    const partial = { ...target, keyColumns: ["tenant_id", "id"] };
+    for (const kind of ["selectByKey", "update", "deleteByKey", "upsert"] as const) {
+      expect(generateSql(kind, partial, [row], opts)).toBe(
+        "-- Primary key column tenant_id not in the result; a partial key can match many rows in public.res_partner.",
+      );
+    }
+    expect(generateSql("insert", partial, [row], { ...opts, compact: true })).toBe(
+      "INSERT INTO public.res_partner (id, name, ref, note) VALUES(33, 'O''Brien', 'R1', NULL);",
+    );
+  });
+
   it("separates multi-row output with a blank line", () => {
     expect(generateSql("deleteByKey", target, [row, { ...row, id: 34 }], opts)).toBe(
       "DELETE FROM public.res_partner\nWHERE id=33;\n\nDELETE FROM public.res_partner\nWHERE id=34;",

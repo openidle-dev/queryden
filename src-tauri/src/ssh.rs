@@ -39,12 +39,18 @@ pub struct SshTunnel {
 
 static TUNNELS: OnceLock<Mutex<HashMap<String, SshTunnel>>> = OnceLock::new();
 
+/// `[2001:db8::1]` as `2001:db8::1`; resolvers and libssh2's known-hosts
+/// lookup (which adds its own `[host]:port` form) need the bare address.
+fn unbracket_host(host: &str) -> &str {
+    host.trim().trim_start_matches('[').trim_end_matches(']')
+}
+
 /// Resolve `host:port` (hostname, IPv4 or IPv6) and connect to the first
 /// address that answers within `timeout`. `TcpStream::connect_timeout` only
 /// takes a `SocketAddr`, so hostnames must be resolved first.
 fn connect_ssh_tcp(host: &str, port: u16, timeout: Duration) -> Result<TcpStream, String> {
     use std::net::ToSocketAddrs;
-    let host = host.trim().trim_start_matches('[').trim_end_matches(']');
+    let host = unbracket_host(host);
     let addrs: Vec<_> = (host, port)
         .to_socket_addrs()
         .map_err(|e| format!("Cannot resolve SSH host \"{}\": {}", host, e))?
@@ -729,7 +735,7 @@ pub fn test_ssh_connection(
         } else {
             match (sess.known_hosts(), sess.host_key()) {
                 (Ok(mut kh), Some((key, _))) => match kh.read_file(&known_hosts, ssh2::KnownHostFileKind::OpenSSH) {
-                    Ok(_) => Ok(kh.check_port(&host, ssh_port, key)),
+                    Ok(_) => Ok(kh.check_port(unbracket_host(&host), ssh_port, key)),
                     Err(e) => Err(format!("Could not read {}: {}. Fingerprint {}.", known_hosts.display(), e, fp)),
                 },
                 _ => Err(format!("Could not check the host key. Fingerprint {}.", fp)),
@@ -981,5 +987,12 @@ mod tests {
         let sess = ssh2::Session::new().unwrap();
         let err = auth_with_key_file(&sess, "u", "/definitely/not/here", None).unwrap_err();
         assert!(err.contains("SSH key file not found"), "{err}");
+    }
+
+    #[test]
+    fn unbracket_host_strips_ipv6_brackets_only() {
+        assert_eq!(unbracket_host("[2001:db8::1]"), "2001:db8::1");
+        assert_eq!(unbracket_host(" 2001:db8::1 "), "2001:db8::1");
+        assert_eq!(unbracket_host("db.example.com"), "db.example.com");
     }
 }
